@@ -931,7 +931,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$SetupFile = [System.IO.Path]::GetFileName([Uri]$SetupExeUrl -replace '\?.*$','')
+$SetupFile = [System.IO.Path]::GetFileName(([Uri]$SetupExeUrl).AbsolutePath)
 if ([string]::IsNullOrWhiteSpace($SetupFile)) { $SetupFile = "setup.exe" }
 $TempSetup = Join-Path $env:TEMP $SetupFile
 $ErrorLog  = Join-Path $env:TEMP "setup_error.txt"

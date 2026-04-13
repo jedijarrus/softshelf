@@ -25,8 +25,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 # Temp-Dateiname aus der Download-URL ableiten, damit das Script automatisch
-# mit dem aktuellen product_slug mitgeht (kein Hardcode).
-$SetupFile = [System.IO.Path]::GetFileName([Uri]$SetupExeUrl -replace '\?.*$','')
+# mit dem aktuellen product_slug mitgeht (kein Hardcode). Uri.AbsolutePath
+# strippt den Query-String schon selber, deshalb kein -replace noetig (und
+# ausserdem wuerde -replace innerhalb eines Methoden-Call-Parens vom PS-
+# Parser als zweites GetFileName-Argument missverstanden werden).
+$SetupFile = [System.IO.Path]::GetFileName(([Uri]$SetupExeUrl).AbsolutePath)
 if ([string]::IsNullOrWhiteSpace($SetupFile)) { $SetupFile = "setup.exe" }
 $TempSetup = Join-Path $env:TEMP $SetupFile
 $ErrorLog  = Join-Path $env:TEMP "setup_error.txt"
