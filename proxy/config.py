@@ -20,9 +20,15 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 # Product-Slug für CI-Branding: Buchstabe am Anfang, danach Buchstaben/Ziffern/_/-.
-# Die Länge 1-31 ist durch die Erfahrung mit Windows-Filenames + Registry-Keys
-# gesetzt — genug für sinnvolle Namen, wenig genug um in GUI-Labels zu passen.
+# Strikt fuer Dateinamen, Registry-Keys, Install-Pfade und PowerShell-Identifier —
+# kein Leerzeichen, keine Path-Traversal-Chars. Fuer den frei waehlbaren Anzeige-
+# titel des Admin-Portals gibt es separat das Setting `admin_portal_title`.
 SLUG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,30}$")
+
+# Frei waehlbarer Anzeigetitel: erlaubt Leerzeichen und Punkt, verbietet
+# Steuerzeichen und HTML-relevante Sonderzeichen, die im Template per innerHTML
+# bzw. <title> landen wuerden. Begrenzt auf 60 Zeichen damit das Layout passt.
+DISPLAY_TITLE_RE = re.compile(r"^[^\x00-\x1f\x7f<>\"'`]{1,60}$")
 
 
 class BootstrapSettings(BaseSettings):
@@ -131,14 +137,29 @@ RUNTIME_KEYS: dict[str, dict] = {
         "required": False,
         "default": "Softshelf",
     },
-    "product_slug": {
-        "label": "Produkt-Slug (CI-Branding)",
+    "admin_portal_title": {
+        "label": "Admin-Portal-Titel",
         "help": (
-            "Technischer Name für Dateinamen, Install-Pfad, Registry-Key und "
-            "Autostart. Wird beim EXE-Build in die Clients eingebacken. "
-            "Erlaubt: Buchstabe am Anfang, dann Buchstaben/Ziffern/_/-, 1-31 "
-            "Zeichen. Änderung erfordert Rebuild + Neuinstallation auf den "
-            "Endgeräten."
+            "Anzeigename des Web-Portals (Browser-Tab und Header-Brand). "
+            "Frei wählbar inkl. Leerzeichen — z. B. 'Acme IT Self-Service'. "
+            "Greift sofort beim nächsten Page-Load, kein Rebuild nötig. "
+            "Max. 60 Zeichen, keine HTML-Sonderzeichen."
+        ),
+        "type": "display_title",
+        "secret": False,
+        "required": False,
+        "default": "Softshelf",
+    },
+    "product_slug": {
+        "label": "Produkt-Slug (Client-Branding)",
+        "help": (
+            "Technischer Name für Dateiname, Install-Pfad, Registry-Key, "
+            "Autostart-Eintrag und Umgebungsvariable des Tray-Clients. "
+            "Strikt: Buchstabe am Anfang, danach Buchstaben/Ziffern/_/-, "
+            "1-31 Zeichen, keine Leerzeichen (Windows-Filesystem-Vorgaben). "
+            "Den frei wählbaren Anzeige-Titel des Tray-Clients steuerst "
+            "du über 'Client-Titel' oben. Änderung des Slugs erfordert "
+            "Rebuild und Neuinstallation auf den Endgeräten."
         ),
         "type": "slug",
         "secret": False,
@@ -240,16 +261,27 @@ def validate_runtime_value(key: str, value: str) -> str:
         raise ValueError(f"{meta['label']} muss true oder false sein")
 
     if t == "slug":
-        # Safe für Windows-Filenames, Registry-Keys, Program-Files-Pfade,
-        # URL-Segmente, PowerShell-Identifier. Kein Leerzeichen, keine
-        # Path-Traversal-Chars, kein Beginn mit Ziffer/Sonderzeichen.
+        # Strikt fuer Dateinamen, Registry-Keys, PowerShell-Identifier.
+        # Kein Leerzeichen, keine Path-Traversal-Chars, kein Beginn mit Ziffer.
         if not SLUG_RE.match(value):
             raise ValueError(
                 f"{meta['label']} muss mit einem Buchstaben beginnen und darf "
                 f"nur Buchstaben, Ziffern, Unterstrich und Bindestrich enthalten "
-                f"(1-31 Zeichen)"
+                f"(1-31 Zeichen, keine Leerzeichen)"
             )
         return value
+
+    if t == "display_title":
+        # Frei waehlbarer Anzeigetext: Leerzeichen erlaubt, HTML-Sonderzeichen
+        # die in <title> oder als Brand-Text per innerHTML landen wuerden,
+        # sind gesperrt. Whitespace wird trim/collapsed.
+        normalized = " ".join(value.split())
+        if not DISPLAY_TITLE_RE.match(normalized):
+            raise ValueError(
+                f"{meta['label']} darf max. 60 Zeichen lang sein und keine "
+                f"Steuerzeichen oder HTML-Sonderzeichen (<, >, \", ', `) enthalten"
+            )
+        return normalized
 
     # string
     min_len = meta.get("min_length", 0)
