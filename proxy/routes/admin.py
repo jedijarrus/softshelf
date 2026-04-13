@@ -4,6 +4,7 @@ Session-Cookie-Auth mit lokaler User-DB + optionalem Microsoft-Entra-SSO.
 CSRF-Schutz via Middleware (X-Requested-With) bleibt aktiv.
 """
 import asyncio
+import html
 import logging
 import os
 import re
@@ -124,6 +125,17 @@ async def _require_admin(request: Request) -> dict:
     return user
 
 
+async def _portal_title_html() -> str:
+    """
+    Liest den admin_portal_title aus den Runtime-Settings und HTML-escaped ihn.
+    Wird in admin.html und admin_login.html als {{ADMIN_PORTAL_TITLE}}
+    ersetzt. Doppelte Sicherheit: der Settings-Validator verbietet bereits
+    HTML-Sonderzeichen, aber wir escapen trotzdem (defense in depth).
+    """
+    raw = await runtime_value("admin_portal_title") or "Softshelf"
+    return html.escape(raw, quote=True)
+
+
 @router.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
     """Liefert die Admin-SPA. Bei fehlender Session → Redirect zum Login."""
@@ -132,7 +144,9 @@ async def admin_page(request: Request):
     if not user:
         return RedirectResponse(url="/admin/login", status_code=302)
     with open(_TEMPLATE_PATH, encoding="utf-8") as f:
-        return HTMLResponse(f.read())
+        page = f.read()
+    page = page.replace("{{ADMIN_PORTAL_TITLE}}", await _portal_title_html())
+    return HTMLResponse(page)
 
 
 @router.get("/admin/api/help", response_class=HTMLResponse,
@@ -172,9 +186,11 @@ def _set_session_cookie(response, token: str, expires_at: datetime, request: Req
 @router.get("/admin/login", response_class=HTMLResponse)
 async def login_page():
     with open(_LOGIN_PATH, encoding="utf-8") as f:
-        html = f.read()
+        page = f.read()
     sso_on = await admin_auth.sso_enabled()
-    return HTMLResponse(html.replace("{{SSO_ENABLED}}", "true" if sso_on else "false"))
+    page = page.replace("{{SSO_ENABLED}}", "true" if sso_on else "false")
+    page = page.replace("{{ADMIN_PORTAL_TITLE}}", await _portal_title_html())
+    return HTMLResponse(page)
 
 
 @router.post("/admin/login")

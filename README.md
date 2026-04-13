@@ -26,12 +26,17 @@ from a browser.
   upload custom installers, watch the distribution tab, browse the audit log.
 - **Self-contained clients** — a Windows tray app and a tkinter-based
   installer, built inside the repo via a Wine + PyInstaller container.
-- **CI branding** — set a `product_slug` in the admin UI and the next build
-  produces `<slug>.exe` / `<slug>-setup.exe`, installs into
-  `C:\Program Files\<slug>\`, writes its registry under
-  `HKLM\SOFTWARE\<slug>\`, and uses `<SLUG>_PROXY_URL` as its environment
-  variable. The default slug is `Softshelf`; change it once before the
-  first rollout.
+- **CI branding** — three independent settings let you brand each surface
+  on its own terms:
+  - `admin_portal_title` (free text, e.g. `Acme IT Self-Service`) — browser
+    tab and admin UI header. Reload to apply.
+  - `client_app_name` (free text, e.g. `Acme Software Center`) — window
+    title, tray tooltip and dialogs of the Windows tray client. Picked up
+    at every kiosk launch, no rebuild needed.
+  - `product_slug` (strict, e.g. `AcmeSoft`) — filesystem-safe identifier
+    used for the EXE filename, install directory, registry key, autostart
+    entry and proxy URL environment variable. Change requires a rebuild
+    plus reinstall on the endpoints.
 - **Multi-admin** with local passwords (scrypt-hashed) and optional Microsoft
   Entra ID SSO.
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Softshelf · Admin</title>
+<title>{{ADMIN_PORTAL_TITLE}} · Admin</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -2437,7 +2437,7 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
 <header class="hdr">
   <div class="hdr-brand">
     <div class="brand-mark"></div>
-    Softshelf<span class="brand-sub">/ Admin</span>
+    {{ADMIN_PORTAL_TITLE}}<span class="brand-sub">/ Admin</span>
   </div>
   <div class="hdr-meta">
     <span class="meta-item hide-sm"><span class="label">Version</span><span class="value" id="meta-version">1.1.0</span></span>
@@ -5338,6 +5338,11 @@ async function saveSettings() {
   btn.disabled = true;
   btn.textContent = 'Speichere…';
   try {
+    // Vor dem Patch: aktuellen admin_portal_title merken, damit wir nach
+    // dem Save erkennen können ob der Header + Tab-Title neu geladen werden müssen.
+    const oldTitleSetting = (_settingsMeta || []).find(s => s.key === 'admin_portal_title');
+    const oldTitle = oldTitleSetting ? oldTitleSetting.value : '';
+
     const values = {};
     document.querySelectorAll('.setting-field input[data-key]').forEach(inp => {
       if (inp.dataset.type === 'bool') {
@@ -5348,6 +5353,13 @@ async function saveSettings() {
     });
     await api('PATCH', '/admin/api/settings', {values});
     toast('Einstellungen gespeichert');
+
+    // Title-Change ist nur beim nächsten Page-Render sichtbar (server-side
+    // Template-Substitution), deshalb explizit reloaden.
+    if (values['admin_portal_title'] !== undefined && values['admin_portal_title'] !== oldTitle) {
+      location.reload();
+      return;
+    }
     await loadSettings();
   } catch (e) {
     // error toast already shown by api()
