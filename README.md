@@ -24,9 +24,14 @@ from a browser.
   with a single click.
 - **Admin UI** in the browser: search Chocolatey, enable/disable packages,
   upload custom installers, watch the distribution tab, browse the audit log.
-- **Self-contained clients** — a Windows tray app (`softshelf.exe`) and a
-  tkinter-based installer (`softshelf-setup.exe`) built inside the repo via
-  a Wine + PyInstaller container.
+- **Self-contained clients** — a Windows tray app and a tkinter-based
+  installer, built inside the repo via a Wine + PyInstaller container.
+- **CI branding** — set a `product_slug` in the admin UI and the next build
+  produces `<slug>.exe` / `<slug>-setup.exe`, installs into
+  `C:\Program Files\<slug>\`, writes its registry under
+  `HKLM\SOFTWARE\<slug>\`, and uses `<SLUG>_PROXY_URL` as its environment
+  variable. The default slug is `Softshelf`; change it once before the
+  first rollout.
 - **Multi-admin** with local passwords (scrypt-hashed) and optional Microsoft
   Entra ID SSO.
 

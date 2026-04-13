@@ -1,22 +1,26 @@
 """
-Kiosk Setup / Installer
+Setup / Installer
 
 Aufruf (still, z.B. via Tactical RMM):
-    softshelf-setup.exe --proxy-url URL --reg-secret SECRET --agent-id ID
+    <slug>-setup.exe --proxy-url URL --reg-secret SECRET --agent-id ID
 
 Aufruf (GUI-Wizard, Doppelklick):
-    softshelf-setup.exe
+    <slug>-setup.exe
 
 Was dieser Installer macht:
-  1. softshelf.exe nach C:\\Program Files\\Softshelf\\ kopieren
+  1. <slug>.exe nach C:\\Program Files\\<slug>\\ kopieren
   2. Diesen PC beim Proxy registrieren (Machine Token holen)
-  3. Token + ProxyUrl in HKLM\\SOFTWARE\\Softshelf speichern
+  3. Token + ProxyUrl in HKLM\\SOFTWARE\\<slug> speichern
   4. ProxyUrl als System-Umgebungsvariable setzen
   5. Autostart in HKLM eintragen (startet beim naechsten User-Login)
+
+<slug> kommt aus _build_config.PRODUCT_SLUG (Default: Softshelf), wird
+vom Builder aus dem Admin-Setting product_slug uebernommen.
 """
 import argparse
 import ctypes
 import os
+import re
 import shutil
 import sys
 import winreg
@@ -30,21 +34,28 @@ except Exception:
     __version__ = "?"
 
 try:
-    from _build_config import DEFAULT_PROXY_URL, BUILD_VERSION
-    # Version aus build_config hat Vorrang wenn gesetzt
+    from _build_config import DEFAULT_PROXY_URL, BUILD_VERSION, PRODUCT_SLUG
     if BUILD_VERSION and BUILD_VERSION != "?":
         __version__ = BUILD_VERSION
 except Exception:
     DEFAULT_PROXY_URL = ""
+    PRODUCT_SLUG = "Softshelf"
+
+# Defense in depth: falsch injizierter Slug darf keine Pfad-Traversal oder
+# Registry-Escapes ermoeglichen. Bei Mismatch fallen wir auf den Default zurueck.
+if not re.match(r"^[A-Za-z][A-Za-z0-9_-]{0,30}$", PRODUCT_SLUG or ""):
+    PRODUCT_SLUG = "Softshelf"
 
 
 # ── Konstanten ─────────────────────────────────────────────────────────────────
 
-INSTALL_DIR    = r"C:\Program Files\Softshelf"
-REG_PATH       = r"SOFTWARE\Softshelf"
+INSTALL_DIR    = rf"C:\Program Files\{PRODUCT_SLUG}"
+REG_PATH       = rf"SOFTWARE\{PRODUCT_SLUG}"
 AUTOSTART_PATH = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-AUTOSTART_NAME = "Softshelf"
-PROXY_ENV_VAR  = "SOFTSHELF_PROXY_URL"
+AUTOSTART_NAME = PRODUCT_SLUG
+EXE_FILENAME   = f"{PRODUCT_SLUG}.exe"
+# System-Env-Var Name: Grossbuchstaben, Hyphens zu Underscores
+PROXY_ENV_VAR  = PRODUCT_SLUG.upper().replace("-", "_") + "_PROXY_URL"
 
 
 # ── Hilfsfunktionen ────────────────────────────────────────────────────────────
@@ -134,8 +145,8 @@ def friendly_error(exc: BaseException) -> str:
 
 def step_copy_files() -> str:
     os.makedirs(INSTALL_DIR, exist_ok=True)
-    src = resource_path("softshelf.exe")
-    dst = os.path.join(INSTALL_DIR, "softshelf.exe")
+    src = resource_path(EXE_FILENAME)
+    dst = os.path.join(INSTALL_DIR, EXE_FILENAME)
     shutil.copy2(src, dst)
     return dst
 
@@ -200,7 +211,7 @@ def do_uninstall(status_cb=None):
 
     status("Beende laufende Instanz...")
     subprocess.call(
-        ["taskkill", "/f", "/im", "softshelf.exe"],
+        ["taskkill", "/f", "/im", EXE_FILENAME],
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
 
@@ -243,7 +254,7 @@ def do_uninstall(status_cb=None):
 
 
 def step_launch(exe_path: str):
-    """Startet softshelf.exe im Hintergrund (Best-Effort)."""
+    """Startet den Client im Hintergrund (Best-Effort)."""
     import subprocess
     try:
         subprocess.Popen(
@@ -277,7 +288,7 @@ def do_install(proxy_url: str, reg_secret: str, agent_id: str, status_cb=None):
     status("Richte Autostart ein...")
     step_autostart(exe_path)
 
-    status("Starte Softshelf...")
+    status(f"Starte {PRODUCT_SLUG}...")
     step_launch(exe_path)
 
     status("Installation abgeschlossen.")
@@ -290,7 +301,8 @@ def _write_error_log(msg: str, secret: str | None = None):
     """Schreibt Fehlermeldung nach %TEMP% – Secret wird redacted."""
     if secret:
         msg = msg.replace(secret, "***REDACTED***")
-    log = os.path.join(os.environ.get("TEMP", r"C:\Windows\Temp"), "softshelf_setup_error.txt")
+    log_name = f"{PRODUCT_SLUG.lower()}_setup_error.txt"
+    log = os.path.join(os.environ.get("TEMP", r"C:\Windows\Temp"), log_name)
     try:
         with open(log, "w", encoding="utf-8") as f:
             f.write(msg + "\n")
@@ -322,7 +334,7 @@ def run_gui(prefill_agent_id: str | None = None, prefill_proxy_url: str = ""):
     from tkinter import messagebox, ttk
 
     root = tk.Tk()
-    root.title(f"Softshelf – Setup  v{__version__}")
+    root.title(f"{PRODUCT_SLUG} – Setup  v{__version__}")
     root.geometry("500x420")
     root.resizable(False, False)
     try:
@@ -342,7 +354,7 @@ def run_gui(prefill_agent_id: str | None = None, prefill_proxy_url: str = ""):
     # Header
     tk.Label(
         frame,
-        text="Softshelf",
+        text=PRODUCT_SLUG,
         font=("Segoe UI", 15, "bold"),
         fg="#0f172a",
         bg=root.cget("bg"),
@@ -361,7 +373,7 @@ def run_gui(prefill_agent_id: str | None = None, prefill_proxy_url: str = ""):
         entry.pack(fill="x", pady=(2, 10))
         return var, entry
 
-    proxy_var, _ = labeled_entry("Proxy-URL  (z.B. https://softshelf.intern:8765)")
+    proxy_var, _ = labeled_entry("Proxy-URL  (z.B. https://server.intern:8765)")
     if prefill_proxy_url:
         proxy_var.set(prefill_proxy_url)
 
@@ -424,7 +436,7 @@ def run_gui(prefill_agent_id: str | None = None, prefill_proxy_url: str = ""):
                         messagebox.showinfo(
                             "Erfolg",
                             "Installation erfolgreich!\n\n"
-                            "Das Softshelf startet beim nächsten Windows-Login automatisch.",
+                            f"{PRODUCT_SLUG} startet beim nächsten Windows-Login automatisch.",
                         ),
                         root.destroy(),
                     ),
@@ -445,7 +457,7 @@ def run_gui(prefill_agent_id: str | None = None, prefill_proxy_url: str = ""):
     def on_uninstall():
         if not messagebox.askyesno(
             "Deinstallieren",
-            "Softshelf wirklich von diesem PC entfernen?\n\n"
+            f"{PRODUCT_SLUG} wirklich von diesem PC entfernen?\n\n"
             "Autostart, Token und Programmdateien werden gelöscht.",
         ):
             return
