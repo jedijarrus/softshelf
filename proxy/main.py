@@ -14,7 +14,7 @@ import admin_auth
 import database
 import file_uploads
 from auth import verify_download_token
-from config import RUNTIME_KEYS, get_settings, runtime_int
+from config import RUNTIME_KEYS, get_settings, runtime_int, runtime_value
 from middleware.audit_logger import audit_log_middleware
 from middleware.csrf import csrf_middleware
 from middleware.rate_limit import rate_limit_middleware
@@ -120,25 +120,27 @@ async def health():
     return {"status": "ok", "version": VERSION}
 
 
-@app.get("/download/softshelf-setup.exe")
-async def download_setup():
-    """Stellt softshelf-setup.exe zum Download bereit (kein Auth – enthält keine Secrets)."""
-    path = os.path.join(DOWNLOADS_DIR, "softshelf-setup.exe")
+@app.get("/download/{filename}")
+async def download_exe(filename: str):
+    """
+    Stellt den Tray-Client und den Installer zum Download bereit
+    (kein Auth – enthaelt keine Secrets). Der Dateiname wird gegen den
+    aktuellen product_slug geprueft: nur `${slug}.exe` und
+    `${slug}-setup.exe` sind erlaubt. Damit kann ein Angreifer nicht
+    mit einem hergeleiteten Pfad aus dem downloads-Volume lesen, und
+    ein Wechsel des Slugs ungueltigt automatisch die alten URLs.
+    """
+    slug = await runtime_value("product_slug") or "Softshelf"
+    allowed = {f"{slug}.exe", f"{slug}-setup.exe"}
+    if filename not in allowed:
+        raise HTTPException(status_code=404, detail="Nicht gefunden")
+    path = os.path.join(DOWNLOADS_DIR, filename)
     if not os.path.isfile(path):
         raise HTTPException(
             status_code=404,
-            detail="softshelf-setup.exe noch nicht gebaut. Im Admin-UI unter Einstellungen auf 'EXEs bauen' klicken.",
+            detail=f"{filename} noch nicht gebaut. Im Admin-UI unter Einstellungen auf 'EXEs bauen' klicken.",
         )
-    return FileResponse(path, media_type="application/octet-stream", filename="softshelf-setup.exe")
-
-
-@app.get("/download/softshelf.exe")
-async def download_kiosk():
-    """Standalone softshelf.exe (z. B. für manuelles Update)."""
-    path = os.path.join(DOWNLOADS_DIR, "softshelf.exe")
-    if not os.path.isfile(path):
-        raise HTTPException(status_code=404, detail="softshelf.exe noch nicht gebaut.")
-    return FileResponse(path, media_type="application/octet-stream", filename="softshelf.exe")
+    return FileResponse(path, media_type="application/octet-stream", filename=filename)
 
 
 @app.get("/api/v1/file/{sha256}")

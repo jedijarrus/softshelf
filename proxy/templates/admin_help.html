@@ -920,8 +920,8 @@ Remove-Item $tmp -Force -ErrorAction SilentlyContinue</pre>
 
 <pre class="doc-code-block">&lt;#
 .SYNOPSIS
-    Softshelf - Deployment Script
-    Laedt softshelf-setup.exe herunter und fuehrt es still aus.
+    Deployment Script
+    Laedt den Installer herunter und fuehrt ihn still aus.
 #&gt;
 param(
     [Parameter(Mandatory=$true)]  [string]$ProxyUrl,
@@ -931,16 +931,18 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$TempSetup = "$env:TEMP\softshelf-setup.exe"
-$ErrorLog  = "$env:TEMP\softshelf_setup_error.txt"
+$SetupFile = [System.IO.Path]::GetFileName([Uri]$SetupExeUrl -replace '\?.*$','')
+if ([string]::IsNullOrWhiteSpace($SetupFile)) { $SetupFile = "setup.exe" }
+$TempSetup = Join-Path $env:TEMP $SetupFile
+$ErrorLog  = Join-Path $env:TEMP "setup_error.txt"
 
-Write-Host "=== Softshelf Deployment ===" -ForegroundColor Cyan
+Write-Host "=== Deployment ===" -ForegroundColor Cyan
 Write-Host "Proxy:   $ProxyUrl"
 Write-Host "AgentId: $AgentId"
+Write-Host "Setup:   $SetupFile"
 Write-Host ""
 
-# softshelf-setup.exe herunterladen
-Write-Host "Lade softshelf-setup.exe herunter..."
+Write-Host "Lade $SetupFile herunter..."
 Invoke-WebRequest -Uri $SetupExeUrl -OutFile $TempSetup -UseBasicParsing
 Write-Host "Download abgeschlossen." -ForegroundColor Green
 
@@ -965,7 +967,7 @@ $RegistrationSecret = $null
 [System.GC]::Collect()
 
 Write-Host "=== Deployment abgeschlossen ===" -ForegroundColor Cyan
-Write-Host "softshelf.exe startet beim naechsten Benutzer-Login automatisch." -ForegroundColor Green</pre>
+Write-Host "Der Tray-Client startet beim naechsten Benutzer-Login automatisch." -ForegroundColor Green</pre>
 
 <div class="doc-callout info">
   <b>Sicherheit:</b> Das Script ruft <code>$RegistrationSecret = $null</code> und
@@ -979,7 +981,7 @@ Write-Host "softshelf.exe startet beim naechsten Benutzer-Login automatisch." -F
 <h2>Variante B: Manuell auf einzelnen PCs</h2>
 
 <ol class="doc-steps">
-  <li><code>softshelf-setup.exe</code> vom Proxy herunterladen: <code>http://&lt;proxy&gt;:8765/download/softshelf-setup.exe</code></li>
+  <li><code>&lt;slug&gt;-setup.exe</code> vom Proxy herunterladen: <code>http://&lt;proxy&gt;:8765/download/&lt;slug&gt;-setup.exe</code> (Slug wird im Admin-UI unter Einstellungen als <code>product_slug</code> konfiguriert, Default: <code>Softshelf</code>)</li>
   <li>Auf dem Ziel-PC mit Admin-Rechten ausführen (Rechtsklick → als Administrator)</li>
   <li>Im GUI-Wizard:
     <ul>
@@ -993,7 +995,7 @@ Write-Host "softshelf.exe startet beim naechsten Benutzer-Login automatisch." -F
 
 <h2>Variante C: Silent CLI (für Scripts)</h2>
 
-<pre class="doc-code-block">softshelf-setup.exe ^
+<pre class="doc-code-block">&lt;slug&gt;-setup.exe ^
   --proxy-url  "http://proxy.intern:8765" ^
   --reg-secret "&lt;REGISTRATION_SECRET&gt;" ^
   --agent-id   "&lt;TACTICAL_AGENT_ID&gt;"</pre>

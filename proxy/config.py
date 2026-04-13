@@ -13,10 +13,16 @@ Bei einer neuen Installation kann der Admin optional INITIAL_*-Werte in die
 .env schreiben; beim ersten Start werden diese in die settings-Tabelle übernommen.
 Danach ist die .env nur noch für SECRET_KEY + Bootstrap-Admin relevant.
 """
+import re
 import warnings
 from functools import lru_cache
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
+
+# Product-Slug für CI-Branding: Buchstabe am Anfang, danach Buchstaben/Ziffern/_/-.
+# Die Länge 1-31 ist durch die Erfahrung mit Windows-Filenames + Registry-Keys
+# gesetzt — genug für sinnvolle Namen, wenig genug um in GUI-Labels zu passen.
+SLUG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,30}$")
 
 
 class BootstrapSettings(BaseSettings):
@@ -78,7 +84,7 @@ RUNTIME_KEYS: dict[str, dict] = {
     },
     "registration_secret": {
         "label": "Registration Secret",
-        "help": "Shared Secret für softshelf-setup.exe --reg-secret. Rotieren via 'Neu erzeugen'.",
+        "help": "Shared Secret für den Setup-Aufruf (--reg-secret). Rotieren via 'Neu erzeugen'.",
         "type": "string",
         "secret": True,
         "required": True,
@@ -87,7 +93,7 @@ RUNTIME_KEYS: dict[str, dict] = {
     },
     "proxy_public_url": {
         "label": "Proxy Public URL",
-        "help": "Öffentlich erreichbare URL des Proxy für Tactical-Agent-Downloads. Wird in die softshelf-setup.exe einkompiliert.",
+        "help": "Öffentlich erreichbare URL des Proxy für Tactical-Agent-Downloads. Wird in den Installer einkompiliert.",
         "type": "url",
         "secret": False,
         "required": True,
@@ -119,8 +125,22 @@ RUNTIME_KEYS: dict[str, dict] = {
     },
     "client_app_name": {
         "label": "Client-Titel",
-        "help": "Name der im Kiosk-Fenster, Tray-Tooltip und Dialogen angezeigt wird.",
+        "help": "Name der im Kiosk-Fenster, Tray-Tooltip und Dialogen angezeigt wird. Änderungen greifen sofort, kein Rebuild nötig.",
         "type": "string",
+        "secret": False,
+        "required": False,
+        "default": "Softshelf",
+    },
+    "product_slug": {
+        "label": "Produkt-Slug (CI-Branding)",
+        "help": (
+            "Technischer Name für Dateinamen, Install-Pfad, Registry-Key und "
+            "Autostart. Wird beim EXE-Build in die Clients eingebacken. "
+            "Erlaubt: Buchstabe am Anfang, dann Buchstaben/Ziffern/_/-, 1-31 "
+            "Zeichen. Änderung erfordert Rebuild + Neuinstallation auf den "
+            "Endgeräten."
+        ),
+        "type": "slug",
         "secret": False,
         "required": False,
         "default": "Softshelf",
@@ -218,6 +238,18 @@ def validate_runtime_value(key: str, value: str) -> str:
         if normalized in ("0", "false", "no", "off"):
             return "false"
         raise ValueError(f"{meta['label']} muss true oder false sein")
+
+    if t == "slug":
+        # Safe für Windows-Filenames, Registry-Keys, Program-Files-Pfade,
+        # URL-Segmente, PowerShell-Identifier. Kein Leerzeichen, keine
+        # Path-Traversal-Chars, kein Beginn mit Ziffer/Sonderzeichen.
+        if not SLUG_RE.match(value):
+            raise ValueError(
+                f"{meta['label']} muss mit einem Buchstaben beginnen und darf "
+                f"nur Buchstaben, Ziffern, Unterstrich und Bindestrich enthalten "
+                f"(1-31 Zeichen)"
+            )
+        return value
 
     # string
     min_len = meta.get("min_length", 0)

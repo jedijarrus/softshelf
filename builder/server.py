@@ -2,8 +2,10 @@
 Builder-HTTP-API — triggert PyInstaller-Builds via Wine.
 
 POST /build
-  Body: {"proxy_url": "http://10.0.0.5:8765", "version": "1.2.0"}
-  Response: {"ok": true, "log": "..."}
+  Body: {"proxy_url": "http://10.0.0.5:8765", "version": "1.2.0",
+         "product_slug": "Softshelf"}
+  Response: {"ok": true, "log": "...", "slug": "Softshelf",
+             "artifacts": ["Softshelf.exe", "Softshelf-setup.exe"]}
 
 GET /health
   Response: {"status": "ok"}
@@ -12,18 +14,32 @@ Läuft im Docker-Internal-Network auf Port 8766, nicht von außen erreichbar.
 """
 import asyncio
 import os
-import subprocess
+import re
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 app = FastAPI(title="Softshelf Builder", docs_url=None, redoc_url=None)
 
 _build_lock = asyncio.Lock()
 
+# Muss identisch zur Validierung im Proxy und in build.sh sein.
+_SLUG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,30}$")
+
 
 class BuildRequest(BaseModel):
     proxy_url: str = Field(min_length=1)
     version: str = Field(default="1.2.0")
+    product_slug: str = Field(default="Softshelf")
+
+    @field_validator("product_slug")
+    @classmethod
+    def _check_slug(cls, v: str) -> str:
+        if not _SLUG_RE.match(v):
+            raise ValueError(
+                "product_slug muss mit einem Buchstaben beginnen und darf "
+                "nur Buchstaben, Ziffern, _, - enthalten (1-31 Zeichen)"
+            )
+        return v
 
 
 @app.get("/health")
@@ -41,6 +57,7 @@ async def build(req: BuildRequest):
         env = os.environ.copy()
         env["PROXY_URL"] = req.proxy_url
         env["VERSION"] = req.version
+        env["PRODUCT_SLUG"] = req.product_slug
         env["OUTPUT_DIR"] = "/app/downloads"
 
         try:
@@ -58,17 +75,32 @@ async def build(req: BuildRequest):
                 proc.kill()
             except Exception:
                 pass
-            return {"ok": False, "log": "Timeout (>15 min)"}
+            return {"ok": False, "log": "Timeout (>15 min)", "slug": req.product_slug}
         except Exception as e:
-            return {"ok": False, "log": f"Builder-Fehler: {e}"}
+            return {"ok": False, "log": f"Builder-Fehler: {e}", "slug": req.product_slug}
 
         # Artefakte verifizieren
-        kiosk_exe = os.path.join(env["OUTPUT_DIR"], "softshelf.exe")
-        setup_exe = os.path.join(env["OUTPUT_DIR"], "softshelf-setup.exe")
-        if ok and os.path.isfile(kiosk_exe) and os.path.isfile(setup_exe):
-            size_k = os.path.getsize(kiosk_exe)
-            size_s = os.path.getsize(setup_exe)
-            log += f"\n\n=== Artefakte ===\nsoftshelf.exe: {size_k // 1024 // 1024} MB\nsoftshelf-setup.exe: {size_s // 1024 // 1024} MB\n"
-            return {"ok": True, "log": log}
+        tray_name   = f"{req.product_slug}.exe"
+        setup_name  = f"{req.product_slug}-setup.exe"
+        tray_path   = os.path.join(env["OUTPUT_DIR"], tray_name)
+        setup_path  = os.path.join(env["OUTPUT_DIR"], setup_name)
+        if ok and os.path.isfile(tray_path) and os.path.isfile(setup_path):
+            size_t = os.path.getsize(tray_path)
+            size_s = os.path.getsize(setup_path)
+            log += (
+                f"\n\n=== Artefakte ===\n"
+                f"{tray_name}: {size_t // 1024 // 1024} MB\n"
+                f"{setup_name}: {size_s // 1024 // 1024} MB\n"
+            )
+            return {
+                "ok": True,
+                "log": log,
+                "slug": req.product_slug,
+                "artifacts": [tray_name, setup_name],
+            }
 
-        return {"ok": False, "log": log or "Build fehlgeschlagen (keine Artefakte)"}
+        return {
+            "ok": False,
+            "log": log or "Build fehlgeschlagen (keine Artefakte)",
+            "slug": req.product_slug,
+        }
