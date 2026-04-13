@@ -1,0 +1,5 @@
+httpx==0.27.2
+pystray==0.19.5
+Pillow==10.4.0
+PyQt5
+pywin32==308

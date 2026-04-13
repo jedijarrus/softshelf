@@ -1,0 +1,13 @@
+.env
+*.env
+logs/
+packages.json
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+data/
+downloads/
+.git/
+*.md
