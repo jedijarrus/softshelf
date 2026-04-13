@@ -1,0 +1,52 @@
+version: "3.8"
+
+services:
+  softshelf-proxy:
+    build:
+      context: .
+      dockerfile: proxy/Dockerfile
+    image: softshelf-proxy:latest
+    container_name: softshelf-proxy
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./data:/app/data              # SQLite persistent
+      - ./downloads:/app/downloads    # shared mit builder für softshelf*.exe
+    env_file:
+      - .env
+    depends_on:
+      - softshelf-builder
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/v1/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  softshelf-builder:
+    build:
+      context: .
+      dockerfile: builder/Dockerfile
+    image: softshelf-builder:latest
+    container_name: softshelf-builder
+    restart: unless-stopped
+    volumes:
+      - ./downloads:/app/downloads    # shared mit proxy für softshelf*.exe
+    # Builder ist NICHT nach außen exposed — nur im internen docker-Netz
+    expose:
+      - "8766"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8766/health')"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

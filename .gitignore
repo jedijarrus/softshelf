@@ -1,0 +1,57 @@
+# Secrets & runtime state
+.env
+.env.local
+*.pem
+*.key
+
+# Persistent volumes (runtime data)
+data/
+downloads/
+!downloads/.gitkeep
+
+# SQLite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Uploads
+proxy/uploads/
+**/uploads/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# PyInstaller build artifacts
+build/
+dist/
+client/build/
+client/dist/
+*.exe
+!*.example.exe
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+

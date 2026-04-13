@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Anmelden · Softshelf</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #fafafa;
+  --bg-card:   #ffffff;
+  --bg-soft:   #f4f4f5;
+  --bg-hover:  #e4e4e7;
+  --border:    #e4e4e7;
+  --border-strong: #d4d4d8;
+  --fg:        #09090b;
+  --fg-2:      #27272a;
+  --fg-3:      #52525b;
+  --fg-4:      #71717a;
+  --fg-5:      #a1a1aa;
+  --red:       #dc2626;
+  --red-bg:    #fef2f2;
+  --red-bd:    #fecaca;
+  --sans:      'Geist', -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+  --r-sm:      4px;
+  --r:         6px;
+  --r-lg:      10px;
+}
+
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.login-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 36px 40px;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 1px 3px rgba(9,9,11,.04), 0 12px 36px rgba(9,9,11,.06);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 28px;
+}
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r);
+  background: var(--fg);
+  position: relative;
+  flex-shrink: 0;
+}
+.brand-mark::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border: 2px solid var(--bg-card);
+  border-radius: 1px;
+}
+.brand-text {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+  letter-spacing: -.01em;
+}
+.brand-text .sub {
+  font-weight: 400;
+  color: var(--fg-4);
+  margin-left: 2px;
+}
+
+h1 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -.02em;
+  margin-bottom: 6px;
+}
+.intro {
+  font-size: 13px;
+  color: var(--fg-4);
+  margin-bottom: 24px;
+}
+
+form { display: flex; flex-direction: column; gap: 14px; }
+
+label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-2);
+  margin-bottom: 5px;
+  display: block;
+}
+
+input[type="text"],
+input[type="password"] {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  padding: 10px 13px;
+  font-size: 13px;
+  color: var(--fg);
+  font-family: var(--sans);
+  transition: border-color .14s, box-shadow .14s;
+}
+input[type="text"]:focus,
+input[type="password"]:focus {
+  outline: none;
+  border-color: var(--fg);
+  box-shadow: 0 0 0 3px rgba(9,9,11,.07);
+}
+input::placeholder { color: var(--fg-5); }
+
+.btn {
+  width: 100%;
+  padding: 11px 18px;
+  border: 1px solid;
+  border-radius: var(--r);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -.005em;
+  cursor: pointer;
+  transition: all .14s;
+  font-family: var(--sans);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+}
+.btn-primary {
+  background: var(--fg);
+  color: #fff;
+  border-color: var(--fg);
+}
+.btn-primary:hover { background: var(--fg-2); }
+.btn-primary:disabled {
+  background: var(--fg-5);
+  border-color: var(--fg-5);
+  cursor: wait;
+}
+.btn-sso {
+  background: var(--bg-card);
+  color: var(--fg-2);
+  border-color: var(--border-strong);
+  margin-top: 10px;
+}
+.btn-sso:hover {
+  background: var(--bg-soft);
+  border-color: var(--fg-5);
+}
+
+.error {
+  display: none;
+  background: var(--red-bg);
+  border: 1px solid var(--red-bd);
+  border-left: 3px solid var(--red);
+  border-radius: var(--r);
+  padding: 11px 14px;
+  font-size: 13px;
+  color: var(--fg-2);
+  margin-bottom: 16px;
+}
+.error.show { display: block; }
+.error b { color: var(--red); }
+
+.divider {
+  position: relative;
+  text-align: center;
+  margin: 22px 0 14px;
+}
+.divider::before,
+.divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: calc(50% - 22px);
+  height: 1px;
+  background: var(--border);
+}
+.divider::before { left: 0; }
+.divider::after { right: 0; }
+.divider span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--fg-5);
+  background: var(--bg-card);
+  padding: 0 12px;
+  position: relative;
+}
+
+.sso-section { display: none; }
+.sso-section.show { display: block; }
+
+.footer {
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+  font-size: 11px;
+  color: var(--fg-5);
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin .65s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-text">
+        Softshelf<span class="sub"> / Admin</span>
+      </div>
+    </div>
+
+    <h1>Anmelden</h1>
+    <p class="intro">Nutze deine lokalen Admin-Zugangsdaten oder dein Microsoft-Konto.</p>
+
+    <div class="error" id="error"></div>
+
+    <form id="login-form" autocomplete="on">
+      <div>
+        <label for="username">Benutzername</label>
+        <input type="text" id="username" name="username" autocomplete="username" required autofocus>
+      </div>
+      <div>
+        <label for="password">Passwort</label>
+        <input type="password" id="password" name="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn btn-primary" id="submit-btn">Anmelden</button>
+    </form>
+
+    <div class="sso-section" id="sso-section">
+      <div class="divider"><span>oder</span></div>
+      <a href="/admin/sso/login" class="btn btn-sso">
+        <svg width="16" height="16" viewBox="0 0 23 23" xmlns="http://www.w3.org/2000/svg">
+          <rect x="1" y="1" width="10" height="10" fill="#f25022"/>
+          <rect x="12" y="1" width="10" height="10" fill="#7fba00"/>
+          <rect x="1" y="12" width="10" height="10" fill="#00a4ef"/>
+          <rect x="12" y="12" width="10" height="10" fill="#ffb900"/>
+        </svg>
+        Mit Microsoft anmelden
+      </a>
+    </div>
+
+    <div class="footer">
+      Bei Login-Problemen → <code>.env</code>-Bootstrap-Admin verwenden
+    </div>
+  </div>
+
+  <script>
+    // SSO-Section bei Bedarf anzeigen (Server hat Platzhalter ersetzt)
+    if ('{{SSO_ENABLED}}' === 'true') {
+      document.getElementById('sso-section').classList.add('show');
+    }
+
+    const form = document.getElementById('login-form');
+    const errEl = document.getElementById('error');
+    const submitBtn = document.getElementById('submit-btn');
+
+    function showError(msg) {
+      errEl.textContent = msg;
+      errEl.classList.add('show');
+    }
+    function clearError() {
+      errEl.classList.remove('show');
+      errEl.textContent = '';
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearError();
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="spinner"></span> Anmelden …';
+
+      const fd = new FormData(form);
+      try {
+        const r = await fetch('/admin/login', {
+          method: 'POST',
+          body: fd,
+        });
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && data.ok) {
+          window.location.href = data.redirect || '/admin';
+        } else {
+          showError(data.error || `Fehler (HTTP ${r.status})`);
+        }
+      } catch (err) {
+        showError('Netzwerkfehler: ' + err.message);
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Anmelden';
+      }
+    });
+  </script>
+</body>
+</html>

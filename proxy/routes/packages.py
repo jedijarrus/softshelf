@@ -1,0 +1,108 @@
+"""
+GET /api/v1/packages
+Gibt die vom Admin freigeschalteten Pakete zurück, angereichert mit dem
+aktuellen Installationsstatus + Metadaten (Version, Publisher) des
+anfragenden Geräts. Bei custom-Paketen wird zusätzlich aus dem
+agent_installations-Tracking die installierte Version mit der current
+Version verglichen → update_available-Flag für die Kiosk-UI.
+"""
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+import database
+from auth import verify_machine_token
+from tactical_client import TacticalClient
+
+router = APIRouter()
+
+
+class Package(BaseModel):
+    name: str
+    display_name: str
+    category: str = "Allgemein"
+    type: str = "choco"
+    version: str | None = None
+    publisher: str | None = None
+    installed: bool = False
+    # Versionierung (nur custom)
+    installed_version_label: str | None = None
+    current_version_label: str | None = None
+    update_available: bool = False
+
+
+@router.get("/packages", response_model=list[Package])
+async def list_packages(token: dict = Depends(verify_machine_token)):
+    agent_id = token["agent_id"]
+    pkg_rows = await database.get_packages()
+
+    if not pkg_rows:
+        raise HTTPException(status_code=503, detail="Keine Pakete freigegeben. Admin-Oberfläche öffnen.")
+
+    try:
+        installed_list = await TacticalClient().get_installed_software(agent_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Tactical RMM nicht erreichbar: {e}")
+
+    # Lookup-Tabelle: lowercased Anzeigename → (version, publisher)
+    installed_meta: dict[str, tuple[str, str]] = {
+        item.get("name", "").lower(): (item.get("version", ""), item.get("publisher", ""))
+        for item in installed_list
+    }
+
+    def _find(needle: str) -> tuple[bool, str | None, str | None]:
+        """Substring-Match in beide Richtungen, mit Metadaten-Rückgabe."""
+        nl = (needle or "").lower().strip()
+        if not nl:
+            return False, None, None
+        for installed_name, (version, publisher) in installed_meta.items():
+            if nl in installed_name or installed_name in nl:
+                return True, version or None, publisher or None
+        return False, None, None
+
+    # Tracking-Daten dieses Agents pro Paketname
+    tracked = await database.get_agent_installations(agent_id)
+    tracked_by_pkg = {t["package_name"]: t for t in tracked}
+
+    result = []
+    for row in pkg_rows:
+        if row.get("type") == "custom":
+            needle = row.get("detection_name") or row.get("display_name") or row["name"]
+        else:
+            needle = row["name"]
+
+        is_installed, version, publisher = _find(needle)
+
+        installed_label = None
+        current_label = None
+        update_avail = False
+
+        if row.get("type") == "custom":
+            # Current-Version-Label aus package_versions ziehen
+            cv_id = row.get("current_version_id")
+            if cv_id:
+                cv = await database.get_package_version(cv_id)
+                if cv:
+                    current_label = cv.get("version_label")
+            # Tracking dieses Agents (falls vorhanden)
+            t = tracked_by_pkg.get(row["name"])
+            if t:
+                installed_label = t.get("version_label")
+                update_avail = bool(t.get("outdated"))
+                # Wenn der Tracking-Eintrag existiert und Tactical es noch nicht
+                # gescannt hat, werten wir es trotzdem als 'installed'
+                if not is_installed:
+                    is_installed = True
+
+        result.append(Package(
+            name=row["name"],
+            display_name=row["display_name"],
+            category=row.get("category", "Allgemein"),
+            type=row.get("type") or "choco",
+            version=version,
+            publisher=publisher,
+            installed=is_installed,
+            installed_version_label=installed_label,
+            current_version_label=current_label,
+            update_available=update_avail,
+        ))
+    return result
