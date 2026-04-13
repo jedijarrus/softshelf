@@ -1804,10 +1804,14 @@ async def build_status():
     """Gibt den Status des letzten Build + eine Liste der letzten 10 Builds zurück."""
     latest = await database.get_latest_successful_build()
     recent = await database.get_builds(limit=10)
-    # Prüfen ob EXEs im downloads-Verzeichnis existieren
+
+    slug = await runtime_value("product_slug") or "Softshelf"
+    tray_name  = f"{slug}.exe"
+    setup_name = f"{slug}-setup.exe"
+
     downloads_dir = "/app/downloads"
-    kiosk_exe = os.path.join(downloads_dir, "softshelf.exe")
-    setup_exe = os.path.join(downloads_dir, "softshelf-setup.exe")
+    tray_path  = os.path.join(downloads_dir, tray_name)
+    setup_path = os.path.join(downloads_dir, setup_name)
 
     def _info(path: str) -> dict | None:
         if os.path.isfile(path):
@@ -1818,9 +1822,12 @@ async def build_status():
     return {
         "latest_build": latest,
         "recent_builds": recent,
+        "slug": slug,
+        "tray_name": tray_name,
+        "setup_name": setup_name,
         "artifacts": {
-            "softshelf.exe": _info(kiosk_exe),
-            "softshelf-setup.exe": _info(setup_exe),
+            tray_name:  _info(tray_path),
+            setup_name: _info(setup_path),
         },
     }
 
@@ -1846,18 +1853,23 @@ async def trigger_build():
             detail="proxy_public_url ist nicht gesetzt. Bitte zuerst in den Einstellungen eintragen.",
         )
 
+    # Slug aus Runtime-Settings. Der Validator beim Speichern stellt sicher,
+    # dass hier nur ein legitimer Wert stehen kann — zusaetzlich validiert
+    # der Builder und build.sh das nochmal vor der Verwendung (defense in depth).
+    slug = await runtime_value("product_slug") or "Softshelf"
+
     cfg = get_settings()
     version = "1.2.0"  # wird in der EXE angezeigt
 
     build_id = await database.start_build_log(proxy_url, version)
 
     # Build im Hintergrund starten, nicht auf Ergebnis warten
-    _spawn_bg(_run_build_async(build_id, cfg.builder_url, proxy_url, version))
+    _spawn_bg(_run_build_async(build_id, cfg.builder_url, proxy_url, version, slug))
 
     return {"ok": True, "build_id": build_id, "status": "running"}
 
 
-async def _run_build_async(build_id: int, builder_url: str, proxy_url: str, version: str):
+async def _run_build_async(build_id: int, builder_url: str, proxy_url: str, version: str, slug: str):
     """Ruft den Builder-Container auf und speichert das Ergebnis im build_log."""
     status = "failed"
     log = ""
@@ -1865,7 +1877,11 @@ async def _run_build_async(build_id: int, builder_url: str, proxy_url: str, vers
         async with httpx.AsyncClient(timeout=600) as c:
             r = await c.post(
                 f"{builder_url}/build",
-                json={"proxy_url": proxy_url, "version": version},
+                json={
+                    "proxy_url": proxy_url,
+                    "version": version,
+                    "product_slug": slug,
+                },
             )
             data = r.json()
             log = data.get("log", "")

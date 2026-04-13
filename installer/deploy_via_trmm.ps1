@@ -24,16 +24,21 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$TempSetup = "$env:TEMP\softshelf-setup.exe"
-$ErrorLog  = "$env:TEMP\softshelf_setup_error.txt"
+# Temp-Dateiname aus der Download-URL ableiten, damit das Script automatisch
+# mit dem aktuellen product_slug mitgeht (kein Hardcode).
+$SetupFile = [System.IO.Path]::GetFileName([Uri]$SetupExeUrl -replace '\?.*$','')
+if ([string]::IsNullOrWhiteSpace($SetupFile)) { $SetupFile = "setup.exe" }
+$TempSetup = Join-Path $env:TEMP $SetupFile
+$ErrorLog  = Join-Path $env:TEMP "setup_error.txt"
 
-Write-Host "=== Softshelf Deployment ===" -ForegroundColor Cyan
+Write-Host "=== Deployment ===" -ForegroundColor Cyan
 Write-Host "Proxy:   $ProxyUrl"
 Write-Host "AgentId: $AgentId"
+Write-Host "Setup:   $SetupFile"
 Write-Host ""
 
-# softshelf-setup.exe herunterladen
-Write-Host "Lade softshelf-setup.exe herunter..."
+# Installer herunterladen
+Write-Host "Lade $SetupFile herunter..."
 Invoke-WebRequest -Uri $SetupExeUrl -OutFile $TempSetup -UseBasicParsing
 Write-Host "Download abgeschlossen." -ForegroundColor Green
 
@@ -58,4 +63,4 @@ $RegistrationSecret = $null
 [System.GC]::Collect()
 
 Write-Host "=== Deployment abgeschlossen ===" -ForegroundColor Cyan
-Write-Host "softshelf.exe startet beim naechsten Benutzer-Login automatisch." -ForegroundColor Green
+Write-Host "Der Tray-Client startet beim naechsten Benutzer-Login automatisch." -ForegroundColor Green

@@ -2575,7 +2575,7 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
     <div class="section-head" style="margin-top:48px; margin-bottom:20px">
       <div>
         <h2 class="section-title" style="font-size:18px">Client-EXEs bauen</h2>
-        <div class="section-sub">Erzeugt <code>softshelf.exe</code> und <code>softshelf-setup.exe</code> im builder-Container mit der aktuellen Proxy-URL als Default eingebettet.</div>
+        <div class="section-sub">Erzeugt Tray-Client und Installer im builder-Container. Dateinamen, Install-Pfad, Registry-Key und Autostart-Name leiten sich vom <code>product_slug</code> oben ab. Proxy-URL wird als Default eingebacken.</div>
       </div>
       <button class="btn btn-primary btn-sm" id="build-trigger-btn" onclick="triggerBuild()">EXEs bauen</button>
     </div>
@@ -4308,7 +4308,7 @@ function agentRevoke() {
   const a = _currentAgent;
   showConfirm(
     'Token widerrufen',
-    `Der Machine-Token von „${a.hostname}" wird sofort ungültig. Der Client kann sich nur durch komplettes Re-Deployment (softshelf-setup.exe + Registration-Secret) wieder anmelden. Bestehende Installationen bleiben erhalten.`,
+    `Der Machine-Token von „${a.hostname}" wird sofort ungültig. Der Client kann sich nur durch komplettes Re-Deployment (Setup-EXE + Registration-Secret) wieder anmelden. Bestehende Installationen bleiben erhalten.`,
     async () => {
       try {
         await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/revoke`);
@@ -5371,8 +5371,10 @@ async function loadBuildStatus() {
 
 function renderBuildStatus(data) {
   const el = document.getElementById('build-status');
-  const softshelfExe = data.artifacts['softshelf.exe'];
-  const setup = data.artifacts['softshelf-setup.exe'];
+  const trayName  = data.tray_name  || 'softshelf.exe';
+  const setupName = data.setup_name || 'softshelf-setup.exe';
+  const trayInfo  = data.artifacts[trayName];
+  const setupInfo = data.artifacts[setupName];
 
   const artifactBlock = (name, info, dlPath) => `
     <div class="build-artifact">
@@ -5380,10 +5382,10 @@ function renderBuildStatus(data) {
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       </div>
       <div class="build-artifact-info">
-        <div class="build-artifact-name">${name}</div>
+        <div class="build-artifact-name">${esc(name)}</div>
         <div class="build-artifact-meta">${info ? fmtBytes(info.size) + ' · ' + new Date(info.mtime * 1000).toLocaleString('de') : '<span class="build-missing">noch nicht gebaut</span>'}</div>
       </div>
-      ${info ? `<a class="build-artifact-dl" href="${dlPath}" download>Download</a>` : ''}
+      ${info ? `<a class="build-artifact-dl" href="${esc(dlPath)}" download>Download</a>` : ''}
     </div>
   `;
 
@@ -5398,8 +5400,8 @@ function renderBuildStatus(data) {
 
   el.innerHTML = `
     <div class="build-artifacts">
-      ${artifactBlock('softshelf-setup.exe', setup, '/download/softshelf-setup.exe')}
-      ${artifactBlock('softshelf.exe', softshelfExe, '/download/softshelf.exe')}
+      ${artifactBlock(setupName, setupInfo, '/download/' + encodeURIComponent(setupName))}
+      ${artifactBlock(trayName,  trayInfo,  '/download/' + encodeURIComponent(trayName))}
     </div>
     <div class="build-history">
       <div class="build-history-head">Build-Historie</div>
