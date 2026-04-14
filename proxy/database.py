@@ -255,6 +255,8 @@ async def init_db():
 
     await _migrate_json_if_needed()
 
+    await _backfill_choco_agent_installations()
+
 
 async def _migrate_custom_packages_to_versions():
     """
@@ -299,6 +301,47 @@ async def _migrate_custom_packages_to_versions():
             await db.execute(
                 "UPDATE packages SET current_version_id = ? WHERE name = ?",
                 (version_id, r["name"]),
+            )
+        if rows:
+            await db.commit()
+
+
+async def _backfill_choco_agent_installations():
+    """
+    Migration: für jeden choco-Install im install_log dessen letzte Aktion
+    'install' war (nicht 'uninstall' danach) und der noch keinen
+    agent_installations-Eintrag hat, einen anlegen. Idempotent — läuft beim
+    Start und tut nichts wenn alle Tracking-Einträge schon vorhanden sind.
+
+    Wird gebraucht für Agents die VOR der Einführung des choco-Trackings
+    (v1.4.0) Pakete via Softshelf installiert haben — sonst würde Pass 3 in
+    get_agent_software diese Pakete nicht als deterministisch verwaltet
+    erkennen können.
+    """
+    async with _db() as db:
+        async with db.execute(
+            """
+            SELECT DISTINCT l.agent_id, l.package_name
+            FROM install_log l
+            JOIN packages p ON p.name = l.package_name
+            LEFT JOIN agent_installations i
+              ON i.agent_id = l.agent_id AND i.package_name = l.package_name
+            WHERE p.type = 'choco'
+              AND i.agent_id IS NULL
+              AND l.id = (
+                SELECT MAX(l2.id) FROM install_log l2
+                WHERE l2.agent_id = l.agent_id
+                  AND l2.package_name = l.package_name
+              )
+              AND l.action = 'install'
+            """
+        ) as cur:
+            rows = await cur.fetchall()
+        for agent_id, package_name in rows:
+            await db.execute(
+                "INSERT INTO agent_installations (agent_id, package_name, version_id) "
+                "VALUES (?, ?, NULL)",
+                (agent_id, package_name),
             )
         if rows:
             await db.commit()
