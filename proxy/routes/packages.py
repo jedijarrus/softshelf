@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import database
+import winget_catalog
 from auth import verify_machine_token
 from tactical_client import TacticalClient
 
@@ -83,9 +84,17 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
             # Status kommt komplett aus agent_winget_state, kein Tactical-Call
             wid = row["name"]
             state = winget_state.get(wid)
+            os_managed = winget_catalog.is_os_managed(wid)
             if state:
                 installed_version = state.get("installed_version") or ""
                 available_version = state.get("available_version")
+                # OS-managed Pakete (Edge, OneDrive, Office, Teams, …) lassen
+                # sich NICHT via winget upgraden. Wir maskieren das
+                # Update-Flag damit der Kiosk-Client gar nicht erst den
+                # Updaten-Button anbietet — sonst landet der User in einem
+                # „install technology is different"-Failure.
+                if os_managed:
+                    available_version = None
                 is_installed = True
                 version = installed_version or None
                 publisher = row.get("winget_publisher") or None

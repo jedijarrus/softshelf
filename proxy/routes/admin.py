@@ -25,6 +25,7 @@ import file_uploads
 import winget_catalog
 import winget_enrichment
 import winget_scanner
+from winget_catalog import is_os_managed
 from config import (
     RUNTIME_KEYS,
     get_settings,
@@ -1546,18 +1547,26 @@ async def get_agent_software(agent_id: str):
             matched_winget_ids.add(best_wid)
             wstate = winget_state[best_wid]
             wpkg = winget_whitelist.get(best_wid)
+            os_managed = is_os_managed(best_wid)
+            avail = wstate.get("available_version")
+            # OS-managed Pakete (Edge, Office, Teams, …) lassen sich NICHT
+            # via winget upgraden — wir maskieren das Update-Flag und
+            # markieren die Row als os_managed damit das UI einen klaren
+            # Hinweis statt eines toten Update-Buttons rendern kann.
+            effective_avail = None if os_managed else avail
             items.append({
                 "name":              wpkg["display_name"] if wpkg else name,
                 "winget_id":         best_wid,
                 "installed_version": wstate.get("installed_version") or version,
-                "available_version": wstate.get("available_version"),
+                "available_version": effective_avail,
                 "publisher":         (wpkg.get("winget_publisher") if wpkg else None) or publisher,
                 "source":            "winget",
                 "managed":           bool(wpkg),
                 "managed_type":      "winget" if wpkg else None,
                 "package_name":      best_wid if wpkg else None,
-                "can_activate":      not wpkg,
-                "update_available":  bool(wstate.get("available_version")),
+                "can_activate":      not wpkg and not os_managed,
+                "update_available":  bool(effective_avail),
+                "os_managed":        os_managed,
             })
             continue
 
@@ -1575,6 +1584,7 @@ async def get_agent_software(agent_id: str):
             "package_name":      wpkg["name"] if wpkg else None,
             "can_activate":      False,
             "update_available":  False,
+            "os_managed":        False,
         })
 
     # Pass 2: winget_state Einträge die KEIN Tactical-Match hatten
@@ -1582,18 +1592,22 @@ async def get_agent_software(agent_id: str):
         if wid in matched_winget_ids:
             continue
         wpkg = winget_whitelist.get(wid)
+        os_managed = is_os_managed(wid)
+        avail = wstate.get("available_version")
+        effective_avail = None if os_managed else avail
         items.append({
             "name":              wpkg["display_name"] if wpkg else wid,
             "winget_id":         wid,
             "installed_version": wstate.get("installed_version"),
-            "available_version": wstate.get("available_version"),
+            "available_version": effective_avail,
             "publisher":         wpkg.get("winget_publisher") if wpkg else (wid.split(".")[0] if "." in wid else None),
             "source":            "winget",
             "managed":           bool(wpkg),
             "managed_type":      "winget" if wpkg else None,
             "package_name":      wid if wpkg else None,
-            "can_activate":      not wpkg,
-            "update_available":  bool(wstate.get("available_version")),
+            "can_activate":      not wpkg and not os_managed,
+            "update_available":  bool(effective_avail),
+            "os_managed":        os_managed,
         })
 
     # Sortieren: Updates zuerst, dann managed, dann unmanaged, jeweils nach Name

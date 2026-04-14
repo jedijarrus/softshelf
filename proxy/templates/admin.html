@@ -1112,6 +1112,56 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   background: #fef3c7;
   border: 1px solid #fcd34d;
 }
+.sw-badge.sw-os-managed {
+  color: #1e3a8a;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  cursor: help;
+}
+
+.action-error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: var(--r);
+  color: #78350f;
+}
+.action-error-banner svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: #b45309;
+  margin-top: 1px;
+}
+.action-error-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #78350f;
+  margin-bottom: 3px;
+}
+.action-error-title code {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: #fef3c7;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+.action-error-detail {
+  font-size: 11.5px;
+  color: #92400e;
+  line-height: 1.4;
+}
+.action-error-time {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: #a16207;
+  font-variant-numeric: tabular-nums;
+}
 .sw-actions-wrap {
   display: flex;
   gap: 6px;
@@ -4712,6 +4762,23 @@ function renderAgentDetail(softwareData, log) {
         ? `<div class="panel-error" style="margin-bottom:12px">Tactical-Software-Scan: ${esc(softwareData.tactical_error)}</div>`
         : '');
 
+  // Banner für die letzte fehlgeschlagene Aktion (z.B. winget Installer-
+  // Technology-Mismatch). Kommt aus agent_scan_meta.last_action_error.
+  const meta = (softwareData && softwareData.scan_meta) || {};
+  const actionErr = meta.last_action_error;
+  const actionPkg = meta.last_action_package;
+  const actionAt = meta.last_action_at;
+  const actionBanner = actionErr
+    ? `<div class="action-error-banner">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+         <div>
+           <div class="action-error-title">Letzte Aktion fehlgeschlagen${actionPkg ? ` — <code>${esc(actionPkg)}</code>` : ''}</div>
+           <div class="action-error-detail">${esc(actionErr)}</div>
+           ${actionAt ? `<div class="action-error-time">${esc(relTime(actionAt))} (${esc(fmtDt(actionAt))})</div>` : ''}
+         </div>
+       </div>`
+    : '';
+
   const updates = items.filter(i => i.update_available).length;
   const managed = items.filter(i => i.managed).length;
   const total = items.length;
@@ -4734,6 +4801,7 @@ function renderAgentDetail(softwareData, log) {
 
   document.getElementById('agents-detail-body').innerHTML = `
     ${errorBlock}
+    ${actionBanner}
     <div class="agent-section-head">
       <span class="agent-section-title">Installierte Software</span>
       <span class="agent-section-count">${total} · ${managed} verwaltet · ${updates} Update${updates === 1 ? '' : 's'}</span>
@@ -4770,6 +4838,9 @@ function _renderSoftwareRow(item) {
   }
   if (item.update_available) {
     badges += `<span class="sw-badge sw-update">Update ${availV}</span>`;
+  }
+  if (item.os_managed) {
+    badges += '<span class="sw-badge sw-os-managed" title="Wird über Microsoft Update gepflegt — winget kann das Paket nicht in-place upgraden">über Microsoft Update</span>';
   }
 
   // Aktionen — wir gruppieren mehrere Buttons pro Row

@@ -232,6 +232,23 @@ async def init_db():
                 "ALTER TABLE discovery_enrichment ADD COLUMN install_count INTEGER NOT NULL DEFAULT 0"
             )
 
+        # Migration: last_action_error/at in agent_scan_meta für post-action
+        # Fehler-Reporting (z.B. winget Installer-Technology-Mismatch)
+        async with db.execute("PRAGMA table_info(agent_scan_meta)") as cur:
+            sm_cols = {row[1] for row in await cur.fetchall()}
+        if "last_action_error" not in sm_cols:
+            await db.execute(
+                "ALTER TABLE agent_scan_meta ADD COLUMN last_action_error TEXT"
+            )
+        if "last_action_at" not in sm_cols:
+            await db.execute(
+                "ALTER TABLE agent_scan_meta ADD COLUMN last_action_at TEXT"
+            )
+        if "last_action_package" not in sm_cols:
+            await db.execute(
+                "ALTER TABLE agent_scan_meta ADD COLUMN last_action_package TEXT"
+            )
+
         await db.commit()
 
     await _migrate_custom_packages_to_versions()
@@ -1442,12 +1459,37 @@ async def get_scan_meta(agent_id: str) -> dict | None:
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT agent_id, last_scan_at, last_status, last_error, consecutive_failures "
+            "SELECT agent_id, last_scan_at, last_status, last_error, "
+            "consecutive_failures, last_action_error, last_action_at, "
+            "last_action_package "
             "FROM agent_scan_meta WHERE agent_id = ?",
             (agent_id,),
         ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
+
+
+async def upsert_action_result(
+    agent_id: str,
+    package_name: str,
+    error: str | None,
+):
+    """Schreibt das Ergebnis einer User- oder Admin-Aktion (Install/Upgrade/
+    Uninstall) in agent_scan_meta. error=None bedeutet Aktion erfolgreich,
+    bei Erfolg wird last_action_error gelöscht. Aufgerufen vom
+    _run_winget_command_bg in routes/install.py."""
+    async with _db() as db:
+        await db.execute(
+            "INSERT INTO agent_scan_meta "
+            "(agent_id, last_action_at, last_action_package, last_action_error) "
+            "VALUES (?, datetime('now'), ?, ?) "
+            "ON CONFLICT(agent_id) DO UPDATE SET "
+            "last_action_at = datetime('now'), "
+            "last_action_package = excluded.last_action_package, "
+            "last_action_error = excluded.last_action_error",
+            (agent_id, package_name, error),
+        )
+        await db.commit()
 
 
 async def get_all_scan_meta() -> list[dict]:

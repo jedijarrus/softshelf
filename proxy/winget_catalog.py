@@ -35,6 +35,55 @@ logger = logging.getLogger("softshelf.winget.catalog")
 # Microsoft CDN URL des offiziellen winget-Source-Caches
 _CATALOG_URL = "https://cdn.winget.microsoft.com/cache/source.msix"
 
+# winget-PackageIdentifiers von Software die von Windows / Microsoft Update
+# gepflegt wird und sich NICHT via `winget upgrade` in-place updaten lässt.
+# Symptom wenn man's trotzdem versucht:
+#   - „A newer version was found, but the install technology is different
+#     from the current version installed."
+#   - Exit-Code -1978335189 (INSTALL_NOTHING_TO_UPGRADE) trotz vorhandenem
+#     update.
+# Diese Pakete bekommen NIE ein "Update verfügbar"-Flag in der Kiosk-Sicht
+# und im Admin-Detail. Sie tauchen weiterhin in der installierten Software-
+# Liste auf, aber als „wird über Microsoft Update gepflegt".
+WINGET_OS_MANAGED = frozenset({
+    "Microsoft.Edge",
+    "Microsoft.EdgeWebView2Runtime",
+    "Microsoft.OneDrive",
+    "Microsoft.Office",
+    "Microsoft.Office365",
+    "Microsoft.365.Apps",
+    "Microsoft.Teams",
+    "Microsoft.Teams.Classic",
+    "Microsoft.MSStore",
+    "Microsoft.WindowsTerminal",
+    "Microsoft.WindowsStore",
+    "Microsoft.PowerShell",
+    "Microsoft.DotNet.Runtime.6",
+    "Microsoft.DotNet.Runtime.7",
+    "Microsoft.DotNet.Runtime.8",
+    "Microsoft.DotNet.DesktopRuntime.6",
+    "Microsoft.DotNet.DesktopRuntime.7",
+    "Microsoft.DotNet.DesktopRuntime.8",
+    "Microsoft.DotNet.AspNetCore.6",
+    "Microsoft.DotNet.AspNetCore.7",
+    "Microsoft.DotNet.AspNetCore.8",
+    "Microsoft.VCRedist.2010.x64",
+    "Microsoft.VCRedist.2010.x86",
+    "Microsoft.VCRedist.2012.x64",
+    "Microsoft.VCRedist.2012.x86",
+    "Microsoft.VCRedist.2013.x64",
+    "Microsoft.VCRedist.2013.x86",
+    "Microsoft.VCRedist.2015+.x64",
+    "Microsoft.VCRedist.2015+.x86",
+})
+
+
+def is_os_managed(winget_id: str) -> bool:
+    """True wenn das Paket zu der Liste OS-managed Microsoft-Pakete gehört
+    die nicht via winget in-place upgradable sind. Verwendet in packages.py
+    und routes/admin.py um available_version/update_available zu unterdrücken."""
+    return (winget_id or "") in WINGET_OS_MANAGED
+
 # Wir cachen die extrahierte SQLite im Docker-data-Volume damit der Cache
 # Container-Restarts überlebt
 _CACHE_DIR = Path(os.environ.get("WINGET_CACHE_DIR") or "/app/data")
