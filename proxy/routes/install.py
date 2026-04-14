@@ -403,6 +403,10 @@ _CHOCO_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
         "Choco hat ein abhängiges Sub-Paket nicht entfernen können (typisch bei Metapaketen wie 'vlc' → 'vlc.install'). Müsste eigentlich von --remove-dependencies abgedeckt sein — falls nicht, manuell auf dem Agent das Sub-Paket hinterher uninstallen.",
     ),
     (
+        "is not installed. cannot uninstall",
+        "Choco meldet das Paket als nicht installiert — entweder schon entfernt, oder als Metapaket nur ein Marker für eine andere Choco-Variante (z.B. 'vlc' vs 'vlc.install').",
+    ),
+    (
         "the install of",
         "Choco-Install fehlgeschlagen — siehe Choco-Log auf dem Agent (C:\\ProgramData\\chocolatey\\logs\\chocolatey.log).",
     ),
@@ -509,6 +513,24 @@ exit $code
 """
 
 
+async def _run_choco_one(agent_id: str, cmd: str) -> tuple[bool, str]:
+    """Einzelner Tactical run_command-Aufruf für eine fertige choco-Powershell.
+    Returns (success_no_softerror, raw_output). success ist False entweder bei
+    Exception oder wenn der Wrapper mit Write-Error abgebrochen hat. Die
+    Soft-Error-Detection bleibt dem Caller überlassen."""
+    try:
+        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=600)
+        if raw_output and raw_output.startswith('"'):
+            try:
+                import json as _json
+                raw_output = _json.loads(raw_output)
+            except Exception:
+                pass
+        return True, raw_output or ""
+    except Exception as e:
+        return False, str(e)
+
+
 async def _run_choco_command_bg(
     agent_id: str,
     hostname: str,
@@ -519,44 +541,65 @@ async def _run_choco_command_bg(
 ):
     """Background-Task für choco install/uninstall via Tactical run-cmd. Spiegelt
     `_run_winget_command_bg`: capture output, detect soft errors, persist
-    last_action_error in scan_meta, chain targeted re-scan."""
-    error_msg: str | None = None
-    raw_output = ""
-    success = False
-    try:
-        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=600)
-        if raw_output and raw_output.startswith('"'):
-            try:
-                import json as _json
-                raw_output = _json.loads(raw_output)
-            except Exception:
-                pass
-        # run_command kam ohne Exception zurück → Tactical hat 200 zurück-
-        # geliefert → der PowerShell-Wrapper hat exit 0 gemacht. Aber
-        # Choco selbst kann partial success haben (z.B. „1/2 packages")
-        # — das landet trotzdem auf exit 0 weil unser Wrapper nur
-        # 0/1641/3010 als success durchlässt und alles andere mit
-        # Write-Error abbricht.
-        success = True
-        soft_err = _detect_choco_soft_error(raw_output, exit_code=0)
-        if soft_err:
-            error_msg = soft_err
-            logger.warning(
-                "choco %s soft-error für %s auf %s: %s",
-                action, display_name, hostname, soft_err,
-            )
+    last_action_error in scan_meta, chain targeted re-scan.
+
+    Spezialfall für uninstall: wenn das Metapackage nicht installiert ist,
+    aber die `<name>.install`-Variante existiert (z.B. 'vlc' weg, 'vlc.install'
+    noch da), retry mit dem .install-Namen. Behebt Orphans aus früheren
+    halb-fehlgeschlagenen Uninstalls."""
+    success, raw_output = await _run_choco_one(agent_id, cmd)
+    soft_err = _detect_choco_soft_error(raw_output, exit_code=0 if success else 1)
+
+    # Auto-Retry: wenn uninstall fehlschlägt mit „is not installed" UND der
+    # Paket-Name endet nicht schon auf .install, versuche `<name>.install`.
+    retried_name: str | None = None
+    if (
+        action == "uninstall"
+        and "is not installed. cannot uninstall" in (raw_output or "").lower()
+        and not package_name.endswith(".install")
+        and _CHOCO_NAME_RE.fullmatch(f"{package_name}.install")
+    ):
+        retry_target = f"{package_name}.install"
+        logger.info(
+            "choco uninstall: %s nicht installiert, retry mit %s",
+            package_name, retry_target,
+        )
+        retry_cmd = _build_choco_command("uninstall", retry_target)
+        retry_success, retry_output = await _run_choco_one(agent_id, retry_cmd)
+        retry_soft_err = _detect_choco_soft_error(
+            retry_output, exit_code=0 if retry_success else 1
+        )
+        if retry_success and not retry_soft_err:
+            success = True
+            raw_output = retry_output
+            soft_err = None
+            retried_name = retry_target
         else:
-            logger.info("choco %s ok: %s auf %s", action, display_name, hostname)
-    except Exception as e:
-        # run_command raised — entweder Tactical Non-200 oder unser Wrapper
-        # hat Write-Error gemacht weil exit ≠ success_code. Die Exception-
-        # Message enthält meist den letzten Output mit dem ExitCode.
-        msg = str(e)
-        soft_err = _detect_choco_soft_error(msg, exit_code=1)
-        error_msg = soft_err or msg[:300]
+            # Beide fehlgeschlagen — kombinierte Meldung
+            success = False
+            soft_err = (
+                f"Weder '{package_name}' noch '{retry_target}' konnten deinstalliert werden. "
+                f"{retry_soft_err or retry_output[:200]}"
+            )
+
+    error_msg = soft_err if soft_err else None
+    if error_msg:
+        logger.warning(
+            "choco %s soft-error für %s auf %s: %s",
+            action, display_name, hostname, error_msg,
+        )
+    elif not success:
+        # Sollte selten passieren — Exception ohne erkennbaren Soft-Error
+        error_msg = (raw_output or "unbekannter Fehler")[:300]
         logger.warning(
             "choco %s fehlgeschlagen: %s auf %s — %s",
             action, display_name, hostname, error_msg,
+        )
+    else:
+        logger.info(
+            "choco %s ok: %s auf %s%s",
+            action, display_name, hostname,
+            f" (via {retried_name})" if retried_name else "",
         )
 
     # Tracking nur updaten wenn der Wrapper exit 0 hatte UND wir keinen
