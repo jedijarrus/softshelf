@@ -988,6 +988,178 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   cursor: default;
 }
 
+/* ── Agent-Detail Page (full-tab) ─────────────────────────────────── */
+.agent-detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding-bottom: 18px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+.agent-detail-head .btn-ghost svg {
+  margin-right: 4px;
+}
+.agent-detail-titlewrap {
+  flex: 1;
+  min-width: 0;
+}
+.agent-detail-titlewrap .section-title {
+  margin-bottom: 2px;
+  word-break: break-word;
+}
+.agent-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+/* ── Agent-Detail Software-Liste ──────────────────────────────────── */
+.agent-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.agent-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-2);
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.agent-section-count {
+  font-size: 10.5px;
+  color: var(--fg-5);
+  font-variant-numeric: tabular-nums;
+}
+.agent-software-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.sw-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  transition: background .12s, border-color .12s;
+}
+.sw-row:hover {
+  background: var(--bg-soft);
+  border-color: var(--border-s);
+}
+.sw-info {
+  flex: 1;
+  min-width: 0;
+}
+.sw-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.sw-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+  word-break: break-word;
+}
+.sw-sub {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--fg-4);
+  font-family: var(--mono);
+}
+.sw-sub code {
+  font-family: var(--mono);
+  font-size: inherit;
+  background: var(--bg-hover);
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--fg-3);
+}
+.sw-badge {
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+.sw-badge.sw-managed {
+  color: #047857;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+}
+.sw-badge.sw-unmanaged {
+  color: #525252;
+  background: #f5f5f5;
+  border: 1px solid #e5e5e5;
+}
+.sw-badge.sw-update {
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+}
+.sw-actions-wrap {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.sw-action {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg-2);
+  transition: background .12s, border-color .12s, color .12s;
+}
+.sw-action:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-s);
+  color: var(--fg);
+}
+.sw-action-update {
+  color: #92400e;
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
+.sw-action-update:hover {
+  background: #fde68a;
+  border-color: #f59e0b;
+  color: #78350f;
+}
+.sw-action-uninstall:hover {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+.sw-action-activate {
+  color: #047857;
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+.sw-action-activate:hover {
+  background: #d1fae5;
+  border-color: #6ee7b7;
+  color: #065f46;
+}
+
 /* Storage indicator (im add-modes Bar oder Verteilung filter-bar) */
 .storage-indicator {
   margin-left: auto;
@@ -2626,21 +2798,48 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
 
   <!-- AGENTS -->
   <section class="tab-pane" id="tab-agents">
-    <div class="section-head">
-      <div>
-        <h1 class="section-title">Kiosk-Clients</h1>
-        <div class="section-sub">Online wenn in den letzten 5 Minuten aktiv. Klick auf Agent-ID kopiert sie.</div>
+    <!-- LIST VIEW -->
+    <div id="agents-list-view">
+      <div class="section-head">
+        <div>
+          <h1 class="section-title">Kiosk-Clients</h1>
+          <div class="section-sub">Online wenn in den letzten 5 Minuten aktiv. Klick auf eine Zeile öffnet die Detail-Sicht.</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="agents-refresh-btn" onclick="loadAgents()">Aktualisieren</button>
       </div>
-      <button class="btn btn-ghost btn-sm" id="agents-refresh-btn" onclick="loadAgents()">Aktualisieren</button>
-    </div>
-    <div class="filter-bar">
-      <div class="input-search">
-        <input class="input" type="search" id="agents-filter" placeholder="Hostname oder Agent-ID filtern…" oninput="renderAgents()">
+      <div class="filter-bar">
+        <div class="input-search">
+          <input class="input" type="search" id="agents-filter" placeholder="Hostname oder Agent-ID filtern…" oninput="renderAgents()">
+        </div>
+        <span class="filter-stamp" id="agents-ts"></span>
       </div>
-      <span class="filter-stamp" id="agents-ts"></span>
+      <div id="main-agents">
+        <div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Agents werden geladen</span></div>
+      </div>
     </div>
-    <div id="main-agents">
-      <div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Agents werden geladen</span></div>
+
+    <!-- DETAIL VIEW -->
+    <div id="agents-detail-view" style="display:none">
+      <div class="agent-detail-head">
+        <button class="btn btn-ghost btn-sm" onclick="closeAgentDetailPage()" type="button" title="Zurück zur Liste">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          Zurück
+        </button>
+        <div class="agent-detail-titlewrap">
+          <h1 class="section-title" id="agent-detail-title">—</h1>
+          <div class="section-sub" id="agent-detail-sub">—</div>
+        </div>
+        <div class="agent-detail-actions">
+          <button class="btn btn-ghost btn-sm" type="button" id="agent-detail-rescan-btn" onclick="agentDetailRescan()" title="winget-Scan jetzt anstoßen">Neu scannen</button>
+          <button class="btn btn-ghost btn-sm" type="button" id="agent-detail-revoke-btn" onclick="agentRevoke()" title="Token revoken — Client muss neu registriert werden">Token widerrufen</button>
+          <button class="btn push-update-btn btn-sm" type="button" id="agent-detail-ban-btn" onclick="agentBan()" title="Sperren — auch nach Re-Register blockiert">Sperren</button>
+          <button class="btn btn-ghost btn-sm" type="button" id="agent-detail-unban-btn" onclick="agentUnban()" title="Sperre aufheben" style="display:none">Entsperren</button>
+          <button class="btn btn-danger btn-sm" type="button" id="agent-detail-delete-btn" onclick="agentDelete()" title="Aus Datenbank entfernen">Löschen</button>
+        </div>
+      </div>
+      <div id="agents-detail-body">
+        <div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Detail wird geladen</span></div>
+      </div>
     </div>
   </section>
 
@@ -3271,6 +3470,17 @@ function switchTab(name, btn) {
   document.getElementById('tab-' + name).classList.add('active');
   currentTab = name;
   document.getElementById('add-btn').style.display = name === 'packages' ? '' : 'none';
+  // Beim Tab-Wechsel weg vom Agents-Tab IMMER zur Liste zurück, sonst landet
+  // man bei Wiederkehr auf einer u.U. veralteten Detail-Sicht.
+  if (name !== 'agents') {
+    const detail = document.getElementById('agents-detail-view');
+    const list = document.getElementById('agents-list-view');
+    if (detail && list) {
+      detail.style.display = 'none';
+      list.style.display = '';
+      _currentAgent = null;
+    }
+  }
   if (name === 'packages')     init();
   if (name === 'distribution') loadDistributions();
   if (name === 'agents')       loadAgents();
@@ -4424,25 +4634,66 @@ async function openAgentDetail(agentId, hostname) {
     banned: cached ? !!cached.banned : false,
   };
 
+  // List ausblenden, Detail einblenden
+  document.getElementById('agents-list-view').style.display = 'none';
+  document.getElementById('agents-detail-view').style.display = '';
+
   const titleSuffix = _currentAgent.banned ? ' · GESPERRT' : '';
-  document.getElementById('agent-panel-title').textContent = hostname + titleSuffix;
-  document.getElementById('agent-panel-sub').textContent = 'Installationsverlauf · ' + agentId.slice(0, 12) + '…';
-  document.getElementById('agent-panel-body').innerHTML = '<div class="loading-block"><span class="spinner"></span></div>';
-  document.getElementById('overlay').classList.add('open');
-  document.getElementById('agent-panel').classList.add('open');
+  document.getElementById('agent-detail-title').textContent = hostname + titleSuffix;
+  document.getElementById('agent-detail-sub').textContent = agentId;
+  document.getElementById('agents-detail-body').innerHTML = '<div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Software wird geladen</span></div>';
 
   // Action-Buttons je nach State togglen
-  document.getElementById('agent-ban-btn').style.display = _currentAgent.banned ? 'none' : '';
-  document.getElementById('agent-unban-btn').style.display = _currentAgent.banned ? '' : 'none';
+  document.getElementById('agent-detail-ban-btn').style.display = _currentAgent.banned ? 'none' : '';
+  document.getElementById('agent-detail-unban-btn').style.display = _currentAgent.banned ? '' : 'none';
 
   try {
-    const log = await api('GET', `/admin/api/agents/${encodeURIComponent(agentId)}/installs`);
-    const el = document.getElementById('agent-panel-body');
-    if (!log.length) {
-      el.innerHTML = '<div class="panel-hint">Noch keine Installationen aufgezeichnet.</div>';
-      return;
-    }
-    el.innerHTML = log.map(e => `
+    const [softwareData, log] = await Promise.all([
+      api('GET', `/admin/api/agents/${encodeURIComponent(agentId)}/software`).catch(e => ({ items: [], _error: e.message })),
+      api('GET', `/admin/api/agents/${encodeURIComponent(agentId)}/installs`).catch(() => []),
+    ]);
+    renderAgentDetail(softwareData, log);
+  } catch (e) {
+    document.getElementById('agents-detail-body').innerHTML =
+      `<div class="panel-error">Fehler: ${esc(e.message)}</div>`;
+  }
+}
+
+function closeAgentDetailPage() {
+  document.getElementById('agents-detail-view').style.display = 'none';
+  document.getElementById('agents-list-view').style.display = '';
+  _currentAgent = null;
+  loadAgents();
+}
+
+async function agentDetailRescan() {
+  if (!_currentAgent) return;
+  const a = _currentAgent;
+  try {
+    await api('POST', `/admin/api/winget/rescan/${encodeURIComponent(a.agent_id)}`);
+    toast(`winget-Scan auf „${a.hostname}" gestartet`);
+    setTimeout(() => openAgentDetail(a.agent_id, a.hostname), 6000);
+  } catch (e) {}
+}
+
+function renderAgentDetail(softwareData, log) {
+  const items = (softwareData && softwareData.items) || [];
+  const errorBlock = (softwareData && softwareData._error)
+    ? `<div class="panel-error" style="margin-bottom:12px">Software-Liste konnte nicht geladen werden: ${esc(softwareData._error)}</div>`
+    : (softwareData && softwareData.tactical_error
+        ? `<div class="panel-error" style="margin-bottom:12px">Tactical-Software-Scan: ${esc(softwareData.tactical_error)}</div>`
+        : '');
+
+  const updates = items.filter(i => i.update_available).length;
+  const managed = items.filter(i => i.managed).length;
+  const total = items.length;
+
+  const swRows = items.length
+    ? items.map(i => _renderSoftwareRow(i)).join('')
+    : '<div class="empty-mini">Keine Software-Daten — der nightly Scan war noch nicht da oder Tactical ist nicht erreichbar.</div>';
+
+  const logBlock = log.length
+    ? log.map(e => `
       <div class="install-row">
         <span class="install-badge ${e.action}">${e.action === 'install' ? 'Install' : 'Uninstall'}</span>
         <div>
@@ -4450,11 +4701,143 @@ async function openAgentDetail(agentId, hostname) {
           <div class="install-name">${esc(e.package_name)}</div>
         </div>
         <div class="install-time" title="${esc(fmtDt(e.ts))}">${esc(relTime(e.ts))}</div>
-      </div>`).join('');
-  } catch (e) {
-    document.getElementById('agent-panel-body').innerHTML =
-      `<div class="panel-error">Fehler: ${esc(e.message)}</div>`;
+      </div>`).join('')
+    : '<div class="empty-mini">Noch keine Installationen aufgezeichnet.</div>';
+
+  document.getElementById('agents-detail-body').innerHTML = `
+    ${errorBlock}
+    <div class="agent-section-head">
+      <span class="agent-section-title">Installierte Software</span>
+      <span class="agent-section-count">${total} · ${managed} verwaltet · ${updates} Update${updates === 1 ? '' : 's'}</span>
+    </div>
+    <div class="agent-software-list">${swRows}</div>
+    <div class="agent-section-head" style="margin-top:24px">
+      <span class="agent-section-title">Installations-Verlauf</span>
+      <span class="agent-section-count">${log.length} Einträge</span>
+    </div>
+    <div>${logBlock}</div>
+  `;
+}
+
+function _renderSoftwareRow(item) {
+  const name = esc(item.name || item.winget_id || '');
+  const installedV = item.installed_version ? esc(item.installed_version) : '';
+  const availV = item.available_version ? esc(item.available_version) : '';
+  const publisher = item.publisher ? esc(item.publisher) : '';
+  const wid = item.winget_id ? esc(item.winget_id) : '';
+  const isWinget = item.source === 'winget';
+
+  // Source / managed badges
+  let badges = '';
+  if (item.managed && item.managed_type === 'winget') {
+    badges += '<span class="sw-badge sw-managed">verwaltet · winget</span>';
+  } else if (item.managed && item.managed_type === 'custom') {
+    badges += '<span class="sw-badge sw-managed">verwaltet · eigen</span>';
+  } else if (item.managed && item.managed_type === 'choco') {
+    badges += '<span class="sw-badge sw-managed">verwaltet · choco</span>';
+  } else if (isWinget) {
+    badges += '<span class="sw-badge sw-unmanaged">winget · unverwaltet</span>';
+  } else {
+    badges += '<span class="sw-badge sw-unmanaged">unverwaltet</span>';
   }
+  if (item.update_available) {
+    badges += `<span class="sw-badge sw-update">Update ${availV}</span>`;
+  }
+
+  // Aktionen — wir gruppieren mehrere Buttons pro Row
+  const actions = [];
+  if (item.update_available && item.managed) {
+    actions.push(`<button class="sw-action sw-action-update" onclick="agentSoftwareInstall(${jsStr(item.package_name)},${jsStr(item.name)})" title="Updaten">Updaten</button>`);
+  }
+  if (item.managed) {
+    actions.push(`<button class="sw-action sw-action-uninstall" onclick="agentSoftwareUninstall(${jsStr(item.package_name)},${jsStr(item.name)})" title="Deinstallieren">Deinstallieren</button>`);
+  } else if (item.can_activate && wid) {
+    // Unverwaltetes winget-Paket: aktivieren in die Whitelist UND/ODER direkt
+    // via winget uninstall vom Agent runterhauen
+    actions.push(`<button class="sw-action sw-action-activate" onclick="agentSoftwareActivate(${jsStr(item.winget_id)},${jsStr(item.name)},${jsStr(item.publisher || '')})" title="In die Softshelf-Whitelist aufnehmen">Aktivieren</button>`);
+    actions.push(`<button class="sw-action sw-action-uninstall" onclick="agentWingetUninstall(${jsStr(item.winget_id)},${jsStr(item.name)})" title="winget uninstall — entfernt das Paket vom Agent ohne es aufzunehmen">Entfernen</button>`);
+  }
+  const action = actions.join('');
+
+  // Sub-line: id + version + publisher
+  const subParts = [];
+  if (wid) subParts.push(`<code>${wid}</code>`);
+  if (installedV) subParts.push(installedV);
+  if (publisher && !wid) subParts.push(publisher);
+  const sub = subParts.join(' · ');
+
+  return `<div class="sw-row">
+    <div class="sw-info">
+      <div class="sw-name-line">
+        <span class="sw-name">${name}</span>
+        ${badges}
+      </div>
+      ${sub ? `<div class="sw-sub">${sub}</div>` : ''}
+    </div>
+    <div class="sw-actions-wrap">${action}</div>
+  </div>`;
+}
+
+async function agentSoftwareInstall(packageName, displayName) {
+  if (!_currentAgent || !packageName) return;
+  const a = _currentAgent;
+  try {
+    await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/install/${encodeURIComponent(packageName)}`);
+    toast(`„${displayName}" wird auf ${a.hostname} aktualisiert/installiert…`);
+    // nach 8 Sekunden refreshen damit der targeted re-scan durch ist
+    setTimeout(() => openAgentDetail(a.agent_id, a.hostname), 8000);
+  } catch (e) {}
+}
+
+function agentSoftwareUninstall(packageName, displayName) {
+  if (!_currentAgent || !packageName) return;
+  const a = _currentAgent;
+  showConfirm(
+    `„${displayName}" deinstallieren`,
+    `Das Paket wird auf ${a.hostname} via Tactical-run_command deinstalliert. Das kann einige Minuten dauern; danach aktualisiert sich der Scan automatisch.`,
+    async () => {
+      try {
+        await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/uninstall/${encodeURIComponent(packageName)}`);
+        toast(`Deinstallation von „${displayName}" gestartet`);
+        setTimeout(() => openAgentDetail(a.agent_id, a.hostname), 8000);
+      } catch (e) {}
+    },
+    'Deinstallieren'
+  );
+}
+
+function agentWingetUninstall(wingetId, displayName) {
+  if (!_currentAgent || !wingetId) return;
+  const a = _currentAgent;
+  showConfirm(
+    `„${displayName}" via winget entfernen`,
+    `winget uninstall --id "${wingetId}" wird als SYSTEM auf ${a.hostname} ausgeführt. Das Paket bleibt NICHT in der Softshelf-Whitelist; es wird einfach nur runtergeworfen.`,
+    async () => {
+      try {
+        await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/winget-uninstall`, {
+          winget_id: wingetId,
+        });
+        toast(`Entfernung von „${displayName}" gestartet`);
+        setTimeout(() => openAgentDetail(a.agent_id, a.hostname), 8000);
+      } catch (e) {}
+    },
+    'Entfernen'
+  );
+}
+
+async function agentSoftwareActivate(wingetId, displayName, publisher) {
+  if (!wingetId) return;
+  try {
+    await api('POST', '/admin/api/winget/activate', {
+      id: wingetId,
+      display_name: displayName || wingetId,
+      category: 'Allgemein',
+      publisher: publisher || '',
+    });
+    toast(`„${displayName || wingetId}" zur Whitelist hinzugefügt`);
+    if (_currentAgent) openAgentDetail(_currentAgent.agent_id, _currentAgent.hostname);
+    refreshWingetDiscoveryCount();
+  } catch (e) {}
 }
 
 // ── Agent Lifecycle Actions ─────────────────────────────────────────────────
@@ -4469,8 +4852,7 @@ function agentRevoke() {
       try {
         await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/revoke`);
         toast(`Token von „${a.hostname}" widerrufen`);
-        closeAll();
-        loadAgents();
+        closeAgentDetailPage();
       } catch (e) {}
     },
     'Widerrufen'
@@ -4487,8 +4869,7 @@ function agentDelete() {
       try {
         await api('DELETE', `/admin/api/agents/${encodeURIComponent(a.agent_id)}`);
         toast(`„${a.hostname}" gelöscht`);
-        closeAll();
-        loadAgents();
+        closeAgentDetailPage();
       } catch (e) {}
     }
   );
@@ -4526,8 +4907,7 @@ async function submitBan() {
       {reason: reason});
     toast(`„${a.hostname}" gesperrt`);
     closeBanModal();
-    closeAll();
-    loadAgents();
+    closeAgentDetailPage();
   } catch (e) {
     errEl.textContent = e.message || 'Fehler beim Sperren';
     btn.disabled = false;
@@ -4545,8 +4925,7 @@ function agentUnban() {
       try {
         await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/unban`);
         toast(`Sperre für „${a.hostname}" aufgehoben`);
-        closeAll();
-        loadAgents();
+        closeAgentDetailPage();
       } catch (e) {}
     },
     'Entsperren', 'btn-primary'
