@@ -887,28 +887,7 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
 .add-section { display: none; flex: 1; flex-direction: column; min-height: 0; }
 .add-section.active { display: flex; }
 
-/* ── Winget Discovery + Banner ─────────────────────────────────────── */
-.winget-banner {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11.5px;
-  font-weight: 500;
-  color: #047857;
-  background: #ecfdf5;
-  border: 1px solid #a7f3d0;
-  border-radius: var(--r-sm);
-  padding: 5px 10px;
-  cursor: pointer;
-  transition: background .14s, border-color .14s;
-}
-.winget-banner:hover {
-  background: #d1fae5;
-  border-color: #6ee7b7;
-}
-.winget-banner svg { width: 13px; height: 13px; }
-.winget-banner b { font-weight: 600; }
-
+/* ── Winget Discovery ──────────────────────────────────────────────── */
 .winget-discovery-wrap {
   border-top: 1px solid var(--border);
   margin-top: 8px;
@@ -2846,10 +2825,6 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
     {{ADMIN_PORTAL_TITLE}}<span class="brand-sub">/ Admin</span>
   </div>
   <div class="hdr-meta">
-    <button class="winget-banner" id="winget-banner" type="button" style="display:none" onclick="openWingetTabFromBanner()" title="Pakete in der Flotte gefunden, die noch nicht verwaltet werden">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-      <span><b id="winget-banner-count">0</b> in der Flotte unverwaltet</span>
-    </button>
     <span class="meta-item hide-sm"><span class="label">Version</span><span class="value" id="meta-version">1.1.0</span></span>
     <span class="meta-item"><span class="value" id="meta-time">--:--:--</span></span>
     <span class="conn" id="conn">
@@ -5851,31 +5826,14 @@ async function activateWingetDiscovery(id, displayName) {
 }
 
 async function refreshWingetDiscoveryCount() {
+  // Aktualisiert nur noch das Count-Label im Aktivieren-Panel (Discovery-
+  // Toggle-Header). Der frühere Header-Banner ist entfernt.
   try {
     const r = await api('GET', '/admin/api/winget/discovery-count');
     const count = r.count || 0;
     const lbl = document.getElementById('winget-discovery-count');
     if (lbl) lbl.textContent = String(count);
-    const banner = document.getElementById('winget-banner');
-    if (banner) {
-      if (count > 0) {
-        banner.style.display = '';
-        document.getElementById('winget-banner-count').textContent = String(count);
-      } else {
-        banner.style.display = 'none';
-      }
-    }
   } catch (e) {}
-}
-
-function openWingetTabFromBanner() {
-  openSearch();
-  setAddMode('winget');
-  // Auto-expand discovery section
-  setTimeout(() => {
-    const list = document.getElementById('winget-discovery-list');
-    if (list && list.style.display === 'none') toggleWingetDiscovery();
-  }, 220);
 }
 
 // ── Confirm modal ────────────────────────────────────────────────────────────
