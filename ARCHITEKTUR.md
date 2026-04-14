@@ -1,6 +1,6 @@
 # Softshelf – Systemarchitektur
 
-**Version:** 1.4.0
+**Version:** 1.5.0
 
 > Dieses Dokument beschreibt die technische Architektur von Softshelf — das
 > Datenbankschema, den Datenfluss, die Security-Garantien und den Deployment-
@@ -41,6 +41,19 @@ Seit v1.2 dazugekommen:
   Lifecycle-Aktionen (Re-Scan, Token-Revoke, Ban, Delete) im Header-Toolbar
 - **APScheduler im Proxy** (v1.4.0): drei tägliche Background-Jobs für
   Catalog-Refresh (01:30), Fleet-Scan (02:00), Discovery-Enrichment (02:30)
+- **Vereinheitlichung der drei Paket-Pipelines** (v1.5.0): Choco wird genau
+  so verwaltet wie winget — eigener `choco_scanner.py`, neue Tabelle
+  `agent_choco_state` (analog zu `agent_winget_state`), nightly Job um 02:15
+  UTC der `choco list --limit-output` + `choco outdated --limit-output` über
+  Tactical run_command absetzt und die Pakete pro Agent strukturiert
+  inventarisiert. Choco install/uninstall geht jetzt auch über `run_command`
+  statt über das fire-and-forget-Endpoint `/software/{id}/`, mit
+  Output-Capture, Soft-Error-Detection (Patterns wie „Likely broken for
+  FOSS users", 404-Download-Failures, „0/1 packages") und persistierter
+  `agent_scan_meta.last_action_error`. Custom-Pakete bekommen denselben
+  Soft-Error-Mechanismus. Nach jedem User-Click triggert das Frontend ein
+  Polling auf `max(last_scan_at, last_action_at)` — alle drei Pipelines
+  refreshen das UI automatisch sobald der Background-Task fertig ist.
 
 ## Überblick
 
@@ -166,9 +179,9 @@ Beim ersten Start nach einem Upgrade liest das Seeding auch die alten Keys ohne
 
 | Datei | Aufgabe |
 |---|---|
-| `main.py` | FastAPI-App, Lifespan (Settings-Seeding, Log-Cleanup, Session-Cleanup, **APScheduler-Start mit drei Cron-Jobs**: winget catalog refresh 01:30, fleet scan 02:00, enrichment 02:30), public endpoints (health, client-config, downloads, file-download mit signed token) |
+| `main.py` | FastAPI-App, Lifespan (Settings-Seeding, Log-Cleanup, Session-Cleanup, **APScheduler-Start mit vier Cron-Jobs**: winget catalog refresh 01:30, winget fleet scan 02:00, choco fleet scan 02:15, winget enrichment 02:30), public endpoints (health, client-config, downloads, file-download mit signed token) |
 | `config.py` | `BootstrapSettings` (pydantic, .env) + `RUNTIME_KEYS`-Dict (inkl. SSO-Settings) + `runtime_value()`/`runtime_int()`/`validate_runtime_value()` |
-| `database.py` | aiosqlite-Wrapper, Migration (ALTER TABLE + automatische `_migrate_custom_packages_to_versions`), alle Queries inkl. Versions/Installations-Helper **und winget-state/scan-meta/discovery-enrichment-Helper** |
+| `database.py` | aiosqlite-Wrapper, Migration (ALTER TABLE + automatische `_migrate_custom_packages_to_versions` + `_backfill_choco_agent_installations`), alle Queries inkl. Versions/Installations-Helper, winget-state/scan-meta/discovery-enrichment-Helper **und choco-state-Helper** |
 | `auth.py` | JWT-Erzeugung (`create_machine_token`), Verify (`verify_machine_token`), Download-Token (`create_download_token`/`verify_download_token`) |
 | `admin_auth.py` | Admin-Login-Logik: scrypt-Hashing, Session-Cookies, Bootstrap-Admin-Migration, Microsoft-Entra-OIDC-Flow (state cache + JWKS-Validierung) |
 | `tactical_client.py` | Tactical-RMM-API-Wrapper, liest URL+API-Key bei jedem Call aus Runtime-Settings |
@@ -176,12 +189,13 @@ Beim ersten Start nach einem Upgrade liest das Seeding auch die alten Keys ohne
 | `winget_catalog.py` | Lokal gemirrowter Microsoft-winget-Source. Lädt einmal pro Tag `cdn.winget.microsoft.com/cache/source.msix`, extrahiert die SQLite-Index-Datei nach `/app/data/winget_index.db`, queryed lokal mit Token-Score-Ranking und semver-aware Versionsvergleich. Exponiert `search(q)` und `get_details(id)`. |
 | `winget_scanner.py` | Per-Agent winget-Inventur. `scan_agent(agent_id)` für targeted Re-Scans nach User-Aktionen, `run_nightly_scan()` für den Fleet-wide Batch (Pre-Filter via `agents.last_seen`, Concurrency-Semaphore 20, Per-Agent-Timeout 120s). Triggert via Tactical `run_command` ein PowerShell-Skript das `winget export` (für die installed-Liste, JSON, kein Truncation) + `winget upgrade` (für die available-Versionen, Text mit Truncation-toleranter Prefix-Auflösung) ausführt. Resolver für `winget.exe` aus `C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*` weil der per-user Shim unter SYSTEM nicht im PATH ist. |
 | `winget_enrichment.py` | Daily Bonus-Discovery: holt die Tactical-Software-Scan Display-Namen über die ganze Flotte, dedupliziert, matcht jeden distinct Name gegen den lokalen winget-Catalog mit Confidence-Heuristik (`high`/`medium`/`low`/`none`, generic-Token-Filter für `64bit`/`x64`/`pro`/...), cached in `discovery_enrichment` mit `install_count` für die Anzeige im Aktivieren-Panel. |
+| `choco_scanner.py` | Per-Agent choco-Inventur (Pendant zu `winget_scanner.py`). `scan_agent(agent_id)` für targeted Re-Scans nach User-Aktionen, `run_nightly_scan()` für den Fleet-wide Batch (Pre-Filter via `agents.last_seen`, Concurrency-Semaphore 20, Per-Agent-Timeout 180s). Triggert via Tactical run_command ein PowerShell-Skript das `choco list --limit-output` (für die installed-Liste) + `choco outdated --limit-output` (für available-Versionen) ausführt. Output ist pipe-separiert, Parser ist deterministisch. Schreibt in `agent_choco_state` und bumpt `agent_scan_meta.last_scan_at` damit das Frontend-Polling nach choco-Aktionen triggert. |
 | `middleware/audit_logger.py` | HTTP-Request-Logging (fire-and-forget) |
 | `middleware/csrf.py` | CSRF-Check auf state-changing Admin-Calls |
 | `middleware/rate_limit.py` | In-Memory Rate-Limiter |
 | `routes/register.py` | `POST /api/v1/register` mit Agent-ID + Hostname-Validierung + Token-Version-Bump |
 | `routes/packages.py` | `GET /api/v1/packages` mit Installations-Detection via Tactical-Software-Scan UND `agent_winget_state`-Join für winget-Pakete (kein Tactical-Round-Trip nötig für reine winget-Setups) |
-| `routes/install.py` | `POST /api/v1/install` und `/uninstall`, Choco-Pfad synchron, Custom-Pfad fire-and-forget mit Version-Tracking, **winget-Pfad fire-and-forget** mit `_build_winget_command()` (PowerShell-Wrapper um `winget install/upgrade/uninstall --id … --scope machine --silent --force` plus winget.exe-Resolver) und chained targeted Re-Scan via `winget_scanner.scan_agent()` nach Completion. Exportiert die Helper für admin-getriggerte Calls. |
+| `routes/install.py` | `POST /api/v1/install` und `/uninstall` mit type-Dispatch. **Alle drei Pipelines (custom/winget/choco) laufen jetzt einheitlich über Tactical run_command** mit PowerShell-Wrapper, output-Capture, soft-error Detection, persistierter `agent_scan_meta.last_action_error` und chained targeted Re-Scan. Helper: `_build_winget_command` + `_run_winget_command_bg` für winget, `_build_choco_command` + `_run_choco_command_bg` (mit `_detect_choco_soft_error` für Patterns wie „Likely broken for FOSS users" und 404-Download-Failures) für choco, `_build_install_command` + `_build_uninstall_command` + `_run_custom_command_bg` für custom. Custom uninstall verwendet weiter den Whitelist-`uninstall_cmd`. Alle Helper sind exportiert für die admin-getriggerten Endpoints. |
 | `routes/admin.py` | Alle `/admin/api/*` Endpoints: Login/Logout/SSO, Users-CRUD, Whitelist, Upload, Versionen, Distributions, Push-Update, admin-getriggerter (Un)Install pro Agent (mit Type-Dispatch für choco/custom/winget), Settings, Build-Trigger, Reveal, Detect-Uninstall, Hilfe, **winget-search/activate/discovery/discovery-count/rescan/run-nightly/run-enrichment/winget-uninstall**, **agent-software-Endpoint** der Tactical-Scan + winget_state + Whitelist mergt und mit Token-Score-Heuristik dedupt |
 | `templates/admin.html` | Single-Page Admin-UI (Vanilla JS, 7 Tabs + mehrere Slide-in-Panels + Confirm-/Passwort-Modals + **Winget-Tab im Aktivieren-Panel** + **Agent-Detail-Page** als Vollbild-Sicht im Kiosk-Clients-Tab + **Header-Discovery-Banner**) |
 | `templates/admin_login.html` | Standalone Login-Form mit konditionalem SSO-Button |
@@ -440,6 +454,19 @@ CREATE TABLE agent_winget_state (
     PRIMARY KEY (agent_id, winget_id)
 );
 
+-- Per-Agent choco-Inventur (Pendant zu agent_winget_state). Wird vom
+-- choco_scanner geschrieben aus `choco list --limit-output` und
+-- `choco outdated --limit-output`. choco_name ist der literale
+-- Choco-Paket-Name (lowercase, kein Namespace wie bei winget).
+CREATE TABLE agent_choco_state (
+    agent_id          TEXT NOT NULL,
+    choco_name        TEXT NOT NULL,
+    installed_version TEXT,
+    available_version TEXT,                    -- NULL = up-to-date
+    scanned_at        TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (agent_id, choco_name)
+);
+
 -- Per-Agent Scan-Health: für UI-Anzeige stale-Agents, Polling nach
 -- User-Aktionen, und Retry-Backoff bei consecutive_failures.
 CREATE TABLE agent_scan_meta (
@@ -472,6 +499,9 @@ CREATE INDEX idx_package_versions_sha   ON package_versions(sha256);
 CREATE INDEX idx_agent_installations_pkg ON agent_installations(package_name);
 CREATE INDEX idx_agent_winget_id        ON agent_winget_state(winget_id);
 CREATE INDEX idx_agent_winget_avail     ON agent_winget_state(available_version)
+    WHERE available_version IS NOT NULL;
+CREATE INDEX idx_agent_choco_name       ON agent_choco_state(choco_name);
+CREATE INDEX idx_agent_choco_avail      ON agent_choco_state(available_version)
     WHERE available_version IS NOT NULL;
 CREATE UNIQUE INDEX idx_admin_users_sso  ON admin_users(sso_provider, sso_subject)
     WHERE sso_subject IS NOT NULL;
@@ -849,20 +879,67 @@ Die Login/SSO-Endpoints darunter sind die Ausnahme.
 
 ## Datenfluss: Install-Szenarien
 
-### Choco-Paket (synchron)
+### Choco-Paket (run_command, fire-and-forget bg-task)
+
+Seit v1.5.0 läuft choco genauso wie winget: über Tactical run_command mit
+einem PowerShell-Wrapper, capture stdout, soft-error-Detection, persistierter
+last_action_error, und chained Re-Scan.
 
 ```
 1. softshelf.exe → POST /api/v1/install {package_name: "firefox"}
      ├─ Bearer JWT
 2. Proxy: verify_machine_token → agent_id aus JWT
-3. Proxy: Regex-Check + Whitelist-Lookup
-4. Proxy: TacticalClient.install_software(agent_id, "firefox")
-     └─ POST https://tactical/software/{id}/  {name: "firefox"}
-        ← Tactical antwortet SOFORT mit "firefox will be installed shortly"
-5. Proxy: log_install(...)
-6. softshelf.exe: "Installation gestartet"
-   (Tactical-Agent führt später choco install asynchron aus)
+3. Proxy: Regex-Check + Whitelist-Lookup → type=choco
+4. Proxy: _build_choco_command('install', 'firefox') baut
+     PowerShell-Wrapper:
+       Get-Command choco oder C:\ProgramData\chocolatey\bin\choco.exe Fallback
+       & $choco install 'firefox' -y --no-progress --limit-output 2>&1
+       success codes: 0, 1641 (reboot initiated), 3010 (reboot required)
+       sonst: Write-Error mit ExitCode + exit $code
+5. Proxy: asyncio.create_task(_run_choco_command_bg(...)) → return SOFORT
+6. Proxy: log_install(...)  (audit history)
+7. softshelf.exe: "Installation gestartet, dauert einige Minuten"
+   (im Hintergrund:)
+8. Background-Task: TacticalClient.run_command(agent_id, ps_cmd, timeout=600)
+9. _detect_choco_soft_error(output, exit_code):
+     - 'Likely broken for FOSS users' → "Paket erfordert Lizenz/private CDN"
+     - '404' Download-Fehler → "Hersteller-Download-URL existiert nicht mehr"
+     - '0/1 packages failed' → generischer Choco-Fehler
+     - sonst exit != 0 → "choco beendete mit ExitCode N"
+10. database.upsert_action_result(agent_id, package_name, error_msg)
+    → schreibt agent_scan_meta.last_action_error für UI-Banner
+11. Bei Erfolg: database.set_agent_installation(agent_id, package_name, NULL)
+    → tracking-Eintrag damit Pass 3 das Paket deterministisch matched
+12. choco_scanner.scan_agent(agent_id) wird sofort danach getriggert
+    → ersetzt agent_choco_state Rows komplett, bumpt scan_meta.last_scan_at
+13. Frontend-Polling sieht den Fingerprint sich bewegen → Refresh,
+    Banner mit Fehlermeldung erscheint falls error_msg gesetzt
 ```
+
+### Choco-Scan (nightly + targeted)
+
+```
+APScheduler 02:15 UTC → choco_scanner.run_nightly_scan()
+  ├─ database.get_agents_due_for_scan(online_threshold=300, skip_failures>=7)
+  ├─ asyncio.Semaphore(20)
+  └─ Pro Agent (parallel max 20):
+       └─ scan_agent(agent_id, timeout=180)
+            ├─ TacticalClient.run_command mit dem Scan-Skript:
+            │     - Find $choco (PATH oder C:\ProgramData\...)
+            │     - choco list --limit-output --no-progress
+            │     - choco outdated --limit-output --no-progress
+            │     - ConvertTo-Json {ok, list_text, outdated_text}
+            ├─ parse_scan_payload(text)
+            │     - Doppel-Decode (Tactical wrappt stdout als JSON-string)
+            │     - list_text per pipe parsen → installed[name] = version
+            │     - outdated_text per pipe → upgradable[name] = available
+            │     - state_rows mit (choco_name, installed_version, available_version)
+            ├─ database.replace_agent_choco_state(agent_id, state_rows)
+            └─ database.upsert_scan_meta(agent_id, status='ok')
+```
+
+Targeted Re-Scan ist exakt derselbe Code-Pfad, einmalig pro Agent statt
+über die ganze Flotte. Wird nach jeder Choco-Aktion gechained.
 
 ### Custom-MSI (fire-and-forget, mit Version-Tracking)
 
@@ -1006,11 +1083,15 @@ Display-Namen — Grundlage für den Discovery-Block im Aktivieren-Panel.
 
 ### Uninstall (choco + custom + winget)
 
-- **Choco:** `TacticalClient.uninstall_software()` → POST `/software/{id}/uninstall/`
-  mit `choco uninstall <name> -y --no-progress` als Command
+- **Choco:** `_build_choco_command('uninstall', name)` → run_command mit
+  `choco uninstall '<name>' -y --no-progress --limit-output`. Output wird
+  capturet, Soft-Errors detected, last_action_error persistiert,
+  `delete_agent_installation` aufgerufen, choco_scanner.scan_agent
+  gechained. Identisch zum Install-Pfad.
 - **Custom:** fire-and-forget, ausgeführt wird der beim Upload gespeicherte `uninstall_cmd`
   via `cmd /c` gewrappt in PowerShell (Exit-Code-Propagation + Tolerant bei 3010/1605).
   Bei Erfolg → `delete_agent_installation(agent_id, name)` entfernt den Tracking-Eintrag.
+  Bei Exception → `upsert_action_result` mit Fehlertext für UI-Banner.
 - **Winget (verwaltet):** `_build_winget_command('uninstall', winget_id)` erzeugt
   einen PowerShell-Wrapper um `winget uninstall --id … --silent --force
   --accept-source-agreements --disable-interactivity -h`. Fire-and-forget via
@@ -1236,6 +1317,8 @@ softshelf/
 │   │                           SQLite-Index, semver-Sortierung
 │   ├── winget_scanner.py       Per-Agent winget-Inventur (nightly + targeted)
 │   ├── winget_enrichment.py    Tactical-Scan → winget-id Matcher (täglich)
+│   ├── choco_scanner.py        Per-Agent choco-Inventur (nightly + targeted),
+│   │                           parsed `choco list` + `choco outdated`
 │   ├── middleware/
 │   │   ├── audit_logger.py
 │   │   ├── csrf.py
@@ -1295,8 +1378,10 @@ softshelf/
 | Item | Priorität | Aufwand | Notiz |
 |---|---|---|---|
 | **TLS vor dem Proxy** | hoch | klein | via Caddy/Traefik Reverse-Proxy. Session-Cookie ist HttpOnly+Strict, aber HTTP exponiert ihn auf Layer-7 |
-| **Winget run_as_user-Fallback** | mittel | mittel | per-user / Microsoft-Store winget-Pakete lassen sich aus SYSTEM-Kontext nicht entfernen (Exit-Code -1978335162 NO_UNINSTALL_INFO_FOUND, oder „No available upgrade found" für `--scope machine`-gefilterte Per-User-Installs). Lösung: optional `run_as_user=True` an Tactical run_command übergeben wenn ein User eingeloggt ist, mit Retry-Logik nach SYSTEM-Failure |
+| **Winget run_as_user-Fallback** | mittel | mittel | per-user / Microsoft-Store winget-Pakete lassen sich aus SYSTEM-Kontext nicht entfernen (Exit-Code -1978335162 NO_UNINSTALL_INFO_FOUND, oder „No available upgrade found" für `--scope machine`-gefilterte Per-User-Installs). Lösung: optional `run_as_user=True` an Tactical run_command übergeben wenn ein User eingeloggt ist, mit Retry-Logik nach SYSTEM-Failure. Würde dann für choco genauso gelten. |
 | **Winget-Version-Pinning UI** | niedrig | klein | `packages.winget_version`-Spalte existiert bereits, Dispatch-Code unterstützt `--version`, fehlt nur ein Picker im Aktivieren-/Edit-Panel |
+| **Choco-Catalog-Suche im Aktivieren-Flow** | niedrig | mittel | Aktuell suchen wir choco-Pakete via Tactical's `/software/chocos/` Endpoint der nur Namen liefert (kein Title, kein Description). Eleganter wäre direkt gegen die chocolatey.org OData-API zu queryen mit Title-Anzeige im Aktivieren-Panel — analog zum lokalen winget-Catalog. |
+| **Choco-Discovery analog zu winget** | niedrig | mittel | Genauso wie das winget-Discovery: aus `agent_choco_state` die installierten Pakete der ganzen Flotte sammeln die noch nicht in der Whitelist sind, im Aktivieren-Panel als „in der Flotte gefunden"-Block anzeigen, ein-Klick aktivieren. |
 | Tactical-Software-Scan ARP-Direct-Uninstall | niedrig | mittel | Für unverwaltete tactical-only Software einen Uninstall-Pfad via ARP `UninstallString` anbieten — derzeit nur winget-IDs uninstallable im Agent-Detail |
 | Discovery-Confidence-Tuning | niedrig | klein | Das Token-Score-Matching gegen den winget-Catalog hat Edge-Cases mit generischen Tokens (`microsoft`, `office`). Die generic-Token-Liste in `routes/admin.py:_GENERIC_WINGET_TOKENS` kann nach Bedarf erweitert werden |
 | One-Time-Registration-Tokens | mittel | mittel | aktuell durch Rate-Limit + `min_length=16` mitigiert |
