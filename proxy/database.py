@@ -1791,3 +1791,37 @@ async def cleanup_choco_state_for_package(package_name: str):
             "DELETE FROM agent_choco_state WHERE choco_name = ?", (package_name,)
         )
         await db.commit()
+
+
+async def get_agents_with_winget_package(winget_id: str) -> list[dict]:
+    """Alle Agents die ein bestimmtes winget-Paket installiert haben, inkl.
+    Version + last_seen. Für die Paket-Detail-Sicht im Admin-UI."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT a.agent_id, a.hostname, a.last_seen, "
+            "       s.installed_version, s.available_version, s.scanned_at "
+            "FROM agent_winget_state s "
+            "JOIN agents a ON a.agent_id = s.agent_id "
+            "WHERE s.winget_id = ? "
+            "ORDER BY a.hostname",
+            (winget_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_agents_with_choco_package(choco_name: str) -> list[dict]:
+    """Alle Agents die ein bestimmtes choco-Paket installiert haben, inkl.
+    Version + last_seen."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT a.agent_id, a.hostname, a.last_seen, "
+            "       s.installed_version, s.available_version, s.scanned_at "
+            "FROM agent_choco_state s "
+            "JOIN agents a ON a.agent_id = s.agent_id "
+            "WHERE s.choco_name = ? "
+            "ORDER BY a.hostname",
+            (choco_name,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
