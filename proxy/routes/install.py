@@ -21,6 +21,7 @@ import secrets as _secrets
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+import choco_scanner
 import database
 import winget_scanner
 from auth import create_download_token, verify_machine_token
@@ -52,9 +53,12 @@ async def _run_custom_command_bg(
     """
     Background-Task für custom install/uninstall via Tactical run-cmd.
     Dauert Minuten (Download + msiexec), daher nicht synchron am Request hängen.
-    Bei Erfolg wird agent_installations aktualisiert (für Versions-Tracking
-    und 'Update pushen' im Admin-UI).
+    Bei Erfolg wird agent_installations aktualisiert. Bei Fehler wird die
+    Meldung in scan_meta.last_action_error persistiert damit das Admin-UI
+    sie als Banner im Agent-Detail zeigen kann (gleicher Mechanismus wie
+    bei winget und choco).
     """
+    error_msg: str | None = None
     try:
         await TacticalClient().run_command(agent_id, cmd, timeout=600)
         logger.info("custom %s ok: %s auf %s", action, display_name, hostname)
@@ -63,8 +67,16 @@ async def _run_custom_command_bg(
         elif action == "uninstall":
             await database.delete_agent_installation(agent_id, package_name)
     except Exception as e:
+        # run_command schmeisst bei Non-200 von Tactical bzw. Non-Zero-Exit
+        # vom Agent-Script. Letztes Stück Output landet meist in str(e).
+        error_msg = str(e)[:300] or "unbekannter Fehler"
         logger.warning("custom %s fehlgeschlagen: %s auf %s — %s",
-                       action, display_name, hostname, e)
+                       action, display_name, hostname, error_msg)
+
+    try:
+        await database.upsert_action_result(agent_id, package_name, error_msg)
+    except Exception as e:
+        logger.warning("upsert_action_result custom failed: %s", e)
 
 
 class SoftwareRequest(BaseModel):
@@ -365,6 +377,166 @@ def _detect_winget_soft_error(output: str) -> str | None:
     return None
 
 
+# ── Choco Dispatch ────────────────────────────────────────────────────────────
+
+# Choco's exit codes:
+#   0    - success
+#   1    - generic error
+#   1641 - reboot initiated
+#   3010 - reboot required (success)
+#   404  - download failure (was the 3cx case)
+# Wir werten 0/1641/3010 als Erfolg.
+_CHOCO_SUCCESS_CODES = {0, 1641, 3010}
+
+# Bekannte Choco-Soft-Error Patterns im stdout (selbst wenn exit != 0)
+_CHOCO_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
+    (
+        "likely broken for foss users",
+        "Das Chocolatey-Paket ist auf der Community-Version nicht installierbar — der Installer-Download verlangt einen Lizenzschlüssel oder ein privates CDN. Auf https://docs.chocolatey.org/en-us/features/private-cdn dokumentiert.",
+    ),
+    (
+        "the remote server returned an error: (404)",
+        "Der Installer-Download von der Hersteller-URL ist 404 — das Paket ist im Chocolatey-Repo aufgeführt, der Download-Link beim Hersteller existiert aber nicht mehr.",
+    ),
+    (
+        "the install of",
+        "Choco-Install fehlgeschlagen — siehe Choco-Log auf dem Agent (C:\\ProgramData\\chocolatey\\logs\\chocolatey.log).",
+    ),
+]
+
+
+def _detect_choco_soft_error(output: str, exit_code: int | None) -> str | None:
+    """Bestimmt ob ein Choco-Lauf trotz technischem 'Erfolg' inhaltlich
+    fehlgeschlagen ist. Returns Fehlermeldung oder None."""
+    if exit_code is not None and exit_code not in _CHOCO_SUCCESS_CODES:
+        # Echter Fehler. Wir picken die hilfreichste bekannte Meldung
+        # oder fallen auf die letzten paar Zeilen zurück.
+        if output:
+            lower = output.lower()
+            for needle, message in _CHOCO_SOFT_ERROR_PATTERNS:
+                if needle in lower:
+                    return f"{message} (ExitCode {exit_code})"
+        return f"choco beendete mit ExitCode {exit_code}"
+    if not output:
+        return None
+    lower = output.lower()
+    if "0/1 packages" in lower or "1/1 packages failed" in lower:
+        for needle, message in _CHOCO_SOFT_ERROR_PATTERNS:
+            if needle in lower:
+                return message
+        return "Choco-Install fehlgeschlagen — Detail im Choco-Log auf dem Agent"
+    return None
+
+
+_CHOCO_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,99}$")
+
+
+def _build_choco_command(action: str, package_name: str) -> str:
+    """
+    Baut den PowerShell-Wrapper für `choco install/uninstall <name>`. Wird
+    via Tactical run_command als SYSTEM ausgeführt, output kommt zurück
+    damit wir Soft-Errors detecten und im UI zeigen können.
+    """
+    if action not in ("install", "uninstall"):
+        raise ValueError(f"unsupported choco action: {action}")
+    if not _CHOCO_NAME_RE.fullmatch(package_name):
+        raise HTTPException(status_code=400, detail=f"Ungültiger choco-Paketname: {package_name!r}")
+    safe = package_name  # regex-validiert, keine Escapes nötig
+    if action == "install":
+        choco_args = f"install '{safe}' -y --no-progress --limit-output"
+    else:
+        choco_args = f"uninstall '{safe}' -y --no-progress --limit-output"
+
+    return f"""$ErrorActionPreference = 'Continue'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+$choco = $null
+$cmd = Get-Command choco -ErrorAction SilentlyContinue
+if ($cmd) {{ $choco = $cmd.Source }}
+if (-not $choco) {{
+    $candidate = 'C:\\ProgramData\\chocolatey\\bin\\choco.exe'
+    if (Test-Path -LiteralPath $candidate) {{ $choco = $candidate }}
+}}
+if (-not $choco) {{
+    Write-Error "choco ist nicht installiert (Chocolatey fehlt auf dem Agent)"
+    exit 9009
+}}
+$out = (& $choco {choco_args} 2>&1) -join "`n"
+Write-Output $out
+$code = $LASTEXITCODE
+# choco success codes: 0 ok, 1641 reboot initiated, 3010 reboot required
+if ($code -eq 0 -or $code -eq 1641 -or $code -eq 3010) {{
+    exit 0
+}}
+Write-Error "choco {action} beendete mit ExitCode $code"
+exit $code
+"""
+
+
+async def _run_choco_command_bg(
+    agent_id: str,
+    hostname: str,
+    package_name: str,
+    display_name: str,
+    cmd: str,
+    action: str,
+):
+    """Background-Task für choco install/uninstall via Tactical run-cmd. Spiegelt
+    `_run_winget_command_bg`: capture output, detect soft errors, persist
+    last_action_error in scan_meta, chain targeted re-scan."""
+    error_msg: str | None = None
+    raw_output = ""
+    exit_code: int | None = None
+    try:
+        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=600)
+        if raw_output and raw_output.startswith('"'):
+            try:
+                import json as _json
+                raw_output = _json.loads(raw_output)
+            except Exception:
+                pass
+        # Bei Erfolg gibt's keinen ExitCode im stdout — wir vertrauen dass
+        # run_command nicht raised heißt exit 0
+        soft_err = _detect_choco_soft_error(raw_output, exit_code=0)
+        if soft_err:
+            error_msg = soft_err
+            logger.warning(
+                "choco %s soft-error für %s auf %s: %s",
+                action, display_name, hostname, soft_err,
+            )
+        else:
+            logger.info("choco %s ok: %s auf %s", action, display_name, hostname)
+            # Bei Erfolg auch das Tracking aktualisieren
+            try:
+                if action == "install":
+                    await database.set_agent_installation(agent_id, package_name, None)
+                else:
+                    await database.delete_agent_installation(agent_id, package_name)
+            except Exception as e:
+                logger.warning("agent_installations update failed: %s", e)
+    except Exception as e:
+        # run_command raised — Tactical hat Non-200 zurückgegeben, wahrscheinlich
+        # Choco exit non-zero. Die Exception-Message enthält oft den letzten Output.
+        msg = str(e)
+        soft_err = _detect_choco_soft_error(msg, exit_code=1)
+        error_msg = soft_err or msg[:300]
+        logger.warning(
+            "choco %s fehlgeschlagen: %s auf %s — %s",
+            action, display_name, hostname, error_msg,
+        )
+
+    try:
+        await database.upsert_action_result(agent_id, package_name, error_msg)
+    except Exception as e:
+        logger.warning("upsert_action_result choco failed: %s", e)
+
+    # Targeted Re-Scan via choco_scanner — refresht agent_choco_state
+    try:
+        await choco_scanner.scan_agent(agent_id)
+    except Exception as e:
+        logger.warning("post-action choco rescan failed for %s: %s", agent_id, e)
+
+
 async def _run_winget_command_bg(
     agent_id: str,
     hostname: str,
@@ -484,18 +656,17 @@ async def install_package(
             f"Das kann einige Minuten dauern."
         )
     else:
-        try:
-            msg = await TacticalClient().install_software(agent_id, body.package_name)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Fehler: {e}")
-        # Choco-Install via Softshelf → in agent_installations tracken, damit
-        # die Software-Sicht den Eintrag deterministisch matched ohne Tactical-
-        # Scan-Heuristik. version_id=None weil choco kein eigenes Versions-
-        # Tracking via Softshelf hat.
-        try:
-            await database.set_agent_installation(agent_id, body.package_name, None)
-        except Exception as e:
-            logger.warning("set_agent_installation choco failed: %s", e)
+        # Choco via run_command (statt /software/{id}/) damit wir stdout sehen
+        # und Soft-Errors wie 3cx-404 in scan_meta.last_action_error landen können.
+        cmd = _build_choco_command("install", body.package_name)
+        _spawn_bg(_run_choco_command_bg(
+            agent_id, hostname, body.package_name, pkg["display_name"],
+            cmd, "install",
+        ))
+        msg = (
+            f"Installation von '{pkg['display_name']}' auf {hostname} gestartet. "
+            f"Das kann einige Minuten dauern."
+        )
 
     await database.log_install(
         agent_id, hostname, body.package_name, pkg["display_name"], "install"
@@ -558,36 +729,19 @@ async def uninstall_package(
             f"Das kann einige Minuten dauern."
         )
     else:
-        # Choco-Uninstall (alte Logik)
-        try:
-            installed = await TacticalClient().get_installed_software(agent_id)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Tactical RMM nicht erreichbar: {e}")
-
-        pkg_lower = body.package_name.lower()
-        is_installed = any(
-            pkg_lower in item.get("name", "").lower() or item.get("name", "").lower() in pkg_lower
-            for item in installed
+        # Choco via run_command (gleicher Pfad wie install) — kein Vorab-Check
+        # auf Tactical-Scan mehr nötig, choco selber sagt uns ob das Paket
+        # da war oder nicht (over stdout / exit code). Das spart auch den
+        # 409-Fall der nur an Heuristik-Matches lag.
+        cmd = _build_choco_command("uninstall", body.package_name)
+        _spawn_bg(_run_choco_command_bg(
+            agent_id, hostname, body.package_name, pkg["display_name"],
+            cmd, "uninstall",
+        ))
+        msg = (
+            f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
+            f"Das kann einige Minuten dauern."
         )
-        # Falls Tactical's Substring-Heuristik den Eintrag nicht findet, aber
-        # Softshelf weiß dass der Agent das Paket installiert hat (eigenes
-        # Tracking) → trotzdem versuchen
-        if not is_installed:
-            tracked = await database.get_agent_installations(agent_id)
-            if any(t["package_name"] == body.package_name for t in tracked):
-                is_installed = True
-        if not is_installed:
-            raise HTTPException(status_code=409, detail="Paket ist nicht installiert")
-
-        try:
-            msg = await TacticalClient().uninstall_software(agent_id, body.package_name)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Fehler: {e}")
-        # Tracking-Eintrag entfernen
-        try:
-            await database.delete_agent_installation(agent_id, body.package_name)
-        except Exception as e:
-            logger.warning("delete_agent_installation choco failed: %s", e)
 
     await database.log_install(
         agent_id, hostname, body.package_name, pkg["display_name"], "uninstall"
