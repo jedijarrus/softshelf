@@ -1305,16 +1305,14 @@ async def admin_install_on_agent(agent_id: str, package_name: str):
     else:
         if not _PKG_NAME_RE.fullmatch(package_name):
             raise HTTPException(status_code=400, detail="Ungültiger Paketname")
-        try:
-            await TacticalClient().install_software(agent_id, package_name)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Tactical-Fehler: {e}")
-        # Choco-Tracking damit Pass 3 in get_agent_software das Paket sofort
-        # als verwaltet:choco erkennt — unabhängig vom Tactical-Software-Scan
-        try:
-            await database.set_agent_installation(agent_id, package_name, None)
-        except Exception as e:
-            logger.warning("set_agent_installation choco failed: %s", e)
+        # Choco via run_command (gleicher Pfad wie der kiosk-client install)
+        # damit Soft-Errors deterministisch in scan_meta.last_action_error landen
+        from routes.install import _build_choco_command, _run_choco_command_bg
+        cmd = _build_choco_command("install", package_name)
+        _spawn_bg(_run_choco_command_bg(
+            agent_id, agent["hostname"], package_name, pkg["display_name"],
+            cmd, "install",
+        ))
 
     await database.log_install(
         agent_id, agent["hostname"], package_name, pkg["display_name"], "install"
@@ -1370,15 +1368,12 @@ async def admin_uninstall_on_agent(agent_id: str, package_name: str):
     else:
         if not _PKG_NAME_RE.fullmatch(package_name):
             raise HTTPException(status_code=400, detail="Ungültiger Paketname")
-        try:
-            await TacticalClient().uninstall_software(agent_id, package_name)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Tactical-Fehler: {e}")
-        # Tracking-Eintrag entfernen
-        try:
-            await database.delete_agent_installation(agent_id, package_name)
-        except Exception as e:
-            logger.warning("delete_agent_installation choco failed: %s", e)
+        from routes.install import _build_choco_command, _run_choco_command_bg
+        cmd = _build_choco_command("uninstall", package_name)
+        _spawn_bg(_run_choco_command_bg(
+            agent_id, agent["hostname"], package_name, pkg["display_name"],
+            cmd, "uninstall",
+        ))
 
     await database.log_install(
         agent_id, agent["hostname"], package_name, pkg["display_name"], "uninstall"
@@ -1503,6 +1498,11 @@ async def get_agent_software(agent_id: str):
 
     # Quelle 2: per-Agent winget state aus dem nightly Scan
     winget_state = await database.get_agent_winget_state(agent_id)
+
+    # Quelle 2b: per-Agent choco state — wird vom choco_scanner befüllt
+    # (nightly + nach jeder choco-Aktion). Liefert installed_version und
+    # available_version pro choco-Paket, deterministisch.
+    choco_state = await database.get_agent_choco_state(agent_id)
 
     # Whitelist nach Typ aufteilen
     pkg_rows = await database.get_packages()
@@ -1670,6 +1670,27 @@ async def get_agent_software(agent_id: str):
             "update_available":  bool(t.get("outdated")),
             "os_managed":        False,
         })
+
+    # Pass 4: Choco-State Enrichment für alle managed:choco Rows. Egal aus
+    # welchem Pass die Row kam — wenn der Eintrag im agent_choco_state
+    # existiert, gewinnen seine Versionen über die Substring-Heuristik vom
+    # Tactical-Scan.
+    for item in items:
+        if item.get("managed_type") != "choco":
+            continue
+        pkg_name = item.get("package_name")
+        if not pkg_name:
+            continue
+        cstate = choco_state.get(pkg_name)
+        if not cstate:
+            continue
+        cs_installed = cstate.get("installed_version")
+        cs_avail = cstate.get("available_version")
+        if cs_installed:
+            item["installed_version"] = cs_installed
+        if cs_avail:
+            item["available_version"] = cs_avail
+            item["update_available"] = True
 
     # Sortieren: Updates zuerst, dann managed, dann unmanaged, jeweils nach Name
     items.sort(key=lambda i: (

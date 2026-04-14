@@ -73,8 +73,9 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
     tracked = await database.get_agent_installations(agent_id)
     tracked_by_pkg = {t["package_name"]: t for t in tracked}
 
-    # Winget-State dieses Agents
+    # Winget-State + Choco-State dieses Agents
     winget_state = await database.get_agent_winget_state(agent_id)
+    choco_state = await database.get_agent_choco_state(agent_id)
 
     result = []
     for row in pkg_rows:
@@ -133,6 +134,22 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
         installed_label = None
         current_label = None
         update_avail = False
+
+        # Choco-Pakete: agent_choco_state ist die deterministische Quelle für
+        # installed_version + available_version. Wenn vorhanden, überschreibt
+        # sie die Substring-Heuristik vom Tactical-Scan.
+        if ptype == "choco":
+            cstate = choco_state.get(row["name"])
+            if cstate:
+                cs_installed = cstate.get("installed_version")
+                cs_avail = cstate.get("available_version")
+                if cs_installed:
+                    is_installed = True
+                    version = cs_installed
+                    installed_label = cs_installed
+                if cs_avail:
+                    current_label = cs_avail
+                    update_avail = True
 
         if ptype == "custom":
             # Current-Version-Label aus package_versions ziehen
