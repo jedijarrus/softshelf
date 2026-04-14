@@ -1602,12 +1602,14 @@ async def get_agent_software(agent_id: str):
         (i["name"] or "").lower(),
     ))
 
+    scan_meta = await database.get_scan_meta(agent_id)
     return {
         "agent_id":       agent_id,
         "hostname":       agent["hostname"],
         "tactical_error": tactical_error,
         "items":          items,
         "total":          len(items),
+        "scan_meta":      scan_meta,
     }
 
 
