@@ -5,6 +5,10 @@ aktuellen Installationsstatus + Metadaten (Version, Publisher) des
 anfragenden Geräts. Bei custom-Paketen wird zusätzlich aus dem
 agent_installations-Tracking die installierte Version mit der current
 Version verglichen → update_available-Flag für die Kiosk-UI.
+
+Winget-Pakete werden aus dem agent_winget_state geledigt — der Status
+kommt vom letzten nightly oder targeted Re-Scan, kein Tactical-Round-Trip
+mehr nötig pro /packages-Aufruf.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -38,16 +42,21 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
     if not pkg_rows:
         raise HTTPException(status_code=503, detail="Keine Pakete freigegeben. Admin-Oberfläche öffnen.")
 
-    try:
-        installed_list = await TacticalClient().get_installed_software(agent_id)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Tactical RMM nicht erreichbar: {e}")
-
-    # Lookup-Tabelle: lowercased Anzeigename → (version, publisher)
-    installed_meta: dict[str, tuple[str, str]] = {
-        item.get("name", "").lower(): (item.get("version", ""), item.get("publisher", ""))
-        for item in installed_list
-    }
+    # Tactical-Software-Scan brauchen wir nur wenn es choco-/custom-Pakete gibt.
+    # Für reine winget-Setups sparen wir den Round-Trip.
+    needs_tactical = any(
+        (row.get("type") or "choco") in ("choco", "custom") for row in pkg_rows
+    )
+    installed_meta: dict[str, tuple[str, str]] = {}
+    if needs_tactical:
+        try:
+            installed_list = await TacticalClient().get_installed_software(agent_id)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Tactical RMM nicht erreichbar: {e}")
+        installed_meta = {
+            item.get("name", "").lower(): (item.get("version", ""), item.get("publisher", ""))
+            for item in installed_list
+        }
 
     def _find(needle: str) -> tuple[bool, str | None, str | None]:
         """Substring-Match in beide Richtungen, mit Metadaten-Rückgabe."""
@@ -59,13 +68,53 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
                 return True, version or None, publisher or None
         return False, None, None
 
-    # Tracking-Daten dieses Agents pro Paketname
+    # Tracking-Daten dieses Agents pro Paketname (custom)
     tracked = await database.get_agent_installations(agent_id)
     tracked_by_pkg = {t["package_name"]: t for t in tracked}
 
+    # Winget-State dieses Agents
+    winget_state = await database.get_agent_winget_state(agent_id)
+
     result = []
     for row in pkg_rows:
-        if row.get("type") == "custom":
+        ptype = row.get("type") or "choco"
+
+        if ptype == "winget":
+            # Status kommt komplett aus agent_winget_state, kein Tactical-Call
+            wid = row["name"]
+            state = winget_state.get(wid)
+            if state:
+                installed_version = state.get("installed_version") or ""
+                available_version = state.get("available_version")
+                is_installed = True
+                version = installed_version or None
+                publisher = row.get("winget_publisher") or None
+                installed_label = installed_version or None
+                current_label = available_version or None
+                update_avail = bool(available_version)
+            else:
+                is_installed = False
+                version = None
+                publisher = row.get("winget_publisher") or None
+                installed_label = None
+                current_label = None
+                update_avail = False
+
+            result.append(Package(
+                name=wid,
+                display_name=row["display_name"],
+                category=row.get("category", "Allgemein"),
+                type="winget",
+                version=version,
+                publisher=publisher,
+                installed=is_installed,
+                installed_version_label=installed_label,
+                current_version_label=current_label,
+                update_available=update_avail,
+            ))
+            continue
+
+        if ptype == "custom":
             needle = row.get("detection_name") or row.get("display_name") or row["name"]
         else:
             needle = row["name"]
@@ -76,7 +125,7 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
         current_label = None
         update_avail = False
 
-        if row.get("type") == "custom":
+        if ptype == "custom":
             # Current-Version-Label aus package_versions ziehen
             cv_id = row.get("current_version_id")
             if cv_id:
@@ -97,7 +146,7 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
             name=row["name"],
             display_name=row["display_name"],
             category=row.get("category", "Allgemein"),
-            type=row.get("type") or "choco",
+            type=ptype,
             version=version,
             publisher=publisher,
             installed=is_installed,
