@@ -233,10 +233,31 @@ def _check_winget_id(wid: str) -> str:
     return wid
 
 
+_PS_FIND_WINGET = r"""
+function Find-WingetExe {
+    $cmd = Get-Command winget -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $base = 'C:\Program Files\WindowsApps'
+    if (-not (Test-Path -LiteralPath $base)) { return $null }
+    $dirs = Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue `
+        | Where-Object { $_.Name -like 'Microsoft.DesktopAppInstaller_*_x64__*' } `
+        | Sort-Object Name -Descending
+    foreach ($d in $dirs) {
+        $exe = Join-Path $d.FullName 'winget.exe'
+        if (Test-Path -LiteralPath $exe) { return $exe }
+    }
+    return $null
+}
+"""
+
+
 def _build_winget_command(action: str, winget_id: str, version: str | None = None) -> str:
     """
     Baut den PowerShell-Wrapper für winget install/upgrade/uninstall.
     Akzeptierte action-Werte: 'install', 'upgrade', 'uninstall'.
+
+    Tactical run_command läuft als SYSTEM, der user-shim winget.exe ist
+    nicht im PATH. Wir resolven die Binary aus C:\Program Files\WindowsApps.
 
     winget Exit-Codes die wir als Erfolg werten:
       0           → ok
@@ -268,12 +289,13 @@ def _build_winget_command(action: str, winget_id: str, version: str | None = Non
 
     return f"""$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
-if (-not $wingetCmd) {{
+{_PS_FIND_WINGET}
+$wingetExe = Find-WingetExe
+if (-not $wingetExe) {{
     Write-Error "winget ist nicht installiert (App Installer fehlt)"
     exit 9009
 }}
-$out = (& winget {winget_args} 2>&1) -join "`n"
+$out = (& $wingetExe {winget_args} 2>&1) -join "`n"
 Write-Output $out
 $code = $LASTEXITCODE
 if ($code -eq 0) {{
