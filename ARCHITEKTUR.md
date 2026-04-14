@@ -1,6 +1,6 @@
 # Softshelf – Systemarchitektur
 
-**Version:** 1.3.1
+**Version:** 1.4.0
 
 > Dieses Dokument beschreibt die technische Architektur von Softshelf — das
 > Datenbankschema, den Datenfluss, die Security-Garantien und den Deployment-
@@ -24,6 +24,23 @@ Seit v1.2 dazugekommen:
   foreign_keys, delete_version TOCTOU, XSS-Refactor via `jsStr()`,
   SSO email_verified, Session-Secure-Flag, Rate-Limit X-Forwarded-For,
   Field-Validators, Exception-Leaks, shutil.disk_usage etc.
+- **Winget als dritte Paket-Quelle** (v1.4.0): Lokal gemirrowter Microsoft-
+  Catalog (täglicher Download von `cdn.winget.microsoft.com/cache/source.msix`,
+  SQLite-Index extrahiert nach `/app/data/winget_index.db`, semver-aware
+  Suche), nightly Per-Agent-Scan via Tactical `winget export` + `winget upgrade`,
+  Discovery-Tab, Aktivierungs-Flow, Install/Upgrade/Uninstall-Dispatch
+  als SYSTEM via Tactical mit `winget.exe`-Resolver aus
+  `C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*` (per-user-
+  Shim ist unter SYSTEM nicht im PATH), targeted Re-Scan nach jeder Aktion
+- **Agent-Detail-Page** (v1.4.0): Vollbild-Detail-Sicht im Kiosk-Clients-Tab
+  ersetzt die alte Slide-in-Sidebar. Zeigt zusammengeführte Software-Liste
+  (Tactical-Scan + winget_state, dedupt mit Token-Score-Matching), Status-
+  Badges (verwaltet/unverwaltet/Update verfügbar), per-Row Aktionen
+  (Updaten/Deinstallieren/Aktivieren/Entfernen), Polling-basiertes
+  Auto-Refresh nach Aktionen via `agent_scan_meta.last_scan_at`-Vergleich,
+  Lifecycle-Aktionen (Re-Scan, Token-Revoke, Ban, Delete) im Header-Toolbar
+- **APScheduler im Proxy** (v1.4.0): drei tägliche Background-Jobs für
+  Catalog-Refresh (01:30), Fleet-Scan (02:00), Discovery-Enrichment (02:30)
 
 ## Überblick
 
@@ -149,21 +166,24 @@ Beim ersten Start nach einem Upgrade liest das Seeding auch die alten Keys ohne
 
 | Datei | Aufgabe |
 |---|---|
-| `main.py` | FastAPI-App, Lifespan (Settings-Seeding, Log-Cleanup, Session-Cleanup), public endpoints (health, client-config, downloads, file-download mit signed token) |
+| `main.py` | FastAPI-App, Lifespan (Settings-Seeding, Log-Cleanup, Session-Cleanup, **APScheduler-Start mit drei Cron-Jobs**: winget catalog refresh 01:30, fleet scan 02:00, enrichment 02:30), public endpoints (health, client-config, downloads, file-download mit signed token) |
 | `config.py` | `BootstrapSettings` (pydantic, .env) + `RUNTIME_KEYS`-Dict (inkl. SSO-Settings) + `runtime_value()`/`runtime_int()`/`validate_runtime_value()` |
-| `database.py` | aiosqlite-Wrapper, Migration (ALTER TABLE + automatische `_migrate_custom_packages_to_versions`), alle Queries inkl. Versions/Installations-Helper |
+| `database.py` | aiosqlite-Wrapper, Migration (ALTER TABLE + automatische `_migrate_custom_packages_to_versions`), alle Queries inkl. Versions/Installations-Helper **und winget-state/scan-meta/discovery-enrichment-Helper** |
 | `auth.py` | JWT-Erzeugung (`create_machine_token`), Verify (`verify_machine_token`), Download-Token (`create_download_token`/`verify_download_token`) |
 | `admin_auth.py` | Admin-Login-Logik: scrypt-Hashing, Session-Cookies, Bootstrap-Admin-Migration, Microsoft-Entra-OIDC-Flow (state cache + JWKS-Validierung) |
 | `tactical_client.py` | Tactical-RMM-API-Wrapper, liest URL+API-Key bei jedem Call aus Runtime-Settings |
 | `file_uploads.py` | Multipart-Upload-Streaming, SHA-256-Hashing, MSI-Metadaten via `msiinfo` (msitools) |
+| `winget_catalog.py` | Lokal gemirrowter Microsoft-winget-Source. Lädt einmal pro Tag `cdn.winget.microsoft.com/cache/source.msix`, extrahiert die SQLite-Index-Datei nach `/app/data/winget_index.db`, queryed lokal mit Token-Score-Ranking und semver-aware Versionsvergleich. Exponiert `search(q)` und `get_details(id)`. |
+| `winget_scanner.py` | Per-Agent winget-Inventur. `scan_agent(agent_id)` für targeted Re-Scans nach User-Aktionen, `run_nightly_scan()` für den Fleet-wide Batch (Pre-Filter via `agents.last_seen`, Concurrency-Semaphore 20, Per-Agent-Timeout 120s). Triggert via Tactical `run_command` ein PowerShell-Skript das `winget export` (für die installed-Liste, JSON, kein Truncation) + `winget upgrade` (für die available-Versionen, Text mit Truncation-toleranter Prefix-Auflösung) ausführt. Resolver für `winget.exe` aus `C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*` weil der per-user Shim unter SYSTEM nicht im PATH ist. |
+| `winget_enrichment.py` | Daily Bonus-Discovery: holt die Tactical-Software-Scan Display-Namen über die ganze Flotte, dedupliziert, matcht jeden distinct Name gegen den lokalen winget-Catalog mit Confidence-Heuristik (`high`/`medium`/`low`/`none`, generic-Token-Filter für `64bit`/`x64`/`pro`/...), cached in `discovery_enrichment` mit `install_count` für die Anzeige im Aktivieren-Panel. |
 | `middleware/audit_logger.py` | HTTP-Request-Logging (fire-and-forget) |
 | `middleware/csrf.py` | CSRF-Check auf state-changing Admin-Calls |
 | `middleware/rate_limit.py` | In-Memory Rate-Limiter |
 | `routes/register.py` | `POST /api/v1/register` mit Agent-ID + Hostname-Validierung + Token-Version-Bump |
-| `routes/packages.py` | `GET /api/v1/packages` mit Installations-Detection via Tactical-Software-Scan |
-| `routes/install.py` | `POST /api/v1/install` und `/uninstall`, Choco-Pfad synchron, Custom-Pfad fire-and-forget mit Version-Tracking, exportiert `_build_install_command`/`_build_uninstall_command`/`_run_custom_command_bg` für admin-getriggerte Calls |
-| `routes/admin.py` | Alle `/admin/api/*` Endpoints: Login/Logout/SSO, Users-CRUD, Whitelist, Upload, Versionen, Distributions, Push-Update, admin-getriggerter (Un)Install pro Agent, Settings, Build-Trigger, Reveal, Detect-Uninstall, Hilfe |
-| `templates/admin.html` | Single-Page Admin-UI (Vanilla JS, 7 Tabs + mehrere Slide-in-Panels + Confirm-/Passwort-Modals) |
+| `routes/packages.py` | `GET /api/v1/packages` mit Installations-Detection via Tactical-Software-Scan UND `agent_winget_state`-Join für winget-Pakete (kein Tactical-Round-Trip nötig für reine winget-Setups) |
+| `routes/install.py` | `POST /api/v1/install` und `/uninstall`, Choco-Pfad synchron, Custom-Pfad fire-and-forget mit Version-Tracking, **winget-Pfad fire-and-forget** mit `_build_winget_command()` (PowerShell-Wrapper um `winget install/upgrade/uninstall --id … --scope machine --silent --force` plus winget.exe-Resolver) und chained targeted Re-Scan via `winget_scanner.scan_agent()` nach Completion. Exportiert die Helper für admin-getriggerte Calls. |
+| `routes/admin.py` | Alle `/admin/api/*` Endpoints: Login/Logout/SSO, Users-CRUD, Whitelist, Upload, Versionen, Distributions, Push-Update, admin-getriggerter (Un)Install pro Agent (mit Type-Dispatch für choco/custom/winget), Settings, Build-Trigger, Reveal, Detect-Uninstall, Hilfe, **winget-search/activate/discovery/discovery-count/rescan/run-nightly/run-enrichment/winget-uninstall**, **agent-software-Endpoint** der Tactical-Scan + winget_state + Whitelist mergt und mit Token-Score-Heuristik dedupt |
+| `templates/admin.html` | Single-Page Admin-UI (Vanilla JS, 7 Tabs + mehrere Slide-in-Panels + Confirm-/Passwort-Modals + **Winget-Tab im Aktivieren-Panel** + **Agent-Detail-Page** als Vollbild-Sicht im Kiosk-Clients-Tab + **Header-Discovery-Banner**) |
 | `templates/admin_login.html` | Standalone Login-Form mit konditionalem SSO-Button |
 | `templates/admin_help.html` | HTML-Fragment für den Hilfe-Tab (lazy loaded) |
 
@@ -266,21 +286,25 @@ Bei manuellem PyInstaller-Lauf aus dem Repo: leerer String, muss via `--proxy-ur
 ## Datenbank-Schema
 
 ```sql
--- Kuratierte Paket-Whitelist (choco + custom)
+-- Kuratierte Paket-Whitelist (choco + custom + winget)
 CREATE TABLE packages (
-    name               TEXT PRIMARY KEY,        -- choco-Name oder slug aus filename
+    name               TEXT PRIMARY KEY,        -- choco-Name, slug aus filename, oder winget PackageIdentifier
     display_name       TEXT NOT NULL,
     category           TEXT NOT NULL DEFAULT 'Allgemein',
     created_at         TEXT DEFAULT (datetime('now')),
     updated_at         TEXT DEFAULT (datetime('now')),
-    type               TEXT NOT NULL DEFAULT 'choco',  -- 'choco' | 'custom'
-    filename           TEXT,                    -- Spiegelt die current_version
+    type               TEXT NOT NULL DEFAULT 'choco',  -- 'choco' | 'custom' | 'winget'
+    filename           TEXT,                    -- Spiegelt die current_version (nur custom)
     sha256             TEXT,                    -- "
     size_bytes         INTEGER,                 -- "
     install_args       TEXT,                    -- "
     uninstall_cmd      TEXT,                    -- "
     detection_name     TEXT,                    -- Windows-Display-Name für Match (nur custom)
-    current_version_id INTEGER                  -- FK auf package_versions.id
+    current_version_id INTEGER,                 -- FK auf package_versions.id (nur custom)
+    archive_type       TEXT NOT NULL DEFAULT 'single',  -- 'single' | 'archive' (nur custom)
+    entry_point        TEXT,                    -- relativer Pfad im Archiv (nur custom/archive)
+    winget_publisher   TEXT,                    -- Cached Publisher-String (nur winget)
+    winget_version     TEXT                     -- Optional fixe Version (NULL = latest, nur winget; Phase-2 UI)
 );
 
 -- Versionen pro custom-Paket. Die "current" Version wird über
@@ -404,6 +428,39 @@ CREATE TABLE admin_sessions (
     FOREIGN KEY (user_id) REFERENCES admin_users(id) ON DELETE CASCADE
 );
 
+-- Per-Agent winget-Inventur aus dem nightly Scan + targeted Re-Scans.
+-- Wird bei jedem Scan komplett ersetzt (DELETE+INSERT pro Agent).
+CREATE TABLE agent_winget_state (
+    agent_id          TEXT NOT NULL,
+    winget_id         TEXT NOT NULL,           -- z. B. 'Mozilla.Firefox'
+    installed_version TEXT,
+    available_version TEXT,                    -- NULL = up-to-date
+    source            TEXT,                    -- 'winget' | 'msstore'
+    scanned_at        TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (agent_id, winget_id)
+);
+
+-- Per-Agent Scan-Health: für UI-Anzeige stale-Agents, Polling nach
+-- User-Aktionen, und Retry-Backoff bei consecutive_failures.
+CREATE TABLE agent_scan_meta (
+    agent_id              TEXT PRIMARY KEY,
+    last_scan_at          TEXT,
+    last_status           TEXT,                -- 'ok' | 'no_winget' | 'offline' | 'error' | 'parse_error' | 'timeout'
+    last_error            TEXT,                -- human-readable
+    consecutive_failures  INTEGER NOT NULL DEFAULT 0
+);
+
+-- Discovery-Bonus: Mapping Tactical-software-scan Display-Name → winget-ID
+-- mit Confidence-Heuristik. Wird vom täglichen enrichment-Job geschrieben.
+-- install_count = Anzahl Agents in der Flotte mit diesem Display-Namen.
+CREATE TABLE discovery_enrichment (
+    display_name  TEXT PRIMARY KEY,
+    winget_id     TEXT,                        -- NULL wenn kein Match
+    confidence    TEXT,                        -- 'high' | 'medium' | 'low' | 'none'
+    install_count INTEGER NOT NULL DEFAULT 0,
+    checked_at    TEXT DEFAULT (datetime('now'))
+);
+
 -- Indexe
 CREATE INDEX idx_install_log_agent      ON install_log(agent_id, id DESC);
 CREATE INDEX idx_audit_log_ts           ON audit_log(ts);
@@ -413,6 +470,9 @@ CREATE INDEX idx_admin_sessions_exp     ON admin_sessions(expires_at);
 CREATE INDEX idx_package_versions_pkg   ON package_versions(package_name);
 CREATE INDEX idx_package_versions_sha   ON package_versions(sha256);
 CREATE INDEX idx_agent_installations_pkg ON agent_installations(package_name);
+CREATE INDEX idx_agent_winget_id        ON agent_winget_state(winget_id);
+CREATE INDEX idx_agent_winget_avail     ON agent_winget_state(available_version)
+    WHERE available_version IS NOT NULL;
 CREATE UNIQUE INDEX idx_admin_users_sso  ON admin_users(sso_provider, sso_subject)
     WHERE sso_subject IS NOT NULL;
 ```
@@ -731,8 +791,21 @@ Die Login/SSO-Endpoints darunter sind die Ausnahme.
 | `GET` | `/admin/api/distributions` | – Übersicht ALLER custom-Pakete + Installationen + Summary |
 | `GET` | `/admin/api/packages/{name}/installations` | – nur die Installationen eines Pakets |
 | `POST` | `/admin/api/packages/{name}/push-update` | – Reinstall current-Version auf alle outdated Agents (fire-and-forget) |
-| `POST` | `/admin/api/agents/{agent_id}/install/{package_name}` | – admin-getriggerter (Re-)Install der current-Version auf einem einzelnen Agent |
-| `POST` | `/admin/api/agents/{agent_id}/uninstall/{package_name}` | – admin-getriggerter Uninstall auf einem einzelnen Agent |
+| `POST` | `/admin/api/agents/{agent_id}/install/{package_name}` | – admin-getriggerter (Re-)Install bzw. Upgrade auf einem einzelnen Agent. Dispatched nach `packages.type`: choco/custom/winget |
+| `POST` | `/admin/api/agents/{agent_id}/uninstall/{package_name}` | – admin-getriggerter Uninstall auf einem einzelnen Agent. Dispatched nach `packages.type` |
+
+**Winget:**
+
+| Methode | Pfad | Body |
+|---|---|---|
+| `GET` | `/admin/api/winget/search?q=` | – Substring-Suche im lokalen winget-Catalog. Token-Score-Ranking, semver-aware "latest version", Result enthält `enabled`-Flag wenn schon whitelisted |
+| `POST` | `/admin/api/winget/activate` | `{id, display_name, category, publisher?, latest_version?}` — fügt ein winget-Paket in die Whitelist ein. Fehlende Felder werden via `winget_catalog.get_details()` nachgeholt |
+| `GET` | `/admin/api/winget/discovery` | – Fleet-Discovery: alle winget-IDs aus `agent_winget_state` die NICHT whitelisted sind (Primary), plus aufgelöste Tactical-software-scan Display-Namen aus `discovery_enrichment` (Bonus). Pro Eintrag: `winget_id`, `display_name`, `install_count`, `confidence`, `source` (`winget_scan` oder `tactical_scan`) |
+| `GET` | `/admin/api/winget/discovery-count` | – Zahl für das Header-Banner. Wird beim Page-Load + nach jeder Aktion gefetched |
+| `POST` | `/admin/api/winget/rescan/{agent_id}` | – sofortiger targeted Re-Scan eines einzelnen Agents. Setzt `consecutive_failures` zurück |
+| `POST` | `/admin/api/winget/run-nightly` | – manueller Trigger für den Fleet-Scan (sonst per APScheduler 02:00 UTC) |
+| `POST` | `/admin/api/winget/run-enrichment` | – manueller Trigger für den Enrichment-Job |
+| `POST` | `/admin/api/agents/{agent_id}/winget-uninstall` | `{winget_id}` — `winget uninstall --id … --force` auf einem einzelnen Agent OHNE Whitelist-Pflicht. Wird vom Agent-Detail benutzt um unerwünschte unverwaltete Software runterzuhauen |
 
 **Clients & Audit:**
 
@@ -741,6 +814,7 @@ Die Login/SSO-Endpoints darunter sind die Ausnahme.
 | `GET` | `/admin/api/agents` | – (inkl. `banned`-Flag pro Agent) |
 | `GET` | `/admin/api/agents/{id}/installs` | – install_log Einträge des Agents |
 | `GET` | `/admin/api/agents/{id}/managed` | – per Self-Service installierte Pakete + Version-Status |
+| `GET` | `/admin/api/agents/{id}/software` | – **Vereinte Software-Sicht** für die Agent-Detail-Page: Tactical-software-scan + `agent_winget_state`, dedupt mit Token-Score-Matching, pro Eintrag die Felder `name, winget_id, installed_version, available_version, publisher, source, managed, managed_type, package_name, can_activate, update_available`. Antwort enthält ausserdem `scan_meta` für das Polling nach User-Aktionen |
 | `POST` | `/admin/api/agents/{id}/revoke` | – bumpt token_version (alter Token wird ungültig) |
 | `DELETE` | `/admin/api/agents/{id}` | – cascading delete: installations + install_log + agents |
 | `POST` | `/admin/api/agents/{id}/ban` | `{reason}` — setzt Agent auf Blocklist + bumpt token_version |
@@ -824,13 +898,132 @@ auf den EXE-Pfad macht statt msiexec:
 Start-Process -FilePath $tmp -ArgumentList '/S' -Wait -PassThru -NoNewWindow
 ```
 
-### Uninstall (choco + custom)
+### Winget-Paket
+
+Winget-Pakete laufen über denselben Tactical-`run_command`-Kanal wie custom,
+brauchen aber keine signierte Download-URL — winget zieht den Installer selbst
+aus seinem konfigurierten Source-Repository.
+
+```
+1. softshelf.exe → POST /api/v1/install {package_name: "Mozilla.Firefox"}
+2. Proxy: verify_machine_token + Whitelist-Lookup → type=winget
+3. Proxy: agent_winget_state lesen → schon installiert mit available_version?
+     → Ja: action='upgrade'
+     → Nein: action='install'
+4. Proxy: _build_winget_command(action, "Mozilla.Firefox", winget_version)
+     baut PowerShell-Wrapper:
+       Find-WingetExe (PATH-Lookup, Fallback C:\Program Files\WindowsApps\
+                       Microsoft.DesktopAppInstaller_*_x64__*\winget.exe)
+       & $wingetExe install --id 'Mozilla.Firefox' --scope machine --silent
+                            --accept-package-agreements --accept-source-agreements
+                            --disable-interactivity -h
+       Tolerant gegenüber Exit-Codes 0, -1978335212 (bereits installiert),
+                                       -1978335189 (no upgrade available)
+5. Proxy: asyncio.create_task(_run_winget_command_bg(...)) → return SOFORT
+6. Background-Task: TacticalClient.run_command(agent_id, ps_cmd, timeout=600)
+     └─ POST https://tactical/agents/{id}/cmd/  (run_as_user=False, also SYSTEM)
+7. Tactical-Agent: Find-WingetExe → winget install/upgrade läuft als SYSTEM
+8. Background-Task wartet auf Tactical-Response (sync), egal ob Erfolg oder Fehler:
+     → winget_scanner.scan_agent(agent_id) wird sofort danach getriggert
+       (targeted Re-Scan via winget export + winget upgrade)
+     → ersetzt agent_winget_state Rows für diesen Agent komplett
+     → schreibt agent_scan_meta.last_scan_at = jetzt
+9. Admin-UI pollt /admin/api/agents/{id}/software jede 5s und vergleicht
+   scan_meta.last_scan_at gegen den Snapshot vom Klick-Zeitpunkt
+   → sobald sich der Timestamp bewegt: automatischer Refresh der Sicht
+```
+
+**Resolver-Hintergrund:** `Get-Command winget` unter SYSTEM findet nichts, weil
+der per-user-Shim in `%LocalAppData%\Microsoft\WindowsApps\winget.exe` lebt und
+SYSTEM kein Profil-Mapping hat. Die echte Binary in `C:\Program Files\WindowsApps\
+Microsoft.DesktopAppInstaller_*_x64__*\winget.exe` ist von SYSTEM aber lesbar
+(WindowsApps-ACLs blocken nur reguläre User). Der Find-WingetExe-Helper macht
+beide Pfade durch.
+
+### Winget-Scan (nightly + targeted)
+
+Das ist der zweite Datenfluss-Pfad für winget — nicht User-getriggert sondern
+periodisch, schreibt aber denselben State.
+
+```
+APScheduler 02:00 UTC → run_nightly_scan()
+  ├─ database.get_agents_due_for_scan(online_threshold=300, skip_failures>=7)
+  │   → Liste online Kiosk-Clients, gebannte Agents geskippt,
+  │     Agents mit hoher Failure-Rate temporär ausgeschlossen
+  ├─ asyncio.Semaphore(20)
+  └─ Pro Agent (parallel max 20):
+       └─ scan_agent(agent_id, timeout=120)
+            ├─ TacticalClient.run_command mit dem Scan-Skript:
+            │     - Find-WingetExe
+            │     - winget export -o /tmp/x.json --include-versions
+            │     - $installedJson = [System.IO.File]::ReadAllText($exportPath)
+            │     - winget upgrade (Text-Output für Available-Versionen)
+            │     - ConvertTo-Json {ok, installed_json, upgradable}
+            ├─ parse_scan_payload(text)
+            │     - Doppel-Decode (Tactical wrappt stdout als JSON-string)
+            │     - winget export JSON parsen → kanonische installed-Liste
+            │     - winget upgrade Text-Tabelle parsen, Truncation tolerant
+            │       via Prefix-Auflösung gegen die installed-IDs
+            │     - state_rows mit (winget_id, installed_version, available_version)
+            ├─ database.replace_agent_winget_state(agent_id, state_rows)
+            │     → DELETE FROM agent_winget_state WHERE agent_id=?
+            │     → INSERT alle neuen Rows
+            └─ database.upsert_scan_meta(agent_id, status='ok', ...)
+                  → Falls 'no_winget' Error: status='no_winget', state=[] (leer)
+                  → Falls Tactical-Fehler: status='error', consecutive_failures++
+```
+
+Targeted Re-Scan ist exakt derselbe Code-Pfad, nur einmalig pro Agent statt
+über die ganze Flotte. Wird nach jeder Install/Upgrade/Uninstall-Aktion
+gechained UND vom „Neu scannen"-Button im Agent-Detail.
+
+### Discovery-Enrichment-Job (täglich)
+
+```
+APScheduler 02:30 UTC → run_enrichment_job()
+  ├─ Catalog Cache Refresh (winget_catalog.refresh_cache)
+  │     → einmalig bei stale Cache (TTL 24h)
+  ├─ collect_fleet_software()
+  │     → Tactical.get_installed_software() für alle online Agents (Semaphore 15)
+  │     → Aggregation: dict[normalized_name → {display_name, publisher, count}]
+  ├─ database.reset_enrichment_counts()  → install_count=0 für alle Rows
+  └─ Pro distinct display_name:
+       ├─ Cache-Check via database.get_enrichment(display_name)
+       │     → Wenn frisch UND winget_id whitelisted: nur count updaten
+       ├─ Sonst: winget_catalog.search(normalized) → Top-Treffer pro Confidence
+       │     → confidence ∈ {high, medium, low, none}
+       ├─ database.upsert_enrichment(display_name, winget_id, confidence, count)
+       └─ asyncio.sleep(0.2)  ← Rate-Limit gegen den lokalen Cache (nicht nötig,
+                                aber paranoid für CPU-Lastverteilung)
+
+  → database.cleanup_stale_enrichment(days=30) löscht Einträge mit
+    install_count=0 und checked_at älter als 30 Tage
+```
+
+Resultat: `discovery_enrichment` ist eine angereicherte Sicht auf die Tactical-
+Software-Scans der ganzen Flotte mit aufgelösten winget-IDs für die meisten
+Display-Namen — Grundlage für den Discovery-Block im Aktivieren-Panel.
+
+### Uninstall (choco + custom + winget)
 
 - **Choco:** `TacticalClient.uninstall_software()` → POST `/software/{id}/uninstall/`
   mit `choco uninstall <name> -y --no-progress` als Command
 - **Custom:** fire-and-forget, ausgeführt wird der beim Upload gespeicherte `uninstall_cmd`
   via `cmd /c` gewrappt in PowerShell (Exit-Code-Propagation + Tolerant bei 3010/1605).
   Bei Erfolg → `delete_agent_installation(agent_id, name)` entfernt den Tracking-Eintrag.
+- **Winget (verwaltet):** `_build_winget_command('uninstall', winget_id)` erzeugt
+  einen PowerShell-Wrapper um `winget uninstall --id … --silent --force
+  --accept-source-agreements --disable-interactivity -h`. Fire-and-forget via
+  Tactical, danach targeted Re-Scan. Tolerant gegenüber Exit-Code 0,
+  -1978335212, -1978335189. Exit-Code -1978335162 (`NO_UNINSTALL_INFO_FOUND`)
+  wird mit klarer Fehlermeldung gepropagiert — passiert bei per-user-Apps und
+  Microsoft-Store-Apps die SYSTEM nicht entfernen kann.
+- **Winget (unverwaltet, ohne Whitelist):** `POST /admin/api/agents/{id}/winget-uninstall`
+  mit Body `{winget_id}`. Skippt den Whitelist-Check und ruft direkt
+  `_build_winget_command('uninstall', …)` → Tactical-Dispatch. Wird vom
+  Agent-Detail benutzt um Software wegzuräumen die NICHT in der Softshelf-
+  Whitelist ist (z.B. eine winget-installierte App die der User selbst
+  installiert hat).
 
 ### Push-Update (admin-getriggert)
 
@@ -923,24 +1116,40 @@ Installer findet nach Default-Aufruf (ohne `--proxy-url`) direkt den richtigen P
 
 | Tab | Zweck |
 |---|---|
-| **Pakete** | Whitelist-Management: Chocolatey-Suche, Upload, Edit (inkl. Versions-Liste + Push-Update + Installations-View pro Paket), Delete |
+| **Pakete** | Whitelist-Management: Choco-/Winget-Suche, Upload, Edit (inkl. Versions-Liste + Push-Update + Installations-View pro Paket), Delete. Pro Karte ein Source-Tag (`Chocolatey` / `Winget` / `Eigenes Paket` / `Programm-Ordner`) |
 | **Verteilung** | Cross-package Übersicht: pro custom-Paket eine Karte mit allen Geräten + ihrer Version + Update-/Entfernen-Buttons pro Zeile + Push-all für Outdated |
-| **Kiosk-Clients** | Liste registrierter Agents, Online-Status, Install-Historie pro Agent |
+| **Kiosk-Clients** | Liste registrierter Agents, Online-Status. Klick auf eine Zeile öffnet die **Agent-Detail-Page** als Vollbild-Sicht (siehe unten) |
 | **Audit-Log** | Letzte 200 HTTP-Requests, Filter auf Pfad/IP |
 | **Benutzer** | Admin-User-Verwaltung (lokal + SSO), Last-Login-Anzeige, Aktiv-Toggle |
 | **Einstellungen** | Runtime-Settings-Editor (inkl. SSO-Sektion), Reveal für Secrets, Build-Button + Historie |
 | **Hilfe** | Aufgaben-orientierte Admin-Dokumentation (lazy loaded HTML-Fragment) |
 
 **Slide-in-Panels:**
-- Such-Panel (Choco-Suche + Upload-Form mit Tab-Toggle)
+- Such-Panel (Aktivieren) mit vier Tabs: **Aus Chocolatey**, **Aus Winget**, **Eigene Datei**, **Programm-Ordner**
+  - Winget-Tab: Catalog-Suche im lokalen `winget_index.db` mit Inline-Aktivieren-Button, plus aufklappbarer **Discovery-Block** „In der Flotte gefunden" mit allen unverwalteten winget-IDs (Primary aus `agent_winget_state`, Bonus aus `discovery_enrichment` mit Confidence-Badges)
 - Kategorie-Picker
-- Agent-Detail (Install-Historie pro Gerät)
 - Custom-Paket Edit-Panel (inkl. Versions-Sektion: Liste + Set-Current + Delete + Inline-Upload neuer Versionen + Installations-Liste pro Paket + Push-Update-Button)
 - User-Edit-Panel (Anlegen + Bearbeiten)
+
+**Agent-Detail-Page** (statt Slide-in seit v1.4.0):
+
+| Bereich | Inhalt |
+|---|---|
+| Header-Toolbar | Back-Button, Hostname (mit `· GESPERRT`-Suffix bei Bann), Agent-ID, Aktion-Buttons: **Neu scannen** (manueller winget-Rescan mit Reset von consecutive_failures), **Token widerrufen**, **Sperren** / **Entsperren**, **Löschen** |
+| Installierte Software | Vereinte Liste aus Tactical-Software-Scan + `agent_winget_state`, dedupt mit Token-Score-Matching. Pro Row: Display-Name, Source-Badges (`verwaltet · winget` / `verwaltet · choco` / `verwaltet · eigen` / `winget · unverwaltet` / `unverwaltet`), Update-Hinweis, Sub-Zeile mit `winget_id` + Version + Publisher, Aktion-Buttons. Sortierung: Updates zuerst, dann verwaltet, dann unverwaltet |
+| Aktion-Buttons pro Row | **Updaten** (managed + update_available, ruft `winget upgrade`), **Deinstallieren** (managed), **Aktivieren** (unmanaged winget, ruft `/admin/api/winget/activate`), **Entfernen** (unmanaged winget, ruft `/admin/api/agents/{id}/winget-uninstall` ohne Whitelist) |
+| Polling | Nach jedem Klick wird die Row mit Spinner gesperrt und das UI pollt `/admin/api/agents/{id}/software` alle 5s. Vergleich `scan_meta.last_scan_at` gegen Snapshot vom Klick-Zeitpunkt. Sobald sich der Timestamp bewegt: automatischer Refresh. 6-Minuten Hartstop |
+| Installations-Verlauf | Bisheriger `install_log` für diesen Agent (install/uninstall Audit) |
+
+**Header-Discovery-Banner:**
+- Erscheint im `hdr-meta` rechts neben Version + User-Menu wenn `GET /admin/api/winget/discovery-count` eine Zahl > 0 liefert
+- Klick öffnet das Aktivieren-Panel direkt auf dem Winget-Tab mit expandiertem Discovery-Block
+- Wird nach jeder Activate-/Aktion neu gefetched
 
 **Modals:**
 - Confirm-Action (parametrisierbarer Button-Label und -Style)
 - Passwort-Ändern (Live-Strength-Indicator + Match-Validation)
+- Ban-Reason-Modal (separates kleines Modal vor dem `agentBan()`-Call)
 
 **User-Menu im Header:**
 - Avatar-Initial mit Dropdown
@@ -1013,13 +1222,20 @@ softshelf/
 ├── proxy/
 │   ├── Dockerfile              python:3.11-slim + msitools + non-root
 │   ├── entrypoint.sh           chownt data/ und droppt auf 'softshelf'
-│   ├── requirements.txt        fastapi, uvicorn, httpx, PyJWT, aiosqlite, python-multipart
-│   ├── main.py                 App-Setup, public endpoints
+│   ├── requirements.txt        fastapi, uvicorn, httpx, PyJWT, aiosqlite,
+│   │                           python-multipart, apscheduler
+│   ├── main.py                 App-Setup, Lifespan inkl. APScheduler-Wiring,
+│   │                           public endpoints
 │   ├── config.py               Bootstrap + RUNTIME_KEYS
-│   ├── database.py             SQLite + Migration + Helpers
+│   ├── database.py             SQLite + Migration + Helpers (inkl. winget-state,
+│   │                           scan-meta, discovery-enrichment)
 │   ├── auth.py                 JWT (Machine-Token + Download-Token)
 │   ├── tactical_client.py      Tactical-RMM-API-Wrapper
 │   ├── file_uploads.py         MSI-Parsing + File-Storage
+│   ├── winget_catalog.py       Lokal gemirrowter Microsoft-winget-Source mit
+│   │                           SQLite-Index, semver-Sortierung
+│   ├── winget_scanner.py       Per-Agent winget-Inventur (nightly + targeted)
+│   ├── winget_enrichment.py    Tactical-Scan → winget-id Matcher (täglich)
 │   ├── middleware/
 │   │   ├── audit_logger.py
 │   │   ├── csrf.py
@@ -1027,11 +1243,15 @@ softshelf/
 │   ├── admin_auth.py           scrypt + Sessions + Microsoft-Entra-OIDC
 │   ├── routes/
 │   │   ├── register.py
-│   │   ├── packages.py
-│   │   ├── install.py
-│   │   └── admin.py            (~1000 Zeilen, alle admin-Endpoints inkl. Versionierung + Distribution)
+│   │   ├── packages.py         /api/v1/packages mit winget-state-Join
+│   │   ├── install.py          /api/v1/install + /uninstall mit Type-Dispatch
+│   │   │                       (choco/custom/winget) + targeted Re-Scan
+│   │   └── admin.py            (~2200 Zeilen, alle admin-Endpoints inkl.
+│   │                           Versionierung, Distribution, Winget,
+│   │                           Agent-Detail-Software-Endpoint)
 │   └── templates/
-│       ├── admin.html          Single-Page Admin-UI (7 Tabs)
+│       ├── admin.html          Single-Page Admin-UI (7 Tabs +
+│       │                       Agent-Detail-Page + Winget-Tab + Discovery-Banner)
 │       ├── admin_login.html    Login-Form (lokal + SSO-Button)
 │       └── admin_help.html     Hilfe-Tab Inhalt (HTML-Fragment)
 │
@@ -1058,12 +1278,14 @@ softshelf/
 │   └── generate_token.py       Admin-Tool: manuelles JWT
 │
 ├── data/                       (Volume, persistent)
-│   ├── softshelf.db                SQLite
+│   ├── softshelf.db            SQLite (state, settings, packages, …)
+│   ├── winget_index.db         Lokaler Mirror der Microsoft-winget-Source
+│   │                           (täglich von cdn.winget.microsoft.com gezogen)
 │   └── uploads/                Custom MSI/EXE Files (sha256-named)
 │
 └── downloads/                  (Volume, shared proxy+builder)
-    ├── softshelf.exe               vom Builder erzeugt
-    └── softshelf-setup.exe         vom Builder erzeugt
+    ├── softshelf.exe           vom Builder erzeugt
+    └── softshelf-setup.exe     vom Builder erzeugt
 ```
 
 ---
@@ -1073,6 +1295,10 @@ softshelf/
 | Item | Priorität | Aufwand | Notiz |
 |---|---|---|---|
 | **TLS vor dem Proxy** | hoch | klein | via Caddy/Traefik Reverse-Proxy. Session-Cookie ist HttpOnly+Strict, aber HTTP exponiert ihn auf Layer-7 |
+| **Winget run_as_user-Fallback** | mittel | mittel | per-user / Microsoft-Store winget-Pakete lassen sich aus SYSTEM-Kontext nicht entfernen (Exit-Code -1978335162 NO_UNINSTALL_INFO_FOUND, oder „No available upgrade found" für `--scope machine`-gefilterte Per-User-Installs). Lösung: optional `run_as_user=True` an Tactical run_command übergeben wenn ein User eingeloggt ist, mit Retry-Logik nach SYSTEM-Failure |
+| **Winget-Version-Pinning UI** | niedrig | klein | `packages.winget_version`-Spalte existiert bereits, Dispatch-Code unterstützt `--version`, fehlt nur ein Picker im Aktivieren-/Edit-Panel |
+| Tactical-Software-Scan ARP-Direct-Uninstall | niedrig | mittel | Für unverwaltete tactical-only Software einen Uninstall-Pfad via ARP `UninstallString` anbieten — derzeit nur winget-IDs uninstallable im Agent-Detail |
+| Discovery-Confidence-Tuning | niedrig | klein | Das Token-Score-Matching gegen den winget-Catalog hat Edge-Cases mit generischen Tokens (`microsoft`, `office`). Die generic-Token-Liste in `routes/admin.py:_GENERIC_WINGET_TOKENS` kann nach Bedarf erweitert werden |
 | One-Time-Registration-Tokens | mittel | mittel | aktuell durch Rate-Limit + `min_length=16` mitigiert |
 | Auto-Refresh von Machine-Tokens | niedrig | mittel | aktuell: `token_ttl_days=0` für unbegrenzt, oder Re-Deploy |
 | pytest für Proxy + Smoke-Tests Client | niedrig | groß | |
