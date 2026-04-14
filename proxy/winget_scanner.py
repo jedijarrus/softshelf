@@ -33,11 +33,36 @@ logger = logging.getLogger("softshelf.winget.scanner")
 
 # ── PowerShell-Skript für den Scan ────────────────────────────────────────────
 
+# winget-Resolver: Tactical run_command läuft als SYSTEM. winget ist auf
+# Windows 11 zwar installiert, der CLI-Shim `winget.exe` liegt aber per-user
+# in %LocalAppData%\Microsoft\WindowsApps\winget.exe und ist deshalb unter
+# SYSTEM nicht im PATH. Die echte Binary liegt in
+# C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__*\winget.exe
+# und ist von SYSTEM aus zugreifbar (regulärer User nicht). Wir resolven
+# beide Pfade und fallen auf die WindowsApps-Variante zurück.
+_PS_FIND_WINGET = r"""
+function Find-WingetExe {
+    $cmd = Get-Command winget -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $base = 'C:\Program Files\WindowsApps'
+    if (-not (Test-Path -LiteralPath $base)) { return $null }
+    $dirs = Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue `
+        | Where-Object { $_.Name -like 'Microsoft.DesktopAppInstaller_*_x64__*' } `
+        | Sort-Object Name -Descending
+    foreach ($d in $dirs) {
+        $exe = Join-Path $d.FullName 'winget.exe'
+        if (Test-Path -LiteralPath $exe) { return $exe }
+    }
+    return $null
+}
+"""
+
 _SCAN_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# Buffer-Breite aufreissen, damit winget lange Namen/IDs nicht abkuerzt.
+# Buffer-Breite aufreissen wo es geht — wirkt nur in interaktiven Hosts.
+# Unter Tactical (headless) wird der try-Block stillschweigend geskippt.
 try {
     $raw = $Host.UI.RawUI
     $sz  = $raw.BufferSize
@@ -46,28 +71,53 @@ try {
 } catch {}
 $env:COLUMNS = 512
 
-$wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
-if (-not $wingetCmd) {
+""" + _PS_FIND_WINGET + r"""
+
+$wingetExe = Find-WingetExe
+if (-not $wingetExe) {
     $err = @{ ok = $false; error = 'winget_not_installed' } | ConvertTo-Json -Compress
     Write-Output $err
     exit 0
 }
 
+# Installed Liste via `winget export`: liefert strukturiertes JSON, kein
+# Console-Truncation, kein lokalisierter Header. Inkl. installierter Versionen.
+# Wir lesen die Datei mit [System.IO.File]::ReadAllText, weil PowerShell 5.1's
+# Get-Content -Raw beim spaeteren ConvertTo-Json zu einem PSObject-Wrapper
+# ({"value":"..."}) wird statt zu einem plain String.
+$exportPath = Join-Path $env:TEMP ('winget_export_' + [System.Guid]::NewGuid().ToString('N') + '.json')
+$installedJson = ''
 try {
-    $installed  = (& winget list    --source winget --accept-source-agreements --disable-interactivity 2>&1) -join "`n"
+    & $wingetExe export `
+        -o $exportPath `
+        --source winget `
+        --accept-source-agreements `
+        --disable-interactivity `
+        --include-versions 2>&1 | Out-Null
+    if (Test-Path -LiteralPath $exportPath) {
+        $installedJson = [System.IO.File]::ReadAllText($exportPath)
+    }
 } catch {
-    $installed = ""
+    $installedJson = ''
+} finally {
+    Remove-Item -LiteralPath $exportPath -ErrorAction SilentlyContinue
 }
+# Defensive: sicherstellen dass es ein plain string ist
+$installedJson = [string]$installedJson
+
+# Upgradable Liste hat keinen Export-Equivalent, wir parsen weiter den Text.
+# Truncated rows werden serverseitig gegen die installed-Liste aufgeloest
+# (Prefix-Match), so dass wir trotzdem die echten IDs treffen.
 try {
-    $upgradable = (& winget upgrade --source winget --accept-source-agreements --disable-interactivity 2>&1) -join "`n"
+    $upgradable = (& $wingetExe upgrade --source winget --accept-source-agreements --disable-interactivity 2>&1) -join "`n"
 } catch {
     $upgradable = ""
 }
 
 $result = @{
-    ok         = $true
-    installed  = $installed
-    upgradable = $upgradable
+    ok            = $true
+    installed_json = $installedJson
+    upgradable    = $upgradable
 } | ConvertTo-Json -Compress
 
 Write-Output $result
@@ -209,6 +259,66 @@ def _row_value(row: dict[str, str], *candidates: str) -> str:
     return ""
 
 
+def _parse_winget_export(installed_json: str) -> list[dict[str, Any]]:
+    """
+    Parsed das JSON-Format von `winget export`. Schema:
+    {
+      "Sources": [
+        {
+          "Packages": [{"PackageIdentifier": "...", "Version": "..."}, ...]
+        }, ...
+      ]
+    }
+    """
+    if not installed_json:
+        return []
+    try:
+        data = json.loads(installed_json)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    sources = data.get("Sources") or []
+    if not isinstance(sources, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        packages = src.get("Packages") or []
+        if not isinstance(packages, list):
+            continue
+        for pkg in packages:
+            if not isinstance(pkg, dict):
+                continue
+            wid = (pkg.get("PackageIdentifier") or "").strip()
+            if not wid:
+                continue
+            version = (pkg.get("Version") or "").strip()
+            rows.append({
+                "winget_id":         wid,
+                "installed_version": version or None,
+            })
+    return rows
+
+
+def _resolve_truncated_id(truncated: str, full_ids: list[str]) -> str | None:
+    """
+    Findet die volle winget-ID die zum truncated Prefix passt. Eindeutig
+    wenn genau eine ID matched, sonst None.
+    """
+    if not truncated:
+        return None
+    if truncated.endswith(_ELLIPSIS):
+        prefix = truncated[:-1]
+    else:
+        prefix = truncated
+    matches = [fid for fid in full_ids if fid.startswith(prefix)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 def parse_scan_payload(payload: str) -> tuple[list[dict[str, Any]], list[str]]:
     """
     Parsed das von `_SCAN_SCRIPT` gelieferte JSON.
@@ -217,6 +327,11 @@ def parse_scan_payload(payload: str) -> tuple[list[dict[str, Any]], list[str]]:
     String zurück (also `"{\\"a\\":1}\\r\\n"` statt `{"a":1}`). Wir decoden
     deshalb potenziell doppelt: erst die äußere String-Hülle, dann das
     innere JSON-Objekt.
+
+    `installed_json` ist der Inhalt von `winget export` (strukturiertes JSON,
+    kein Truncation). `upgradable` ist weiterhin der Text-Output von
+    `winget upgrade`, dessen truncated IDs wir gegen die installed-Liste
+    via Prefix-Match auflösen.
 
     Returns: (state_rows, warnings) wo state_rows die Liste an dicts mit den
     Keys ist die `database.replace_agent_winget_state` erwartet:
@@ -253,50 +368,60 @@ def parse_scan_payload(payload: str) -> tuple[list[dict[str, Any]], list[str]]:
         err = data.get("error") or "unknown_scan_error"
         raise ValueError(f"agent reported scan error: {err}")
 
-    installed_text = data.get("installed") or ""
+    installed_json = data.get("installed_json") or ""
     upgradable_text = data.get("upgradable") or ""
 
-    installed_rows, w1 = _parse_winget_table(installed_text)
-    upgradable_rows, w2 = _parse_winget_table(upgradable_text)
-    warnings = w1 + w2
+    # Schritt 1: installierte Pakete aus dem JSON-Export ziehen (kanonische IDs)
+    installed_pkgs = _parse_winget_export(installed_json)
+    full_ids = [r["winget_id"] for r in installed_pkgs]
 
-    # Mappen auf state-rows. installed_rows hat: Name, Id, Version, Source
-    # (manchmal auch Available wenn winget bereits weiß dass Updates da sind)
-    # upgradable_rows hat zusätzlich Available.
+    # Schritt 2: Upgrade-Text parsen, truncated IDs gegen installed_pkgs auflösen
+    upgradable_rows, warnings = _parse_winget_table(upgradable_text)
     upgradable_lookup: dict[str, str] = {}
+    unresolved_warnings: list[str] = []
     for row in upgradable_rows:
-        wid = _row_value(row, "Id", "ID")
-        avail = _row_value(row, "Available", "Verfügbar", "Verfuegbar")
-        if wid and avail:
-            upgradable_lookup[wid] = avail
+        wid_raw = _row_value(row, "Id", "ID").strip()
+        avail = _row_value(row, "Available", "Verfügbar", "Verfuegbar").strip()
+        if not wid_raw or not avail:
+            continue
+        # Truncation auflösen
+        if wid_raw.endswith(_ELLIPSIS) or " " in wid_raw:
+            resolved = _resolve_truncated_id(wid_raw, full_ids)
+            if not resolved:
+                unresolved_warnings.append(
+                    f"unresolved truncated upgrade id: {wid_raw}"
+                )
+                continue
+            wid_raw = resolved
+        if avail.endswith(_ELLIPSIS):
+            unresolved_warnings.append(
+                f"truncated available version for {wid_raw}: {avail}"
+            )
+            continue
+        upgradable_lookup[wid_raw] = avail
 
+    # Schritt 3: state-rows zusammenbauen
     state_rows: list[dict[str, Any]] = []
-    seen_ids: set[str] = set()
-    for row in installed_rows:
-        wid = _row_value(row, "Id", "ID")
-        if not wid or wid in seen_ids:
+    seen: set[str] = set()
+    for pkg in installed_pkgs:
+        wid = pkg["winget_id"]
+        if wid in seen:
             continue
-        # winget zeigt manchmal Display-Namen mit Whitespace im Id-Feld wenn
-        # die Spalte schmal ist — defensives Filtering
-        if " " in wid or len(wid) > 200:
-            continue
-        seen_ids.add(wid)
-        installed_version = _row_value(row, "Version")
-        # Available kann auch direkt im list-Output sein
-        available = (
-            upgradable_lookup.get(wid)
-            or _row_value(row, "Available", "Verfügbar", "Verfuegbar")
-            or None
-        )
-        source = _row_value(row, "Source", "Quelle") or "winget"
+        seen.add(wid)
         state_rows.append({
             "winget_id":         wid,
-            "installed_version": installed_version or None,
-            "available_version": available or None,
-            "source":            source,
+            "installed_version": pkg.get("installed_version"),
+            "available_version": upgradable_lookup.get(wid),
+            "source":            "winget",
         })
 
-    return state_rows, warnings
+    # _parse_winget_table truncation-warnings filtern wir hier raus weil wir
+    # sie via Prefix-Match aufgelöst haben — nur noch echte ungelöste
+    # warnings übrig lassen.
+    real_warnings = [w for w in warnings if not w.startswith("truncated:")]
+    real_warnings.extend(unresolved_warnings)
+
+    return state_rows, real_warnings
 
 
 # ── Scan-Orchestrierung ───────────────────────────────────────────────────────
