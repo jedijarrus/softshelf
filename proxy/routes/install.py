@@ -321,6 +321,50 @@ exit $code
 """
 
 
+# winget druckt für manche „kann nicht upgraden, aber ich exitte trotzdem mit
+# nothing-to-upgrade-Code" Fälle eine Soft-Error-Message in stdout. Ohne
+# diese Erkennung würden wir die Aktion als Erfolg werten, der nachgelagerte
+# Re-Scan würde den unveränderten State zeigen, und der Admin sieht keinen
+# Hinweis warum nichts passiert ist. Hier matchen wir bekannte Patterns und
+# heben sie aus dem stdout in agent_scan_meta.last_action_error.
+_WINGET_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
+    (
+        "install technology is different",
+        "winget kann nicht in-place upgraden — die neue Version verwendet "
+        "eine andere Installer-Technologie als die installierte. Vorher "
+        "deinstallieren oder ein anderes Update-Verfahren nutzen.",
+    ),
+    (
+        "no available upgrade found",
+        "winget meldet kein verfügbares Upgrade — das Paket ist vermutlich "
+        "per-user installiert (--scope machine filtert es weg) oder die "
+        "Installer-Manifest-Version stimmt nicht mit der installierten Version überein.",
+    ),
+    (
+        "no installed package found matching input criteria",
+        "winget findet das Paket nicht als installiert (vermutlich per-user "
+        "Install den SYSTEM nicht sieht).",
+    ),
+    (
+        "no uninstall information found",
+        "winget hat keine Uninstall-Information gefunden — typisch bei "
+        "per-user oder Microsoft-Store-Apps die SYSTEM nicht entfernen kann.",
+    ),
+]
+
+
+def _detect_winget_soft_error(output: str) -> str | None:
+    """Sucht im winget-Output nach bekannten 'fake success' Mustern. Returns
+    eine human-readable Fehlermeldung wenn ein Pattern matcht, sonst None."""
+    if not output:
+        return None
+    lower = output.lower()
+    for needle, message in _WINGET_SOFT_ERROR_PATTERNS:
+        if needle in lower:
+            return message
+    return None
+
+
 async def _run_winget_command_bg(
     agent_id: str,
     hostname: str,
@@ -334,16 +378,45 @@ async def _run_winget_command_bg(
     Background-Task für winget install/upgrade/uninstall via Tactical run-cmd.
     Nach Completion (egal ob ok oder Fehler) wird ein targeted Re-Scan
     getriggert damit der Kiosk-State frisch ist — bei Fehler dokumentiert
-    der Re-Scan dass das Paket NICHT installiert ist.
+    der Re-Scan dass das Paket NICHT installiert ist. Bei „Soft-Errors"
+    (winget exited mit Success-Code aber druckt einen Fehler in stdout)
+    wird die Meldung in agent_scan_meta.last_action_error persistiert
+    damit das Admin-UI sie als Banner anzeigen kann.
     """
+    error_msg: str | None = None
+    raw_output = ""
     try:
-        await TacticalClient().run_command(agent_id, cmd, timeout=600)
-        logger.info("winget %s ok: %s auf %s", action, display_name, hostname)
+        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=600)
+        # Tactical wrappt stdout als JSON-string — entpacken wenn nötig
+        if raw_output and raw_output.startswith('"'):
+            try:
+                import json as _json
+                raw_output = _json.loads(raw_output)
+            except Exception:
+                pass
+        soft_err = _detect_winget_soft_error(raw_output)
+        if soft_err:
+            error_msg = soft_err
+            logger.warning(
+                "winget %s soft-error für %s auf %s: %s",
+                action, display_name, hostname, soft_err,
+            )
+        else:
+            logger.info("winget %s ok: %s auf %s", action, display_name, hostname)
     except Exception as e:
+        error_msg = str(e)[:300]
         logger.warning(
             "winget %s fehlgeschlagen: %s auf %s — %s",
             action, display_name, hostname, e,
         )
+
+    # Action-Result in scan_meta persistieren (auch bei Erfolg, dann mit error=None,
+    # damit der vorherige Fehler-Banner weggeht)
+    try:
+        await database.upsert_action_result(agent_id, package_name, error_msg)
+    except Exception as e:
+        logger.warning("upsert_action_result failed for %s: %s", agent_id, e)
+
     # Targeted Re-Scan — egal ob Erfolg oder Fehler, damit DB-State korrekt ist
     try:
         await winget_scanner.scan_agent(agent_id)
