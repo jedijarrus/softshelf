@@ -566,6 +566,11 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
   background: #eef2ff;
   border-color: #c7d2fe;
 }
+.pkg-tag.winget {
+  color: #047857;
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
 
 .check-label {
   display: inline-flex;
@@ -881,6 +886,107 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
 }
 .add-section { display: none; flex: 1; flex-direction: column; min-height: 0; }
 .add-section.active { display: flex; }
+
+/* ── Winget Discovery + Banner ─────────────────────────────────────── */
+.winget-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #047857;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: var(--r-sm);
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: background .14s, border-color .14s;
+}
+.winget-banner:hover {
+  background: #d1fae5;
+  border-color: #6ee7b7;
+}
+.winget-banner svg { width: 13px; height: 13px; }
+.winget-banner b { font-weight: 600; }
+
+.winget-discovery-wrap {
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+  padding: 12px 24px 18px;
+  flex-shrink: 0;
+}
+.discovery-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 6px 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-2);
+  cursor: pointer;
+  text-align: left;
+}
+.discovery-toggle:hover { color: var(--fg); }
+.discovery-toggle-arrow {
+  font-size: 9px;
+  color: var(--fg-5);
+  width: 10px;
+  display: inline-block;
+}
+.discovery-toggle-count {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--fg-5);
+  font-variant-numeric: tabular-nums;
+}
+.discovery-list {
+  margin-top: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.discovery-list .result-row .result-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.src-tag {
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: lowercase;
+  letter-spacing: .02em;
+}
+.src-tag.src-winget   { color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; }
+.src-tag.src-tactical { color: #6b21a8; background: #faf5ff; border: 1px solid #e9d5ff; }
+
+.conf-badge {
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: lowercase;
+}
+.conf-badge.conf-high   { color: #166534; background: #dcfce7; border: 1px solid #86efac; }
+.conf-badge.conf-medium { color: #92400e; background: #fef3c7; border: 1px solid #fcd34d; }
+.conf-badge.conf-low    { color: #9a3412; background: #ffedd5; border: 1px solid #fdba74; }
+.conf-badge.conf-none   { color: #525252; background: #f5f5f5; border: 1px solid #e5e5e5; }
+
+.discovery-manual {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--fg-4);
+  padding: 4px 9px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  white-space: nowrap;
+  cursor: default;
+}
 
 /* Storage indicator (im add-modes Bar oder Verteilung filter-bar) */
 .storage-indicator {
@@ -2440,6 +2546,10 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
     {{ADMIN_PORTAL_TITLE}}<span class="brand-sub">/ Admin</span>
   </div>
   <div class="hdr-meta">
+    <button class="winget-banner" id="winget-banner" type="button" style="display:none" onclick="openWingetTabFromBanner()" title="Pakete in der Flotte gefunden, die noch nicht verwaltet werden">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      <span><b id="winget-banner-count">0</b> in der Flotte unverwaltet</span>
+    </button>
     <span class="meta-item hide-sm"><span class="label">Version</span><span class="value" id="meta-version">1.1.0</span></span>
     <span class="meta-item"><span class="value" id="meta-time">--:--:--</span></span>
     <span class="conn" id="conn">
@@ -2628,6 +2738,7 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
 
   <div class="add-modes">
     <button class="add-mode active" data-mode="choco" onclick="setAddMode('choco')">Aus Chocolatey</button>
+    <button class="add-mode" data-mode="winget" onclick="setAddMode('winget')">Aus Winget</button>
     <button class="add-mode" data-mode="upload" onclick="setAddMode('upload')">Eigene Datei</button>
     <button class="add-mode" data-mode="folder" onclick="setAddMode('folder')">Programm-Ordner</button>
     <span class="storage-indicator" id="storage-indicator">—</span>
@@ -2749,6 +2860,30 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
     <div class="upload-actions">
       <button class="btn btn-ghost btn-sm" type="button" onclick="closeAll()">Abbrechen</button>
       <button class="btn btn-primary btn-sm" type="button" id="folder-submit" onclick="doFolderUpload()">Hochladen</button>
+    </div>
+  </div>
+
+  <!-- Winget Search + Fleet Discovery -->
+  <div class="add-section" id="add-winget">
+    <div class="panel-search">
+      <div class="input-search">
+        <input class="input" id="winget-search-input" type="search"
+               placeholder="z. B. firefox, vlc, vscode…"
+               oninput="onWingetSearch(this.value)" autocomplete="off">
+      </div>
+    </div>
+    <div class="panel-body" id="winget-search-results">
+      <div class="panel-hint">Tippe einen Paket- oder Hersteller-Namen um im Microsoft-Catalog zu suchen.</div>
+    </div>
+    <div class="winget-discovery-wrap">
+      <button class="discovery-toggle" id="winget-discovery-toggle" type="button" onclick="toggleWingetDiscovery()">
+        <span class="discovery-toggle-arrow" id="winget-discovery-arrow">▶</span>
+        <span>In der Flotte gefunden</span>
+        <span class="discovery-toggle-count" id="winget-discovery-count">—</span>
+      </button>
+      <div class="discovery-list" id="winget-discovery-list" style="display:none">
+        <div class="empty-mini">Klick um zu laden…</div>
+      </div>
     </div>
   </div>
 </aside>
@@ -3188,11 +3323,15 @@ async function init() {
       current_version_id: p.current_version_id,
       archive_type:       p.archive_type || 'single',
       entry_point:        p.entry_point,
+      winget_publisher:   p.winget_publisher,
+      winget_version:     p.winget_version,
       _outdated:          0,
     });
     render();
     // Outdated-Counts für custom-Pakete async nachladen, dann nochmal rendern
     fetchOutdatedCounts();
+    // Discovery-Banner Status async — keine Blockierung des Page-Loads
+    refreshWingetDiscoveryCount();
   } catch (e) {
     document.getElementById('main-packages').innerHTML =
       `<div class="empty"><h3>Fehler beim Laden</h3><p>${esc(e.message)}</p></div>`;
@@ -3249,9 +3388,15 @@ function render() {
       <div class="pkg-grid">
         ${pkgs.map(pkg => {
           const isCustom = pkg.type === 'custom';
-          const subText = isCustom
-            ? esc(pkg.filename || pkg.name) + (pkg.size_bytes ? ' · ' + fmtBytes(pkg.size_bytes) : '')
-            : esc(pkg.name);
+          const isWinget = pkg.type === 'winget';
+          let subText;
+          if (isCustom) {
+            subText = esc(pkg.filename || pkg.name) + (pkg.size_bytes ? ' · ' + fmtBytes(pkg.size_bytes) : '');
+          } else if (isWinget) {
+            subText = esc(pkg.name) + (pkg.winget_publisher ? ' · ' + esc(pkg.winget_publisher) : '');
+          } else {
+            subText = esc(pkg.name);
+          }
           const editBtn = isCustom
             ? `<button class="pkg-edit" onclick="openEditPanel(${jsStr(pkg.name)})" title="Bearbeiten">
                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
@@ -3263,6 +3408,17 @@ function render() {
                  ${outdatedCount} veraltet
                </div>`
             : '';
+          let tagClass, tagLabel;
+          if (isCustom) {
+            tagClass = 'custom';
+            tagLabel = pkg.archive_type === 'archive' ? 'Programm-Ordner' : 'Eigenes Paket';
+          } else if (isWinget) {
+            tagClass = 'winget';
+            tagLabel = 'Winget';
+          } else {
+            tagClass = 'choco';
+            tagLabel = 'Chocolatey';
+          }
           return `
           <div class="pkg-card">
             ${outdatedBadge}
@@ -3274,7 +3430,7 @@ function render() {
                    onchange="renamePkg('${esc(pkg.name)}',this.value)">
             <div class="pkg-choco">${subText}</div>
             <div class="pkg-meta">
-              <span class="pkg-tag ${isCustom?'custom':'choco'}">${isCustom ? (pkg.archive_type === 'archive' ? 'Programm-Ordner' : 'Eigenes Paket') : 'Chocolatey'}</span>
+              <span class="pkg-tag ${tagClass}">${tagLabel}</span>
               <button class="cat-pill" onclick="openCatPanel(${jsStr(pkg.name)})">${esc(cat)}</button>
             </div>
           </div>`;
@@ -4470,10 +4626,14 @@ function setAddMode(mode) {
   document.querySelectorAll('.add-mode').forEach(b =>
     b.classList.toggle('active', b.dataset.mode === mode));
   document.getElementById('add-choco').classList.toggle('active', mode === 'choco');
+  document.getElementById('add-winget').classList.toggle('active', mode === 'winget');
   document.getElementById('add-upload').classList.toggle('active', mode === 'upload');
   document.getElementById('add-folder').classList.toggle('active', mode === 'folder');
   if (mode === 'choco') {
     setTimeout(() => document.getElementById('search-input').focus(), 100);
+  } else if (mode === 'winget') {
+    refreshWingetDiscoveryCount();
+    setTimeout(() => document.getElementById('winget-search-input').focus(), 100);
   } else {
     refreshStorageIndicator();
     const focusId = mode === 'folder' ? 'folder-display' : 'upload-display';
@@ -4836,6 +4996,187 @@ function renderSearchResults() {
         : `<button class="result-add" onclick="addPkg(${jsStr(r.name)},${jsStr(r.display_name||r.name)})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>`}
     </div>`;
   }).join('');
+}
+
+// ── Winget search + discovery ────────────────────────────────────────────────
+let wingetSearchTimer = null;
+let wingetLastResults = [];
+let wingetDiscoveryLoaded = false;
+
+function onWingetSearch(q) {
+  clearTimeout(wingetSearchTimer);
+  if (!q.trim()) {
+    document.getElementById('winget-search-results').innerHTML =
+      '<div class="panel-hint">Tippe einen Paket- oder Hersteller-Namen um im Microsoft-Catalog zu suchen.</div>';
+    wingetLastResults = [];
+    return;
+  }
+  document.getElementById('winget-search-results').innerHTML =
+    '<div class="loading-block"><span class="spinner"></span></div>';
+  wingetSearchTimer = setTimeout(() => doWingetSearch(q), 320);
+}
+
+async function doWingetSearch(q) {
+  try {
+    wingetLastResults = await api('GET', `/admin/api/winget/search?q=${encodeURIComponent(q)}`);
+    renderWingetSearchResults();
+  } catch (e) {
+    document.getElementById('winget-search-results').innerHTML =
+      `<div class="panel-error">Fehler: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderWingetSearchResults() {
+  const el = document.getElementById('winget-search-results');
+  if (!wingetLastResults?.length) {
+    el.innerHTML = '<div class="panel-hint">Keine Pakete gefunden.</div>';
+    return;
+  }
+  el.innerHTML = wingetLastResults.map(r => {
+    const already = r.enabled || store[r.id] !== undefined;
+    const verLine = r.latest_version ? `v${esc(r.latest_version)}` : '';
+    const pubLine = r.publisher ? esc(r.publisher) : '';
+    const sub = [pubLine, verLine, esc(r.id)].filter(Boolean).join(' · ');
+    return `<div class="result-row ${already?'added':''}">
+      <div class="result-info">
+        <div class="result-name">${esc(r.name||r.id)}</div>
+        <div class="result-sub">${sub}</div>
+      </div>
+      ${already
+        ? '<div class="result-tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>'
+        : `<button class="result-add" onclick="activateWingetFromSearch(${jsStr(r.id)},${jsStr(r.name||r.id)},${jsStr(r.publisher||'')},${jsStr(r.latest_version||'')})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>`}
+    </div>`;
+  }).join('');
+}
+
+async function activateWingetFromSearch(id, name, publisher, version) {
+  try {
+    await api('POST', '/admin/api/winget/activate', {
+      id, display_name: name || id,
+      category: 'Allgemein',
+      publisher: publisher || '',
+      latest_version: version || '',
+    });
+    toast(`„${name||id}" aktiviert`);
+    // Lokalen store updaten und neu rendern
+    store[id] = {
+      display_name: name || id,
+      category: 'Allgemein',
+      type: 'winget',
+      winget_publisher: publisher || null,
+    };
+    render();
+    renderWingetSearchResults();
+    refreshWingetDiscoveryCount();
+    if (wingetDiscoveryLoaded) loadWingetDiscovery();
+  } catch (e) {}
+}
+
+function toggleWingetDiscovery() {
+  const list = document.getElementById('winget-discovery-list');
+  const arrow = document.getElementById('winget-discovery-arrow');
+  const open = list.style.display !== 'none';
+  if (open) {
+    list.style.display = 'none';
+    arrow.textContent = '▶';
+  } else {
+    list.style.display = '';
+    arrow.textContent = '▼';
+    if (!wingetDiscoveryLoaded) loadWingetDiscovery();
+  }
+}
+
+async function loadWingetDiscovery() {
+  const list = document.getElementById('winget-discovery-list');
+  list.innerHTML = '<div class="loading-block"><span class="spinner"></span></div>';
+  try {
+    const data = await api('GET', '/admin/api/winget/discovery');
+    wingetDiscoveryLoaded = true;
+    renderWingetDiscovery(data.items || []);
+  } catch (e) {
+    list.innerHTML = `<div class="panel-error">Fehler: ${esc(e.message)}</div>`;
+  }
+}
+
+function _confidenceLabel(c) {
+  return ({
+    high:   '<span class="conf-badge conf-high">sicher</span>',
+    medium: '<span class="conf-badge conf-medium">wahrscheinlich</span>',
+    low:    '<span class="conf-badge conf-low">unsicher</span>',
+    none:   '<span class="conf-badge conf-none">kein Match</span>',
+  })[c] || '';
+}
+
+function renderWingetDiscovery(items) {
+  const list = document.getElementById('winget-discovery-list');
+  if (!items.length) {
+    list.innerHTML = '<div class="empty-mini">Keine unverwalteten Pakete in der Flotte.</div>';
+    return;
+  }
+  list.innerHTML = items.map(item => {
+    const wid = item.winget_id || '';
+    const display = item.display_name || wid || '—';
+    const count = item.install_count || 0;
+    const conf = item.confidence || 'none';
+    const sourceTag = item.source === 'winget_scan'
+      ? '<span class="src-tag src-winget">winget</span>'
+      : '<span class="src-tag src-tactical">software-scan</span>';
+    const confBadge = item.source === 'winget_scan' ? '' : _confidenceLabel(conf);
+    const idLine = wid ? `→ <code>${esc(wid)}</code>` : '';
+    const subLine = `auf ${count} ${count === 1 ? 'Rechner' : 'Rechnern'} ${idLine}`;
+    const canActivate = wid && conf !== 'none';
+    const action = canActivate
+      ? `<button class="result-add" title="Aktivieren" onclick="activateWingetDiscovery(${jsStr(wid)},${jsStr(display)})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>`
+      : `<span class="discovery-manual" title="Kein winget-Match — manuell hinzufügen">manuell</span>`;
+    return `<div class="result-row">
+      <div class="result-info">
+        <div class="result-name">${esc(display)} ${sourceTag} ${confBadge}</div>
+        <div class="result-sub">${subLine}</div>
+      </div>
+      ${action}
+    </div>`;
+  }).join('');
+}
+
+async function activateWingetDiscovery(id, displayName) {
+  try {
+    await api('POST', '/admin/api/winget/activate', {
+      id, display_name: displayName || id, category: 'Allgemein',
+    });
+    toast(`„${displayName||id}" aktiviert`);
+    store[id] = {display_name: displayName||id, category:'Allgemein', type:'winget'};
+    render();
+    refreshWingetDiscoveryCount();
+    loadWingetDiscovery();
+  } catch (e) {}
+}
+
+async function refreshWingetDiscoveryCount() {
+  try {
+    const r = await api('GET', '/admin/api/winget/discovery-count');
+    const count = r.count || 0;
+    const lbl = document.getElementById('winget-discovery-count');
+    if (lbl) lbl.textContent = String(count);
+    const banner = document.getElementById('winget-banner');
+    if (banner) {
+      if (count > 0) {
+        banner.style.display = '';
+        document.getElementById('winget-banner-count').textContent = String(count);
+      } else {
+        banner.style.display = 'none';
+      }
+    }
+  } catch (e) {}
+}
+
+function openWingetTabFromBanner() {
+  openSearch();
+  setAddMode('winget');
+  // Auto-expand discovery section
+  setTimeout(() => {
+    const list = document.getElementById('winget-discovery-list');
+    if (list && list.style.display === 'none') toggleWingetDiscovery();
+  }, 220);
 }
 
 // ── Confirm modal ────────────────────────────────────────────────────────────

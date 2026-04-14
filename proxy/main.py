@@ -10,9 +10,15 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+
 import admin_auth
 import database
 import file_uploads
+import winget_catalog
+import winget_scanner
+import winget_enrichment
 from auth import verify_download_token
 from config import RUNTIME_KEYS, get_settings, runtime_int, runtime_value
 from middleware.audit_logger import audit_log_middleware
@@ -63,6 +69,30 @@ async def _seed_settings_from_env():
         logger.info("Settings seeded from .env: %s", list(to_apply.keys()))
 
 
+async def _winget_catalog_refresh_job():
+    """Lädt einmal pro Tag den winget-Source-Cache von Microsoft runter."""
+    try:
+        await winget_catalog.refresh_cache(force=True)
+    except Exception as e:
+        logger.exception("winget catalog refresh job crashed: %s", e)
+
+
+async def _winget_nightly_job():
+    """APScheduler-Job-Wrapper: schwerer asyncio-Code, eigene Exception-Boundary
+    damit ein Fehler den Scheduler nicht killt."""
+    try:
+        await winget_scanner.run_nightly_scan()
+    except Exception as e:
+        logger.exception("nightly winget scan job crashed: %s", e)
+
+
+async def _winget_enrichment_job():
+    try:
+        await winget_enrichment.run_enrichment_job()
+    except Exception as e:
+        logger.exception("winget enrichment job crashed: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.init_db()
@@ -75,7 +105,44 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Cleanup fehlgeschlagen: %s", e)
     os.makedirs(DOWNLOADS_DIR, exist_ok=True)
-    yield
+
+    # APScheduler für nightly winget Scan + Enrichment + Catalog-Refresh.
+    # Reihenfolge: Catalog refresh zuerst, dann scan, dann enrichment (das den
+    # frischen Catalog mit dem Scan kombiniert).
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler.add_job(
+        _winget_catalog_refresh_job,
+        CronTrigger(hour=1, minute=30),
+        id="winget_catalog_refresh",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _winget_nightly_job,
+        CronTrigger(hour=2, minute=0),
+        id="winget_nightly_scan",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _winget_enrichment_job,
+        CronTrigger(hour=2, minute=30),
+        id="winget_enrichment",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.start()
+    app.state.scheduler = scheduler
+    logger.info("APScheduler started with %d job(s)", len(scheduler.get_jobs()))
+
+    try:
+        yield
+    finally:
+        scheduler.shutdown(wait=False)
+        logger.info("APScheduler stopped")
 
 
 app = FastAPI(

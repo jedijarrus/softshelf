@@ -148,8 +148,36 @@ async def init_db():
                 reason     TEXT
             );
 
-            CREATE INDEX IF NOT EXISTS idx_install_log_agent ON install_log(agent_id, id DESC);
-            CREATE INDEX IF NOT EXISTS idx_audit_log_ts      ON audit_log(ts);
+            CREATE TABLE IF NOT EXISTS agent_winget_state (
+                agent_id          TEXT NOT NULL,
+                winget_id         TEXT NOT NULL,
+                installed_version TEXT,
+                available_version TEXT,
+                source            TEXT,
+                scanned_at        TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (agent_id, winget_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS agent_scan_meta (
+                agent_id             TEXT PRIMARY KEY,
+                last_scan_at         TEXT,
+                last_status          TEXT,
+                last_error           TEXT,
+                consecutive_failures INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS discovery_enrichment (
+                display_name  TEXT PRIMARY KEY,
+                winget_id     TEXT,
+                confidence    TEXT,
+                install_count INTEGER NOT NULL DEFAULT 0,
+                checked_at    TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_install_log_agent  ON install_log(agent_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_agent_winget_id    ON agent_winget_state(winget_id);
+            CREATE INDEX IF NOT EXISTS idx_agent_winget_avail ON agent_winget_state(available_version) WHERE available_version IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_audit_log_ts       ON audit_log(ts);
             CREATE INDEX IF NOT EXISTS idx_build_log_ts      ON build_log(started_at DESC);
             CREATE INDEX IF NOT EXISTS idx_admin_sessions_user ON admin_sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_admin_sessions_exp  ON admin_sessions(expires_at);
@@ -165,7 +193,7 @@ async def init_db():
         if "token_version" not in cols:
             await db.execute("ALTER TABLE agents ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1")
 
-        # Migration: custom-package-Felder
+        # Migration: custom-package-Felder + winget-Felder
         async with db.execute("PRAGMA table_info(packages)") as cur:
             pkg_cols = {row[1] for row in await cur.fetchall()}
         for col, ddl in [
@@ -179,6 +207,8 @@ async def init_db():
             ("current_version_id", "INTEGER"),
             ("archive_type",       "TEXT NOT NULL DEFAULT 'single'"),
             ("entry_point",        "TEXT"),
+            ("winget_version",     "TEXT"),
+            ("winget_publisher",   "TEXT"),
         ]:
             if col not in pkg_cols:
                 await db.execute(f"ALTER TABLE packages ADD COLUMN {col} {ddl}")
@@ -193,6 +223,14 @@ async def init_db():
         ]:
             if col not in pv_cols:
                 await db.execute(f"ALTER TABLE package_versions ADD COLUMN {col} {ddl}")
+
+        # Migration: install_count in discovery_enrichment für ältere Installationen
+        async with db.execute("PRAGMA table_info(discovery_enrichment)") as cur:
+            de_cols = {row[1] for row in await cur.fetchall()}
+        if "install_count" not in de_cols:
+            await db.execute(
+                "ALTER TABLE discovery_enrichment ADD COLUMN install_count INTEGER NOT NULL DEFAULT 0"
+            )
 
         await db.commit()
 
@@ -295,7 +333,7 @@ async def cleanup_old_logs(days: int):
 _PKG_COLS = (
     "name, display_name, category, type, filename, sha256, size_bytes, "
     "install_args, uninstall_cmd, detection_name, current_version_id, "
-    "archive_type, entry_point"
+    "archive_type, entry_point, winget_version, winget_publisher"
 )
 
 
@@ -1253,3 +1291,352 @@ async def get_user_sessions(user_id: int) -> list[dict]:
             (user_id,),
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
+
+
+# ── Winget Packages ───────────────────────────────────────────────────────────
+
+
+async def upsert_winget_package(
+    name: str,
+    display_name: str,
+    category: str,
+    publisher: str | None = None,
+    winget_version: str | None = None,
+):
+    """Winget-Paket einfügen oder aktualisieren. `name` ist die winget
+    PackageIdentifier (z. B. 'Mozilla.Firefox')."""
+    async with _db() as db:
+        await db.execute(
+            """
+            INSERT INTO packages (
+                name, display_name, category, type,
+                winget_publisher, winget_version
+            )
+            VALUES (?, ?, ?, 'winget', ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                display_name     = excluded.display_name,
+                category         = excluded.category,
+                type             = 'winget',
+                winget_publisher = excluded.winget_publisher,
+                winget_version   = excluded.winget_version,
+                updated_at       = datetime('now')
+            """,
+            (name, display_name, category, publisher, winget_version),
+        )
+        await db.commit()
+
+
+async def update_winget_package(
+    name: str,
+    display_name: str,
+    category: str,
+    winget_version: str | None,
+):
+    async with _db() as db:
+        await db.execute(
+            """
+            UPDATE packages
+            SET display_name = ?, category = ?, winget_version = ?,
+                updated_at = datetime('now')
+            WHERE name = ? AND type = 'winget'
+            """,
+            (display_name, category, winget_version, name),
+        )
+        await db.commit()
+
+
+async def get_whitelisted_winget_ids() -> set[str]:
+    """Set aller winget PackageIdentifier in der Whitelist — für Discovery-
+    Filtering (zeige nur das was *nicht* whitelisted ist)."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT name FROM packages WHERE type = 'winget'"
+        ) as cur:
+            return {r[0] for r in await cur.fetchall()}
+
+
+# ── Agent Winget State ────────────────────────────────────────────────────────
+
+
+async def replace_agent_winget_state(
+    agent_id: str, rows: list[dict]
+):
+    """Atomarer Replace aller winget-State-Rows eines Agents.
+    `rows` ist eine Liste von dicts mit den Keys
+    `winget_id, installed_version, available_version, source`.
+    Wird nach jedem Scan aufgerufen und ersetzt den kompletten State des Agents.
+    """
+    async with _db() as db:
+        await db.execute(
+            "DELETE FROM agent_winget_state WHERE agent_id = ?", (agent_id,)
+        )
+        if rows:
+            await db.executemany(
+                "INSERT INTO agent_winget_state "
+                "(agent_id, winget_id, installed_version, available_version, source, scanned_at) "
+                "VALUES (?, ?, ?, ?, ?, datetime('now'))",
+                [
+                    (
+                        agent_id,
+                        r["winget_id"],
+                        r.get("installed_version"),
+                        r.get("available_version"),
+                        r.get("source"),
+                    )
+                    for r in rows
+                ],
+            )
+        await db.commit()
+
+
+async def get_agent_winget_state(agent_id: str) -> dict[str, dict]:
+    """Liefert den aktuellen winget-State eines Agents als dict[winget_id → row]."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT winget_id, installed_version, available_version, source, scanned_at "
+            "FROM agent_winget_state WHERE agent_id = ?",
+            (agent_id,),
+        ) as cur:
+            return {r["winget_id"]: dict(r) for r in await cur.fetchall()}
+
+
+async def upsert_scan_meta(
+    agent_id: str,
+    status: str,
+    error: str | None = None,
+):
+    """
+    Schreibt das Scan-Ergebnis in agent_scan_meta. Bei `status='ok'` wird
+    consecutive_failures auf 0 zurückgesetzt, sonst inkrementiert.
+    """
+    async with _db() as db:
+        if status == "ok":
+            await db.execute(
+                "INSERT INTO agent_scan_meta "
+                "(agent_id, last_scan_at, last_status, last_error, consecutive_failures) "
+                "VALUES (?, datetime('now'), 'ok', NULL, 0) "
+                "ON CONFLICT(agent_id) DO UPDATE SET "
+                "last_scan_at = datetime('now'), "
+                "last_status = 'ok', "
+                "last_error = NULL, "
+                "consecutive_failures = 0",
+                (agent_id,),
+            )
+        else:
+            await db.execute(
+                "INSERT INTO agent_scan_meta "
+                "(agent_id, last_scan_at, last_status, last_error, consecutive_failures) "
+                "VALUES (?, datetime('now'), ?, ?, 1) "
+                "ON CONFLICT(agent_id) DO UPDATE SET "
+                "last_scan_at = datetime('now'), "
+                "last_status = excluded.last_status, "
+                "last_error = excluded.last_error, "
+                "consecutive_failures = consecutive_failures + 1",
+                (agent_id, status, error),
+            )
+        await db.commit()
+
+
+async def get_scan_meta(agent_id: str) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT agent_id, last_scan_at, last_status, last_error, consecutive_failures "
+            "FROM agent_scan_meta WHERE agent_id = ?",
+            (agent_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def get_all_scan_meta() -> list[dict]:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT agent_id, last_scan_at, last_status, last_error, consecutive_failures "
+            "FROM agent_scan_meta"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_agents_due_for_scan(
+    online_threshold_seconds: int = 300,
+    skip_failures_above: int = 7,
+) -> list[dict]:
+    """
+    Gibt Agents zurück die für den nightly-Scan in Frage kommen:
+      - last_seen <= online_threshold_seconds (Kiosk-Client war kürzlich online)
+      - nicht gebannt
+      - consecutive_failures < skip_failures_above
+    """
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT a.agent_id, a.hostname, a.last_seen, "
+            "       COALESCE(m.consecutive_failures, 0) AS failures "
+            "FROM agents a "
+            "LEFT JOIN agent_scan_meta m ON m.agent_id = a.agent_id "
+            "LEFT JOIN agent_blocklist b ON b.agent_id = a.agent_id "
+            "WHERE b.agent_id IS NULL "
+            "  AND (julianday('now') - julianday(a.last_seen)) * 86400 <= ? "
+            "  AND COALESCE(m.consecutive_failures, 0) < ?",
+            (online_threshold_seconds, skip_failures_above),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def reset_scan_failures(agent_id: str):
+    """Setzt consecutive_failures auf 0 — wird vom manuellen Re-Scan-Button
+    aufgerufen, damit ein als 'gestoppt' markierter Agent wieder am nightly
+    Batch teilnimmt."""
+    async with _db() as db:
+        await db.execute(
+            "UPDATE agent_scan_meta SET consecutive_failures = 0 WHERE agent_id = ?",
+            (agent_id,),
+        )
+        await db.commit()
+
+
+# ── Discovery (Fleet) ─────────────────────────────────────────────────────────
+
+
+async def query_winget_discovery() -> list[dict]:
+    """
+    Liefert alle winget-IDs die irgendwo in der Flotte installiert sind,
+    aber NICHT in der packages-Whitelist. Sortiert nach Install-Count
+    absteigend.
+    """
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT s.winget_id, "
+            "       COUNT(DISTINCT s.agent_id) AS install_count, "
+            "       MAX(s.installed_version) AS sample_version "
+            "FROM agent_winget_state s "
+            "LEFT JOIN packages p "
+            "  ON p.name = s.winget_id AND p.type = 'winget' "
+            "WHERE p.name IS NULL "
+            "GROUP BY s.winget_id "
+            "ORDER BY install_count DESC, s.winget_id ASC"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_winget_discovery_count() -> int:
+    """Anzahl distincter winget-IDs in der Flotte ohne Whitelist-Match.
+    Wird vom Header-Banner einmal pro Page-Load abgerufen."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT COUNT(DISTINCT s.winget_id) "
+            "FROM agent_winget_state s "
+            "LEFT JOIN packages p "
+            "  ON p.name = s.winget_id AND p.type = 'winget' "
+            "WHERE p.name IS NULL"
+        ) as cur:
+            return (await cur.fetchone())[0] or 0
+
+
+async def query_software_discovery() -> list[dict]:
+    """
+    Bonus-Discovery: liefert alle Tactical-software-scan Display-Namen aus
+    dem discovery_enrichment Cache, gefiltert auf Einträge mit install_count > 0
+    UND nicht-whitelisted winget_id (oder gar keine winget_id zugewiesen).
+    Reihenfolge: install_count desc, dann confidence (high zuerst).
+    """
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT e.display_name, e.winget_id, e.confidence, e.install_count, e.checked_at "
+            "FROM discovery_enrichment e "
+            "LEFT JOIN packages p "
+            "  ON p.name = e.winget_id AND p.type = 'winget' "
+            "WHERE e.install_count > 0 "
+            "  AND p.name IS NULL "
+            "ORDER BY e.install_count DESC, "
+            "         CASE e.confidence "
+            "           WHEN 'high'   THEN 0 "
+            "           WHEN 'medium' THEN 1 "
+            "           WHEN 'low'    THEN 2 "
+            "           ELSE 3 END, "
+            "         e.display_name"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+# ── Discovery Enrichment Cache ────────────────────────────────────────────────
+
+
+async def upsert_enrichment(
+    display_name: str,
+    winget_id: str | None,
+    confidence: str,
+    install_count: int,
+):
+    """
+    Schreibt einen Enrichment-Cache-Eintrag. Wird vom täglichen
+    enrichment Job aufgerufen — install_count ist die Anzahl Agents in
+    der Flotte auf denen dieser Display-Name aktuell installiert ist.
+    """
+    async with _db() as db:
+        await db.execute(
+            "INSERT INTO discovery_enrichment "
+            "(display_name, winget_id, confidence, install_count, checked_at) "
+            "VALUES (?, ?, ?, ?, datetime('now')) "
+            "ON CONFLICT(display_name) DO UPDATE SET "
+            "winget_id = excluded.winget_id, "
+            "confidence = excluded.confidence, "
+            "install_count = excluded.install_count, "
+            "checked_at = datetime('now')",
+            (display_name, winget_id, confidence, install_count),
+        )
+        await db.commit()
+
+
+async def get_enrichment(display_name: str) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT display_name, winget_id, confidence, install_count, checked_at "
+            "FROM discovery_enrichment WHERE display_name = ?",
+            (display_name,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def reset_enrichment_counts():
+    """Setzt alle install_count auf 0. Wird am Anfang jedes enrichment
+    Job runs aufgerufen, danach werden die aktuellen Counts gesetzt — so
+    fallen Display-Namen die nicht mehr in der Flotte sind aus der
+    Discovery-Liste raus (install_count = 0)."""
+    async with _db() as db:
+        await db.execute("UPDATE discovery_enrichment SET install_count = 0")
+        await db.commit()
+
+
+async def cleanup_stale_enrichment(days: int = 30):
+    """Löscht discovery_enrichment Einträge die länger als N Tage nicht
+    mehr aktualisiert wurden UND install_count = 0 haben. Verhindert
+    unbegrenztes DB-Wachstum durch Software die mal kurz drauf war und
+    dann wieder verschwand."""
+    async with _db() as db:
+        await db.execute(
+            "DELETE FROM discovery_enrichment "
+            "WHERE install_count = 0 "
+            "  AND checked_at < datetime('now', ?)",
+            (f"-{days} days",),
+        )
+        await db.commit()
+
+
+async def cleanup_winget_state_for_package(package_name: str):
+    """Wird beim Disable eines winget-Pakets aufgerufen, um State-Rows zu
+    entfernen die niemand mehr referenziert. Nicht strikt nötig — der State
+    bleibt sonst im DB liegen und taucht beim nächsten Scan wieder auf —
+    aber sauber."""
+    async with _db() as db:
+        await db.execute(
+            "DELETE FROM agent_winget_state WHERE winget_id = ?", (package_name,)
+        )
+        await db.commit()

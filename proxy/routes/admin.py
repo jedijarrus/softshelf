@@ -22,6 +22,9 @@ import httpx
 import admin_auth
 import database
 import file_uploads
+import winget_catalog
+import winget_enrichment
+import winget_scanner
 from config import (
     RUNTIME_KEYS,
     get_settings,
@@ -50,6 +53,7 @@ _HELP_PATH = os.path.join(os.path.dirname(__file__), "..", "templates", "admin_h
 _LOGIN_PATH = os.path.join(os.path.dirname(__file__), "..", "templates", "admin_login.html")
 
 _PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,99}$")
+_AGENT_ID_RE = re.compile(r"^[a-zA-Z0-9\-]{8,64}$")
 _TEXT_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,80}$")
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9._\-@]{2,80}$")
 # Versions-Label: alphanumerisch, Punkt, Bindestrich, Unterstrich
@@ -468,6 +472,11 @@ class EnabledPackage(BaseModel):
     install_args: str | None = None
     uninstall_cmd: str | None = None
     detection_name: str | None = None
+    current_version_id: int | None = None
+    archive_type: str | None = None
+    entry_point: str | None = None
+    winget_publisher: str | None = None
+    winget_version: str | None = None
 
 
 class SearchResult(BaseModel):
@@ -591,8 +600,8 @@ async def update_package(name: str, body: EnableRequest):
     if not pkg:
         raise HTTPException(status_code=404, detail="Paket nicht aktiv")
 
-    # Für custom-Pakete: display_name und category updaten, Rest unangetastet
-    if pkg.get("type") == "custom":
+    ptype = pkg.get("type") or "choco"
+    if ptype == "custom":
         await database.upsert_custom_package(
             name=name,
             display_name=body.display_name or pkg["display_name"],
@@ -603,6 +612,13 @@ async def update_package(name: str, body: EnableRequest):
             install_args=pkg.get("install_args") or "",
             uninstall_cmd=pkg.get("uninstall_cmd"),
             detection_name=pkg.get("detection_name"),
+        )
+    elif ptype == "winget":
+        await database.update_winget_package(
+            name=name,
+            display_name=body.display_name or pkg["display_name"],
+            category=body.category,
+            winget_version=pkg.get("winget_version"),
         )
     else:
         await database.upsert_package(name, body.display_name or name, body.category)
@@ -1907,3 +1923,189 @@ async def _run_build_async(build_id: int, builder_url: str, proxy_url: str, vers
         status = "failed"
     finally:
         await database.finish_build_log(build_id, status, log)
+
+
+# ── Winget ────────────────────────────────────────────────────────────────────
+
+# winget PackageIdentifier (z. B. 'Mozilla.Firefox', 'Microsoft.VisualStudioCode')
+_WINGET_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,199}$")
+
+
+class WingetSearchResult(BaseModel):
+    id: str
+    name: str
+    publisher: str
+    latest_version: str
+    source: str
+    enabled: bool
+
+
+class WingetActivateRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=200)
+    display_name: str = Field(min_length=1, max_length=80)
+    category: str = Field(default="Allgemein", min_length=1, max_length=40)
+    publisher: str = Field(default="", max_length=120)
+    latest_version: str = Field(default="", max_length=50)
+
+    @field_validator("id")
+    @classmethod
+    def _check_id(cls, v: str) -> str:
+        if not _WINGET_ID_RE.fullmatch(v):
+            raise ValueError("Ungültige winget-PackageIdentifier")
+        return v
+
+    @field_validator("display_name", "category")
+    @classmethod
+    def _check_text(cls, v: str) -> str:
+        if not _TEXT_RE.fullmatch(v):
+            raise ValueError("Text enthält ungültige Zeichen")
+        return v
+
+    @field_validator("publisher", "latest_version")
+    @classmethod
+    def _check_optional(cls, v: str) -> str:
+        if v and not _NO_CTRL_RE.fullmatch(v):
+            raise ValueError("Feld enthält Steuerzeichen")
+        return v
+
+
+@router.get(
+    "/admin/api/winget/search",
+    response_model=list[WingetSearchResult],
+    dependencies=[Depends(_require_admin)],
+)
+async def winget_search(q: str = Query(default="", min_length=0, max_length=100)):
+    """Sucht im Microsoft winget-Catalog. Leere Query liefert leere Liste."""
+    if not q.strip():
+        return []
+    try:
+        results = await winget_catalog.search(q)
+    except Exception:
+        logger.exception("winget catalog search failed")
+        raise HTTPException(status_code=502, detail="winget-Catalog nicht erreichbar")
+
+    enabled_ids = await database.get_whitelisted_winget_ids()
+    return [
+        WingetSearchResult(
+            id=r["id"],
+            name=r["name"],
+            publisher=r["publisher"],
+            latest_version=r["latest_version"],
+            source=r["source"],
+            enabled=r["id"] in enabled_ids,
+        )
+        for r in results
+    ]
+
+
+@router.post("/admin/api/winget/activate", dependencies=[Depends(_require_admin)])
+async def winget_activate(body: WingetActivateRequest):
+    """
+    Whitelistet ein winget-Paket. Falls Felder nicht angegeben sind, werden
+    sie aus dem Catalog nachgeholt.
+    """
+    name = body.display_name
+    publisher = body.publisher
+    latest_version = body.latest_version
+    if not name or not publisher or not latest_version:
+        try:
+            details = await winget_catalog.get_details(body.id)
+        except Exception:
+            details = None
+        if details:
+            name = name or details["name"]
+            publisher = publisher or details["publisher"]
+            latest_version = latest_version or details["latest_version"]
+
+    await database.upsert_winget_package(
+        name=body.id,
+        display_name=name or body.id,
+        category=body.category,
+        publisher=publisher or None,
+        winget_version=None,  # MVP: immer latest, kein Pin
+    )
+    rows = await database.get_packages()
+    return {"ok": True, "total": len(rows)}
+
+
+@router.get("/admin/api/winget/discovery", dependencies=[Depends(_require_admin)])
+async def winget_discovery():
+    """
+    Liefert die Discovery-Liste:
+      - Primary: winget-IDs aus agent_winget_state, die nicht whitelisted sind
+      - Bonus: Tactical-software-scan Display-Namen aus discovery_enrichment
+               (mit aufgelöstem winget_id + confidence)
+    Beide Quellen werden zu einer gemischten Liste kombiniert.
+    """
+    primary = await database.query_winget_discovery()
+    bonus = await database.query_software_discovery()
+
+    # Primary in Map für O(1) Dedup
+    primary_ids = {row["winget_id"] for row in primary}
+
+    items = []
+    for row in primary:
+        items.append({
+            "source":         "winget_scan",
+            "winget_id":      row["winget_id"],
+            "display_name":   row["winget_id"],  # ohne enrichment-Hilfe nur die ID
+            "install_count":  row["install_count"],
+            "sample_version": row.get("sample_version") or "",
+            "confidence":     "high",  # winget-scan = direkter Treffer
+        })
+
+    for row in bonus:
+        wid = row.get("winget_id")
+        if wid and wid in primary_ids:
+            # Bereits via primary abgedeckt, dem Bonus-Eintrag nichts neues
+            continue
+        items.append({
+            "source":         "tactical_scan",
+            "winget_id":      wid or "",
+            "display_name":   row["display_name"],
+            "install_count":  row["install_count"],
+            "sample_version": "",
+            "confidence":     row.get("confidence") or "none",
+        })
+
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/admin/api/winget/discovery-count", dependencies=[Depends(_require_admin)])
+async def winget_discovery_count():
+    """Zahl für das Header-Banner. Billig, einmal pro Page-Load."""
+    count = await database.get_winget_discovery_count()
+    return {"count": count}
+
+
+@router.post("/admin/api/winget/rescan/{agent_id}", dependencies=[Depends(_require_admin)])
+async def winget_rescan(agent_id: str):
+    """
+    Triggert einen sofortigen targeted Re-Scan eines Agents. Setzt
+    consecutive_failures zurück damit Agents die aus dem nightly-Batch
+    rausgefallen sind wieder am nächsten Run teilnehmen.
+    """
+    if not _AGENT_ID_RE.fullmatch(agent_id):
+        raise HTTPException(status_code=400, detail="Ungültige Agent-ID")
+    agent = await database.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent nicht gefunden")
+
+    await database.reset_scan_failures(agent_id)
+    # Im Hintergrund starten — Admin-UI muss nicht warten
+    _spawn_bg(winget_scanner.scan_agent(agent_id))
+    return {"ok": True, "started": True}
+
+
+@router.post("/admin/api/winget/run-nightly", dependencies=[Depends(_require_admin)])
+async def winget_run_nightly_now():
+    """Manueller Trigger für den nightly-Scan (für Tests + on-demand)."""
+    _spawn_bg(winget_scanner.run_nightly_scan())
+    return {"ok": True, "started": True}
+
+
+@router.post("/admin/api/winget/run-enrichment", dependencies=[Depends(_require_admin)])
+async def winget_run_enrichment_now():
+    """Manueller Trigger für den Enrichment-Job."""
+    _spawn_bg(winget_enrichment.run_enrichment_job())
+    return {"ok": True, "started": True}

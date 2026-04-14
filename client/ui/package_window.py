@@ -428,9 +428,11 @@ class _PackageCard(QWidget):
         # Quelle + Status in der zweiten Zeile.
         #   - choco  → "Chocolatey ↗" (Link zu community.chocolatey.org)
         #   - custom → "Eigenes Paket"
-        # Wenn installiert: + " · Version X" oder + " · Installiert"
+        #   - winget → "winget" (kein Link)
         if pkg.type == "custom":
             source_html = '<span style="color:#71717a">Eigenes Paket</span>'
+        elif pkg.type == "winget":
+            source_html = '<span style="color:#71717a">winget</span>'
         else:
             url = f"https://community.chocolatey.org/packages/{_h(pkg.name)}"
             source_html = (
@@ -472,13 +474,15 @@ class _PackageCard(QWidget):
         sub_lbl = QLabel(sub_html)
         sub_lbl.setTextFormat(Qt.RichText)
         # Nur die Chocolatey-URL ist eine vertrauenswürdige externe URL.
-        # Bei custom-Paketen gibt es keinen Link → Open-External abdrehen,
-        # damit auch versehentliche file:// Links aus Tactical-Daten nicht
-        # geöffnet werden.
-        sub_lbl.setOpenExternalLinks(pkg.type != "custom")
+        # Bei custom- und winget-Paketen gibt es keinen Link → Open-External
+        # abdrehen, damit auch versehentliche file:// Links aus Tactical- bzw.
+        # Catalog-Daten nicht geöffnet werden.
+        sub_lbl.setOpenExternalLinks(pkg.type == "choco")
         sub_lbl.setFont(QFont(FONT, 9))
         sub_lbl.setStyleSheet(f"color: {C_FG_4}; background: transparent;")
-        sub_lbl.setCursor(Qt.IBeamCursor if pkg.type == "custom" else Qt.ArrowCursor)
+        sub_lbl.setCursor(
+            Qt.IBeamCursor if pkg.type in ("custom", "winget") else Qt.ArrowCursor
+        )
         info.addWidget(sub_lbl)
 
         # Publisher als Tooltip wenn vorhanden — Tooltips sind Plain-Text by default
@@ -888,6 +892,19 @@ class PackageWindow(QWidget):
 
         self._render(pkgs)
 
+    @staticmethod
+    def _sort_key(p: Package) -> tuple:
+        """Sort-Key für die Paket-Liste.
+
+        Reihenfolge:
+          1. Pakete mit verfügbarem Update (update_available=True) zuerst
+          2. Innerhalb jeder Gruppe alphabetisch nach display_name
+        """
+        return (
+            0 if p.update_available else 1,
+            (p.display_name or p.name or "").lower(),
+        )
+
     def _render(self, packages: list[Package]):
         self._clear_list()
 
@@ -914,11 +931,11 @@ class PackageWindow(QWidget):
                 self._list_l.insertWidget(pos, _CatHeader(cat, len(pkgs), first=first))
                 pos  += 1
                 first = False
-                for pkg in pkgs:
+                for pkg in sorted(pkgs, key=self._sort_key):
                     self._list_l.insertWidget(pos, _PackageCard(pkg, self._install, self._uninstall))
                     pos += 1
         else:
-            for i, pkg in enumerate(packages):
+            for i, pkg in enumerate(sorted(packages, key=self._sort_key)):
                 self._list_l.insertWidget(i, _PackageCard(pkg, self._install, self._uninstall))
 
     def _show_loading(self):
