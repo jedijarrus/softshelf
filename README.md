@@ -14,16 +14,36 @@ from a browser.
 
 ## What you get
 
-- **Curated whitelist** of Chocolatey packages plus self-hosted MSI/EXE
-  installers and multi-file program folders (uploaded as ZIP).
+- **Curated whitelist** combining three package sources side-by-side:
+  - **Chocolatey** packages (browse and enable from `community.chocolatey.org`),
+  - **Self-hosted MSI/EXE installers** and multi-file program folders
+    (uploaded as ZIP), and
+  - **Microsoft winget** packages — search the official catalog locally from
+    a daily-refreshed mirror of `cdn.winget.microsoft.com/cache/source.msix`,
+    enable a package with one click, and have the agent install/upgrade
+    silently as SYSTEM via `winget install --scope machine`.
+- **Per-agent winget inventory** built nightly. A scheduler triggers
+  `winget export` + `winget upgrade` on every online agent, dedupes the result
+  with the Tactical software-scan, and surfaces it as a single deduplicated
+  per-agent software view in the admin UI — including which packages are
+  managed by Softshelf, which are installed but unmanaged, and which have
+  upgrades waiting.
+- **Fleet discovery** that turns the nightly scan into actionable suggestions:
+  any winget package installed on at least one agent but not yet whitelisted
+  shows up in a one-click *Activate* list. A bonus enrichment pass takes
+  Tactical software-scan display names and fuzzy-matches them against the
+  winget catalog with a confidence label.
 - **Silent install + uninstall** via Tactical RMM's agent command channel.
   The end user never sees a UAC prompt, never types credentials, never waits
-  for a ticket.
+  for a ticket. Choco, custom and winget all share the same dispatch path.
 - **Version tracking** per uploaded package. Softshelf knows which agent runs
   which version, and lets an admin push updates to every outdated endpoint
-  with a single click.
-- **Admin UI** in the browser: search Chocolatey, enable/disable packages,
-  upload custom installers, watch the distribution tab, browse the audit log.
+  with a single click. For winget packages the upgrade state comes straight
+  from `winget upgrade`, no manual tracking needed.
+- **Admin UI** in the browser: search Chocolatey + winget, enable/disable
+  packages, upload custom installers, browse a per-agent software detail page
+  with install/upgrade/uninstall buttons, watch the distribution tab, browse
+  the audit log.
 - **Self-contained clients** — a Windows tray app and a tkinter-based
   installer, built inside the repo via a Wine + PyInstaller container.
 - **CI branding** — three independent settings let you brand each surface
@@ -84,15 +104,24 @@ admin workflows.
 
 1. End user clicks *Install Firefox* in the tray app.
 2. The client `POST`s to `/api/v1/install` with its machine token.
-3. The proxy looks the package up in its whitelist.
+3. The proxy looks the package up in its whitelist and dispatches by type:
 4. **Chocolatey package?** The proxy tells Tactical to run `choco install`
    on the agent — done.
-5. **Custom MSI/EXE?** The proxy mints a short-lived signed download URL
+5. **Winget package?** The proxy resolves the bundled `winget.exe` from the
+   per-machine WindowsApps directory (the user-shim isn't on SYSTEM PATH),
+   builds a PowerShell wrapper around
+   `winget install --id <ID> --scope machine --silent --accept-package-agreements --accept-source-agreements --disable-interactivity -h`,
+   and dispatches it via Tactical's command channel. After the command
+   returns, the proxy chains a targeted re-scan so the kiosk shows fresh
+   state within seconds. If the agent already has the package, the same
+   button transparently runs `winget upgrade` instead.
+6. **Custom MSI/EXE?** The proxy mints a short-lived signed download URL
    (5-minute JWT, bound to package hash + agent ID), builds a PowerShell
    command, and dispatches it via Tactical's command channel. The agent
    downloads the file from the proxy, runs the installer, and reports back.
-6. The proxy records the installed version against that agent for later
-   outdated-detection and push updates.
+7. The proxy records the installed version against that agent for later
+   outdated-detection and push updates. For winget the upgrade state comes
+   from the next per-agent re-scan via `winget export` + `winget upgrade`.
 
 There is no persistent reverse-tunnel, no open port on the endpoint, and
 no shared credential on the client side — just a signed JWT issued once
@@ -182,13 +211,18 @@ MFA, one-time registration tokens, code-signing verification on uploads,
 ```
 softshelf/
 ├── proxy/                # FastAPI backend + admin UI
-│   ├── main.py           # app setup, public endpoints
+│   ├── main.py           # app setup, lifespan, APScheduler wiring,
+│   │                     # public endpoints
 │   ├── routes/           # register, packages, install, admin
 │   ├── middleware/       # CSRF, rate limit, audit logger
 │   ├── templates/        # admin.html, admin_login.html, admin_help.html
 │   ├── database.py       # schema + migrations + helpers
 │   ├── auth.py           # machine tokens, download tokens
 │   ├── admin_auth.py     # scrypt, sessions, Entra OIDC
+│   ├── tactical_client.py # Tactical RMM API wrapper
+│   ├── winget_catalog.py # local mirror of the Microsoft winget source
+│   ├── winget_scanner.py # nightly + targeted per-agent winget scan
+│   ├── winget_enrichment.py # daily Tactical-scan → winget-id matcher
 │   └── Dockerfile
 ├── builder/              # Wine + PyInstaller cross-compile service
 │   ├── server.py
@@ -199,6 +233,7 @@ softshelf/
 │   ├── api_client.py
 │   └── setup.py
 ├── installer/            # manual build script + Tactical deploy template
+├── docs/superpowers/specs/ # design specs (e.g. winget feature)
 ├── ARCHITEKTUR.md        # full architecture doc (German)
 ├── docker-compose.yml
 └── .env.example

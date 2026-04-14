@@ -9,16 +9,19 @@
     <li><a href="#paket-workflows">Paket-Workflows</a>
       <ol>
         <li><a href="#wf-choco">Chocolatey-Paket freigeben</a></li>
+        <li><a href="#wf-winget">Winget-Paket freigeben</a></li>
         <li><a href="#wf-msi">Eigene MSI hochladen</a></li>
         <li><a href="#wf-exe">Eigene EXE hochladen</a></li>
         <li><a href="#wf-folder">Programm-Ordner hochladen</a></li>
         <li><a href="#wf-edit">Paket nachträglich bearbeiten</a></li>
         <li><a href="#wf-versions">Versionierung &amp; Updates pushen</a></li>
         <li><a href="#wf-distribution">Verteilung-Tab</a></li>
+        <li><a href="#wf-discovery">Fleet-Discovery (Winget)</a></li>
         <li><a href="#wf-detect">Uninstall aus Tactical übernehmen</a></li>
         <li><a href="#wf-delete">Paket löschen</a></li>
       </ol>
     </li>
+    <li><a href="#agent-detail">Agent-Detail-Page: Software pro Client</a></li>
     <li><a href="#agent-lifecycle">Agent-Lifecycle: Revoke / Löschen / Sperren</a></li>
     <li><a href="#client-deploy">Kiosk-Client auf PCs ausrollen</a></li>
     <li><a href="#exe-build">Client-EXEs neu bauen</a></li>
@@ -56,8 +59,16 @@
     <p>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → <i>Aus Chocolatey</i> → Name suchen → <code>+</code> klicken. Fertig.</p>
   </div>
   <div class="doc-card">
+    <h4>Winget-Paket freigeben</h4>
+    <p>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → <i>Aus Winget</i> → Name suchen (lokaler Microsoft-Catalog-Mirror) → <code>+</code> klicken. Im selben Panel zeigt der aufklappbare Block „In der Flotte gefunden" alle bereits installierten winget-Pakete die noch nicht whitelisted sind — auch von dort one-click aktivierbar.</p>
+  </div>
+  <div class="doc-card">
     <h4>Eigene MSI hochladen</h4>
-    <p>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → <i>Eigenes Paket</i> → Datei wählen → Anzeigename checken → <code>Hochladen</code>. MSI-Metadaten werden automatisch extrahiert.</p>
+    <p>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → <i>Eigene Datei</i> → Datei wählen → Anzeigename checken → <code>Hochladen</code>. MSI-Metadaten werden automatisch extrahiert.</p>
+  </div>
+  <div class="doc-card">
+    <h4>Software auf einem Client einsehen</h4>
+    <p>Tab <b>Kiosk-Clients</b> → Klick auf eine Zeile öffnet die <b>Agent-Detail-Page</b> mit der gesamten installierten Software des Geräts (Tactical-Scan + winget-Inventur), Status-Badges (verwaltet/unverwaltet, Update verfügbar) und per-Row Aktionen (Updaten, Deinstallieren, Aktivieren, Entfernen).</p>
   </div>
   <div class="doc-card">
     <h4>Custom-Paket bearbeiten</h4>
@@ -83,49 +94,56 @@
 <section id="konzepte">
 <h1>Grundkonzepte</h1>
 
-<h2>Zwei Arten von Paketen</h2>
+<h2>Drei Arten von Paketen</h2>
 
-<p>Das Self-Service Center kennt <b>zwei Paket-Typen</b>, die unterschiedlich behandelt werden:</p>
+<p>Das Self-Service Center kennt <b>drei Paket-Typen</b>, die unterschiedlich behandelt werden:</p>
 
 <table class="doc-table">
   <thead>
-    <tr><th></th><th>Chocolatey</th><th>Eigenes Paket (MSI/EXE)</th></tr>
+    <tr><th></th><th>Chocolatey</th><th>Winget</th><th>Eigenes Paket (MSI/EXE)</th></tr>
   </thead>
   <tbody>
     <tr>
       <td><b>Quelle</b></td>
       <td>Public Chocolatey-Repo (community.chocolatey.org)</td>
+      <td>Microsoft winget-Catalog (lokal gemirrowt aus <code>cdn.winget.microsoft.com/cache/source.msix</code>, täglich aktualisiert)</td>
       <td>Du lädst die Datei ins Admin-UI hoch</td>
     </tr>
     <tr>
       <td><b>Hinzufügen</b></td>
       <td>Suche im Repo → Klick</td>
+      <td>Suche im lokalen Catalog (volltext im Index) → Klick. Alternativ: aufklappbarer Discovery-Block im selben Panel listet alle in der Flotte installierten winget-Pakete die noch nicht whitelisted sind</td>
       <td>Upload via Drag-and-Drop</td>
     </tr>
     <tr>
       <td><b>Installation</b></td>
       <td>Tactical führt <code>choco install &lt;name&gt;</code> aus</td>
+      <td>Tactical führt <code>winget install --id &lt;ID&gt; --scope machine --silent --accept-package-agreements --accept-source-agreements --disable-interactivity -h</code> als SYSTEM aus. <code>winget.exe</code> wird aus <code>C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*</code> resolved (per-user-Shim ist unter SYSTEM nicht im PATH)</td>
       <td>Agent lädt Datei vom Proxy + startet Installer silent</td>
     </tr>
     <tr>
-      <td><b>Deinstall</b></td>
-      <td>Tactical führt <code>choco uninstall</code> aus</td>
-      <td>Agent führt den gespeicherten Uninstall-Command aus</td>
-    </tr>
-    <tr>
-      <td><b>Updates</b></td>
-      <td>Automatisch bei <code>choco upgrade</code></td>
+      <td><b>Update</b></td>
+      <td>Automatisch beim nächsten <code>choco upgrade</code></td>
+      <td>Im Kiosk-Client erscheint pro Paket ein „Updaten"-Button sobald der nightly Scan eine neuere Version gefunden hat. Klick → <code>winget upgrade --id …</code> als SYSTEM via Tactical, danach automatischer Re-Scan</td>
       <td>Admin lädt neue Version im Edit-Panel hoch und kann sie auf
         veraltete Geräte pushen — siehe <a href="#wf-versions">Versionierung</a></td>
     </tr>
     <tr>
+      <td><b>Deinstall</b></td>
+      <td>Tactical führt <code>choco uninstall</code> aus</td>
+      <td><code>winget uninstall --id &lt;ID&gt; --silent --force</code> via Tactical</td>
+      <td>Agent führt den gespeicherten Uninstall-Command aus</td>
+    </tr>
+    <tr>
       <td><b>Versionierung</b></td>
       <td>Implizit über Choco-Repo</td>
+      <td>Implizit über winget-Catalog. Per Default immer „latest" — die Spalte <code>winget_version</code> in der DB erlaubt optionales Pinning auf eine spezifische Version (Phase-2-UI)</td>
       <td>Mehrere Versionen pro Paket; Tracking pro Client</td>
     </tr>
     <tr>
       <td><b>Detection</b></td>
       <td>Substring-Match Choco-Name ↔ Windows-Anzeigename</td>
+      <td>Strukturierter Match: nightly <code>winget export</code> + <code>winget upgrade</code> auf jedem online Agent via Tactical, Result wird in <code>agent_winget_state</code> persistiert. Kein Substring-Rätselraten — die winget-PackageIdentifier ist eindeutig</td>
       <td>Substring-Match <code>detection_name</code> ↔ Windows-Anzeigename</td>
     </tr>
   </tbody>
@@ -133,12 +151,13 @@
 
 <h2>Wie "Installiert"-Status erkannt wird</h2>
 
-<p>Das System fragt Tactical RMM nach der installierten Software auf jedem Agent
-  und gleicht die Namen gegen unsere Whitelist ab:</p>
+<p>Je nach Paket-Typ kommen die Daten aus zwei verschiedenen Quellen die kombiniert
+  werden:</p>
 
 <ul>
-  <li><b>Choco-Pakete:</b> Der Choco-Name (<code>firefox</code>) wird per bidirektionalem Substring-Match gegen die Windows-Anzeigenamen geprüft (<code>Mozilla Firefox (x64 en-US)</code>). Zeigt das Kiosk-UI als „Installiert".</li>
+  <li><b>Choco-Pakete:</b> Der Choco-Name (<code>firefox</code>) wird per bidirektionalem Substring-Match gegen die Windows-Anzeigenamen aus Tacticals Software-Scan geprüft (<code>Mozilla Firefox (x64 en-US)</code>). Zeigt das Kiosk-UI als „Installiert".</li>
   <li><b>Custom-Pakete:</b> Der beim Upload gespeicherte <b>Detection-Name</b> wird gegen die Windows-Anzeigenamen geprüft. Bei MSIs ist das der <code>ProductName</code> aus der MSI-Metadatenzone — stimmt fast immer ohne manuellen Eingriff. Bei EXEs muss der Admin den Detection-Name manuell eintragen (erscheint in „Apps &amp; Features" auf dem Windows-PC).</li>
+  <li><b>Winget-Pakete:</b> Strukturiert. Ein nightly Background-Scan (APScheduler 02:00 UTC) iteriert alle online Kiosk-Clients und führt via Tactical run_command <code>winget export</code> (für die installierte Liste, JSON-Output) und <code>winget upgrade</code> (für verfügbare Updates) als SYSTEM aus. Result landet in der DB-Tabelle <code>agent_winget_state</code> — kein Tactical-Round-Trip mehr nötig wenn der Kiosk-Client <code>/api/v1/packages</code> aufruft. Nach jeder User-Aktion (Install/Update/Uninstall) läuft sofort ein „targeted Re-Scan" für nur diesen einen Agent damit der Status binnen Sekunden frisch ist.</li>
 </ul>
 
 <div class="doc-callout info">
@@ -424,6 +443,41 @@ Remove-Item $tmp -Force -ErrorAction SilentlyContinue</pre>
 <div class="doc-callout info">
   Der <code>+</code>-Button wird grau &amp; ein grüner Haken erscheint wenn das Paket
   bereits freigegeben ist. So vermeidest du Dubletten.
+</div>
+
+<h2 id="wf-winget">Winget-Paket freigeben</h2>
+
+<p>Für Software aus dem offiziellen Microsoft-winget-Catalog. Im Vergleich zu
+  Chocolatey ein deutlich grösserer Katalog (Browser, Entwickler-Tools,
+  Microsoft-Apps, Vendor-Tools wie Zoom oder Dropbox), und die Detection
+  läuft strukturiert über die winget-PackageIdentifier statt per Substring-
+  Heuristik. Updates erkennt das System automatisch via <code>winget upgrade</code>.</p>
+
+<ol class="doc-steps">
+  <li>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code></li>
+  <li>Im Slide-in-Panel auf den Reiter <b>Aus Winget</b> wechseln</li>
+  <li>Im Suchfeld den Paketnamen oder den Hersteller eintippen (z. B. <code>firefox</code>, <code>vscode</code>, <code>vlc</code>, <code>mozilla</code>). Die Suche läuft gegen einen lokalen SQLite-Mirror der Microsoft-Catalog-Datei (<code>cdn.winget.microsoft.com/cache/source.msix</code>) — kein Tactical-Round-Trip, kein Internet-Call beim Suchen, Treffer in unter 100 ms. Der Mirror wird täglich um 01:30 UTC frisch gezogen.</li>
+  <li>Trefferliste zeigt pro Eintrag: Anzeige-Name, Publisher, neueste Version (semver-aware), winget-PackageIdentifier. Sortiert nach Match-Qualität (Last-Segment-Match &gt; Substring-Match).</li>
+  <li>Auf das <code>+</code>-Icon klicken um das Paket freizugeben. Es wandert sofort in die Whitelist als <code>type='winget'</code> mit der PackageIdentifier als <code>name</code>.</li>
+  <li>Bei Bedarf: Anzeigename und Kategorie wie bei choco anpassen.</li>
+</ol>
+
+<div class="doc-callout info">
+  <b>winget-Pakete brauchen <code>winget</code> auf dem Endgerät.</b> Auf Windows 11
+  ist der „App Installer" mit winget standardmäßig installiert. Auf älteren Windows-10-
+  Builds und auf LTSC fehlt er und muss separat ausgerollt werden. Der nightly Scan
+  erkennt fehlendes winget und markiert den Agent in <code>agent_scan_meta</code> mit
+  <code>last_status='no_winget'</code> — sichtbar in der Agent-Detail-Page als roter
+  Hinweis.
+</div>
+
+<div class="doc-callout warn">
+  <b>Per-User-Apps und Microsoft-Store-Apps:</b> winget unter SYSTEM-Kontext kann
+  Pakete die per-user installiert wurden meist nicht entfernen oder upgraden. Symptom
+  beim Uninstall: ExitCode <code>-1978335162</code> (NO_UNINSTALL_INFO_FOUND). Beim
+  Upgrade: <code>No available upgrade found</code> obwohl winget upgrade ohne
+  <code>--id</code> die Update-Verfügbarkeit anzeigt. Workaround: das Paket
+  manuell als logged-in User upgraden, oder einen anderen Installer nutzen.
 </div>
 
 <h2 id="wf-msi">Eigene MSI hochladen</h2>
@@ -726,6 +780,63 @@ Remove-Item $tmp -Force -ErrorAction SilentlyContinue</pre>
   Erfassung beginnt erst nachdem ein Install/Uninstall einmal über den Kiosk gelaufen ist.
 </div>
 
+<h2 id="wf-discovery">Fleet-Discovery (Winget)</h2>
+
+<p>Das Discovery-Feature erkennt automatisch welche winget-Pakete auf deinen
+  Endgeräten installiert sind aber noch nicht in der Softshelf-Whitelist
+  stehen, und bietet ein-Klick-Aktivierung an. So kannst du eine bestehende
+  Flotte sukzessive in Softshelf reinholen ohne jedes Paket einzeln im Catalog
+  zu suchen.</p>
+
+<h3>Wo es auftaucht</h3>
+
+<ol class="doc-steps">
+  <li>Im Header rechts neben Version und User-Menu erscheint ein <b>Discovery-Banner</b> sobald die Flotte mindestens ein unverwaltetes winget-Paket hat. Beispiel: <i>„12 Pakete in der Flotte unverwaltet"</i>.</li>
+  <li>Klick auf den Banner öffnet das Aktivieren-Panel direkt mit dem Winget-Tab und expandiertem Discovery-Block.</li>
+  <li>Alternativ: Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → Reiter <b>Aus Winget</b> → unten den Block <i>„In der Flotte gefunden"</i> ausklappen.</li>
+</ol>
+
+<h3>Was angezeigt wird</h3>
+
+<p>Pro Discovery-Eintrag siehst du:</p>
+
+<ul>
+  <li><b>Display-Name</b> (z. B. „Mozilla Firefox") — wie es in „Apps &amp; Features" auf den Endgeräten heisst</li>
+  <li><b>Source-Tag</b>: <code>winget</code> wenn der Eintrag aus dem nightly winget-Scan kommt (kanonisch, sicher matchbar), oder <code>software-scan</code> wenn er aus dem Tactical-Software-Scan stammt und per Confidence-Heuristik gegen den winget-Catalog gemappt wurde</li>
+  <li><b>Confidence-Badge</b>: <code>sicher</code> / <code>wahrscheinlich</code> / <code>unsicher</code> / <code>kein Match</code>. Bei Source <code>winget</code> ist die Confidence immer <code>sicher</code>, weil die ID direkt aus winget kommt</li>
+  <li><b>Install-Count</b>: auf wie vielen Geräten der Flotte das Paket installiert ist</li>
+  <li><b>winget-PackageIdentifier</b>: die ID die beim Aktivieren in die Whitelist landet</li>
+  <li><b>Aktion</b>: <code>+</code>-Button bei Confidence ≥ <code>unsicher</code>, oder <i>„manuell"</i>-Hinweis bei <code>kein Match</code></li>
+</ul>
+
+<h3>Wie die zwei Quellen kombiniert werden</h3>
+
+<p>Discovery hat zwei parallele Quellen die zusammen gemerged werden:</p>
+
+<ol>
+  <li><b>Primary: agent_winget_state.</b> Aus dem nightly winget-Scan (siehe Abschnitt
+    <a href="#konzepte">Grundkonzepte</a>) sind die installierten Pakete pro Agent
+    bereits mit kanonischer winget-PackageIdentifier in der DB. Eine simple SQL-Query
+    findet alle <code>winget_id</code>-Werte die in keinem <code>packages</code>-Eintrag
+    auftauchen — das sind die Discovery-Kandidaten mit Confidence <code>sicher</code>.</li>
+  <li><b>Bonus: discovery_enrichment.</b> Ein zweiter Background-Job (<i>Enrichment</i>,
+    läuft täglich um 02:30 UTC) holt von Tactical pro online Agent die installierte
+    Software-Liste (das ist die ARP-basierte Sicht, also auch Software die NICHT via
+    winget installiert wurde) und versucht jeden distinct Display-Namen gegen den
+    lokalen winget-Catalog zu matchen. Token-basierte Score-Heuristik mit Generic-
+    Filter (Wörter wie <code>64bit</code>, <code>x64</code>, <code>pro</code>,
+    <code>enterprise</code>, <code>de</code> werden ignoriert um false-positive Matches
+    zu vermeiden). Ergebnis: <code>discovery_enrichment</code>-Tabelle mit
+    Display-Name, gefundener winget-ID, Confidence und Install-Count.</li>
+</ol>
+
+<div class="doc-callout info">
+  Der Enrichment-Job läuft asynchron einmal täglich. Wenn du gerade einen neuen
+  Agent ausgerollt hast, wird seine installierte Software erst beim nächsten
+  Enrichment-Run in der Discovery sichtbar. Manueller Trigger via
+  <code>POST /admin/api/winget/run-enrichment</code>.
+</div>
+
 <h2 id="wf-detect">Uninstall aus Tactical übernehmen</h2>
 
 <p>Das macht es einfach, den korrekten Uninstall-Command eines custom-EXE-Installers
@@ -788,14 +899,118 @@ Remove-Item $tmp -Force -ErrorAction SilentlyContinue</pre>
 
 <!-- ═════════════════════════════════════════════════════════════════════ -->
 
+<section id="agent-detail">
+<h1>Agent-Detail-Page: Software pro Client</h1>
+
+<p>Im Tab <b>Kiosk-Clients</b> öffnet ein Klick auf eine Zeile die <b>Agent-
+  Detail-Page</b> als Vollbild-Sicht (ersetzt das frühere Slide-in-Panel).
+  Sie ist die zentrale Stelle für „was ist eigentlich auf diesem PC und was
+  kann ich damit machen".</p>
+
+<h2>Header-Toolbar</h2>
+
+<p>Oben über dem Detail-Bereich:</p>
+
+<ul>
+  <li><b>← Zurück</b> — schließt die Detail-Sicht und zeigt wieder die Agent-Liste.</li>
+  <li><b>Hostname</b> + <b>Agent-ID</b> — bei gesperrten Agents mit Suffix <code>· GESPERRT</code>.</li>
+  <li><b>Neu scannen</b> — triggert sofort einen winget-Re-Scan auf diesem Agent. Setzt zusätzlich <code>consecutive_failures</code> in <code>agent_scan_meta</code> auf 0, falls der Agent durch frühere Fehler temporär aus dem nightly Batch ausgeschlossen war.</li>
+  <li><b>Token widerrufen</b> / <b>Sperren</b> / <b>Löschen</b> — siehe <a href="#agent-lifecycle">Agent-Lifecycle</a> für die Wirkung jeder Aktion.</li>
+</ul>
+
+<h2>Installierte Software</h2>
+
+<p>Die Hauptliste zeigt die <b>vereinte Sicht</b> aus zwei Datenquellen:</p>
+
+<ol>
+  <li><b>Tactical software-scan</b> (ARP-basiert, alle installierten Programme aus der Windows-Registry)</li>
+  <li><b>agent_winget_state</b> (kanonische winget-Inventur aus dem nightly Scan: PackageIdentifier + installed_version + available_version)</li>
+</ol>
+
+<p>Die beiden Quellen werden serverseitig zusammen gemerged und dedupt. Wenn Tactical
+  „Mozilla Firefox" sieht UND der winget-Scan <code>Mozilla.Firefox</code> sieht,
+  taucht das in der Liste als EINE Zeile mit beiden Datensätzen auf. Das Matching
+  läuft über eine Token-Score-Heuristik gegen die winget-PackageIdentifier-
+  Segmente, mit Filter für generische Tokens (<code>64bit</code>, <code>x64</code>,
+  <code>pro</code>, …) damit z. B. „Adobe Acrobat (64-bit)" nicht versehentlich
+  „SAP GUI 64bit" matcht.</p>
+
+<p>Pro Software-Zeile siehst du:</p>
+
+<ul>
+  <li><b>Display-Name</b> (groß)</li>
+  <li><b>Status-Badges</b>: <code>verwaltet · winget</code> / <code>verwaltet · choco</code> / <code>verwaltet · eigen</code> wenn das Paket in der Softshelf-Whitelist ist; <code>winget · unverwaltet</code> für winget-Pakete ohne Whitelist-Eintrag; <code>unverwaltet</code> für tactical-only Software</li>
+  <li><b>Update-Badge</b>: <code>Update X.Y.Z</code> wenn der nightly winget-Scan eine neuere Version gefunden hat</li>
+  <li><b>Sub-Zeile</b>: winget-PackageIdentifier (falls vorhanden), installierte Version, Publisher</li>
+</ul>
+
+<h3>Aktionen pro Zeile</h3>
+
+<table class="doc-table">
+  <thead><tr><th>Status</th><th>Verfügbare Buttons</th><th>Was passiert</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>verwaltet + Update verfügbar</td>
+      <td><b>Updaten</b> + <b>Deinstallieren</b></td>
+      <td>Updaten startet <code>winget upgrade --id …</code> als SYSTEM. Deinstallieren startet den passenden Uninstall-Pfad je nach Typ.</td>
+    </tr>
+    <tr>
+      <td>verwaltet + aktuell</td>
+      <td><b>Deinstallieren</b></td>
+      <td>Type-Dispatch: Choco-Uninstall, Custom-Uninstall, oder <code>winget uninstall --force</code></td>
+    </tr>
+    <tr>
+      <td>unverwaltet, mit winget-ID</td>
+      <td><b>Aktivieren</b> + <b>Entfernen</b></td>
+      <td><i>Aktivieren</i> nimmt das Paket nur in die Softshelf-Whitelist auf, ändert nichts auf dem Agent. <i>Entfernen</i> ruft <code>winget uninstall --id … --force</code> auf, OHNE das Paket in die Whitelist zu nehmen — für „diese unerwünschte Software einfach runterhauen".</td>
+    </tr>
+    <tr>
+      <td>unverwaltet, ohne winget-ID</td>
+      <td>—</td>
+      <td>Keine Aktion verfügbar (winget kann's nicht entfernen, choco/custom-Uninstall braucht eine Whitelist).</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Wie der Status nach einer Aktion frisch wird</h3>
+
+<div class="doc-callout info">
+  Sobald du auf <b>Updaten</b>, <b>Deinstallieren</b>, <b>Aktivieren</b> oder
+  <b>Entfernen</b> klickst, wird die Zeile mit einem Spinner gesperrt. Das UI
+  pollt im Hintergrund alle 5 Sekunden den Status-Endpoint und vergleicht
+  <code>scan_meta.last_scan_at</code> gegen einen Snapshot vom Klick-Zeitpunkt.
+  Sobald der targeted Re-Scan auf dem Agent durch ist und der Timestamp sich
+  bewegt, refresht die Sicht automatisch — du musst nicht F5 drücken. Hartstop
+  bei 6 Minuten.
+</div>
+
+<div class="doc-callout warn">
+  <b>Wichtig zur winget-Performance:</b> Eine Update- oder Install-Aktion via winget
+  kann je nach Paket-Größe zwischen wenigen Sekunden und mehreren Minuten dauern
+  (Download + Installer-Run). Während dieser Zeit zeigt der Spinner „läuft …" und
+  die Zeile bleibt gesperrt. Container-Restart in genau diesem Zeitfenster killt
+  den Background-Task und verhindert den nachgelagerten Re-Scan — der Agent läuft
+  zwar fertig durch, aber die DB-Sicht bleibt stale bis du <i>Neu scannen</i>
+  drückst.
+</div>
+
+<h2>Installations-Verlauf</h2>
+
+<p>Unter der Software-Liste folgt der bisherige <b>Installations-Verlauf</b> aus
+  <code>install_log</code> für diesen Agent: jede Install/Uninstall-Aktion (von
+  End-User über Kiosk-Client oder von Admin über Detail-Page) ist da als Audit-
+  Eintrag mit Zeitstempel sichtbar.</p>
+</section>
+
+<!-- ═════════════════════════════════════════════════════════════════════ -->
+
 <section id="agent-lifecycle">
 <h1>Agent-Lifecycle: Revoke / Löschen / Sperren</h1>
 
-<p>Im Tab <b>Kiosk-Clients</b> gibt es pro Agent ein Detail-Panel (Pfeil-Button).
-  Im Footer dieses Panels stehen drei Aktionen, die unterschiedlich harte
-  Konsequenzen haben. Wichtig: alle drei sind <i>kombinierbar</i> — die
-  typische Reihenfolge bei einem kompromittierten Gerät ist <b>Sperren →
-  Löschen</b>.</p>
+<p>In der <a href="#agent-detail">Agent-Detail-Page</a> sind oben in der Header-
+  Toolbar drei Aktionen, die unterschiedlich harte Konsequenzen haben. Wichtig:
+  alle drei sind <i>kombinierbar</i> — die typische Reihenfolge bei einem
+  kompromittierten Gerät ist <b>Sperren → Löschen</b>.</p>
 
 <table class="doc-table">
   <thead><tr><th>Aktion</th><th>Was passiert</th><th>Re-Register?</th></tr></thead>
