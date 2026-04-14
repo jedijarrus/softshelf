@@ -10,6 +10,9 @@ Choco-Pakete laufen über Tactical's /software/{id}/-Endpoint.
 Custom-Pakete (MSI/EXE) werden via /agents/{id}/cmd/ als PowerShell-Job
 ausgeführt — Download via signierter URL, dann Install/Uninstall mit den
 beim Upload gespeicherten Argumenten.
+Winget-Pakete laufen ebenfalls via /agents/{id}/cmd/ mit einem PowerShell-
+Wrapper um winget install/upgrade/uninstall. Nach erfolgreicher Aktion
+wird ein targeted Re-Scan getriggert damit der Kiosk-State sofort frisch ist.
 """
 import asyncio
 import logging
@@ -19,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import database
+import winget_scanner
 from auth import create_download_token, verify_machine_token
 from config import get_settings, runtime_value
 from tactical_client import TacticalClient
@@ -214,6 +218,106 @@ Write-Output 'Deinstallation abgeschlossen.'
 """
 
 
+# ── Winget Dispatch ───────────────────────────────────────────────────────────
+
+# winget PackageIdentifier ist konservativ alphanumerisch + Punkt + Bindestrich.
+# Defense-in-depth: keine Quotes, kein Whitespace, keine Shell-Metas
+_WINGET_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,199}$")
+
+
+def _check_winget_id(wid: str) -> str:
+    if not _WINGET_ID_RE.fullmatch(wid):
+        raise HTTPException(
+            status_code=400, detail=f"Ungültige winget-PackageIdentifier: {wid!r}"
+        )
+    return wid
+
+
+def _build_winget_command(action: str, winget_id: str, version: str | None = None) -> str:
+    """
+    Baut den PowerShell-Wrapper für winget install/upgrade/uninstall.
+    Akzeptierte action-Werte: 'install', 'upgrade', 'uninstall'.
+
+    winget Exit-Codes die wir als Erfolg werten:
+      0           → ok
+      -1978335212 → bereits installiert
+      -1978335189 → kein Upgrade verfügbar
+    """
+    if action not in ("install", "upgrade", "uninstall"):
+        raise ValueError(f"unsupported winget action: {action}")
+    _check_winget_id(winget_id)
+    safe_id = winget_id  # Regex-validiert, kein extra Escape nötig
+    version_arg = ""
+    if version and action in ("install", "upgrade"):
+        # Defense-in-depth: Version nur alphanumerisch + Punkt + Bindestrich
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._\-]{0,49}", version):
+            raise HTTPException(status_code=400, detail="Ungültige winget-Version")
+        version_arg = f"--version '{version}' "
+    if action == "uninstall":
+        winget_args = (
+            f"uninstall --id '{safe_id}' --silent "
+            f"--disable-interactivity -h"
+        )
+    else:
+        winget_args = (
+            f"{action} --id '{safe_id}' --scope machine --silent "
+            f"--accept-package-agreements --accept-source-agreements "
+            f"--disable-interactivity -h "
+            f"{version_arg}"
+        ).strip()
+
+    return f"""$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+if (-not $wingetCmd) {{
+    Write-Error "winget ist nicht installiert (App Installer fehlt)"
+    exit 9009
+}}
+$out = (& winget {winget_args} 2>&1) -join "`n"
+Write-Output $out
+$code = $LASTEXITCODE
+if ($code -eq 0) {{
+    exit 0
+}}
+# Bereits installiert / kein Upgrade verfuegbar -> Erfolg
+if ($code -eq -1978335212 -or $code -eq -1978335189) {{
+    exit 0
+}}
+Write-Error "winget {action} beendete mit ExitCode $code"
+exit $code
+"""
+
+
+async def _run_winget_command_bg(
+    agent_id: str,
+    hostname: str,
+    package_name: str,
+    display_name: str,
+    cmd: str,
+    action: str,
+    winget_id: str,
+):
+    """
+    Background-Task für winget install/upgrade/uninstall via Tactical run-cmd.
+    Nach Completion (egal ob ok oder Fehler) wird ein targeted Re-Scan
+    getriggert damit der Kiosk-State frisch ist — bei Fehler dokumentiert
+    der Re-Scan dass das Paket NICHT installiert ist.
+    """
+    try:
+        await TacticalClient().run_command(agent_id, cmd, timeout=600)
+        logger.info("winget %s ok: %s auf %s", action, display_name, hostname)
+    except Exception as e:
+        logger.warning(
+            "winget %s fehlgeschlagen: %s auf %s — %s",
+            action, display_name, hostname, e,
+        )
+    # Targeted Re-Scan — egal ob Erfolg oder Fehler, damit DB-State korrekt ist
+    try:
+        await winget_scanner.scan_agent(agent_id)
+    except Exception as e:
+        logger.warning("post-action winget rescan failed for %s: %s", agent_id, e)
+
+
 @router.post("/install", response_model=SoftwareResponse)
 async def install_package(
     body: SoftwareRequest,
@@ -222,14 +326,45 @@ async def install_package(
     agent_id = token["agent_id"]
     hostname = token["hostname"]
 
-    if not _is_safe_package_name(body.package_name):
-        raise HTTPException(status_code=400, detail="Ungültiger Paketname")
-
+    # winget-IDs enthalten Punkte und können länger sein als das choco-Schema
+    # erlaubt. Wir prüfen den richtigen Regex je nachdem ob das DB-Paket
+    # ein winget-Paket ist.
     pkg = await database.get_package(body.package_name)
     if not pkg:
         raise HTTPException(status_code=403, detail="Paket nicht freigegeben")
 
-    if pkg.get("type") == "custom":
+    ptype = pkg.get("type") or "choco"
+
+    if ptype == "winget":
+        _check_winget_id(body.package_name)
+        # winget hat eigenes Update-Verhalten: wir wählen install vs. upgrade
+        # anhand des aktuellen state. Wenn schon installiert + available_version
+        # gesetzt → upgrade. Sonst install.
+        state = await database.get_agent_winget_state(agent_id)
+        st = state.get(body.package_name)
+        if st and st.get("installed_version") and st.get("available_version"):
+            action = "upgrade"
+        else:
+            action = "install"
+        cmd = _build_winget_command(action, body.package_name, pkg.get("winget_version"))
+        _spawn_bg(_run_winget_command_bg(
+            agent_id, hostname, body.package_name, pkg["display_name"],
+            cmd, action, body.package_name,
+        ))
+        verb = "Aktualisierung" if action == "upgrade" else "Installation"
+        msg = (
+            f"{verb} von '{pkg['display_name']}' auf {hostname} gestartet. "
+            f"Das kann einige Minuten dauern."
+        )
+        await database.log_install(
+            agent_id, hostname, body.package_name, pkg["display_name"], "install"
+        )
+        return SoftwareResponse(status="started", message=msg)
+
+    if not _is_safe_package_name(body.package_name):
+        raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+
+    if ptype == "custom":
         if not pkg.get("sha256"):
             raise HTTPException(status_code=500, detail="Custom-Paket ohne Datei-Hash")
         cmd = await _build_install_command(pkg, agent_id)
@@ -266,14 +401,32 @@ async def uninstall_package(
     agent_id = token["agent_id"]
     hostname = token["hostname"]
 
-    if not _is_safe_package_name(body.package_name):
-        raise HTTPException(status_code=400, detail="Ungültiger Paketname")
-
     pkg = await database.get_package(body.package_name)
     if not pkg:
         raise HTTPException(status_code=403, detail="Paket nicht freigegeben")
 
-    if pkg.get("type") == "custom":
+    ptype = pkg.get("type") or "choco"
+
+    if ptype == "winget":
+        _check_winget_id(body.package_name)
+        cmd = _build_winget_command("uninstall", body.package_name)
+        _spawn_bg(_run_winget_command_bg(
+            agent_id, hostname, body.package_name, pkg["display_name"],
+            cmd, "uninstall", body.package_name,
+        ))
+        msg = (
+            f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
+            f"Das kann einige Minuten dauern."
+        )
+        await database.log_install(
+            agent_id, hostname, body.package_name, pkg["display_name"], "uninstall"
+        )
+        return SoftwareResponse(status="started", message=msg)
+
+    if not _is_safe_package_name(body.package_name):
+        raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+
+    if ptype == "custom":
         uninstall_cmd = pkg.get("uninstall_cmd")
         if not uninstall_cmd:
             raise HTTPException(
