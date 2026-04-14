@@ -275,9 +275,11 @@ def _build_winget_command(action: str, winget_id: str, version: str | None = Non
             raise HTTPException(status_code=400, detail="Ungültige winget-Version")
         version_arg = f"--version '{version}' "
     if action == "uninstall":
+        # --force erlaubt uninstall auch bei fehlender ARP-UninstallString
+        # (z. B. Store-Apps), --accept-source-agreements für frische Sources.
         winget_args = (
-            f"uninstall --id '{safe_id}' --silent "
-            f"--disable-interactivity -h"
+            f"uninstall --id '{safe_id}' --silent --force "
+            f"--accept-source-agreements --disable-interactivity -h"
         )
     else:
         winget_args = (
@@ -301,9 +303,18 @@ $code = $LASTEXITCODE
 if ($code -eq 0) {{
     exit 0
 }}
-# Bereits installiert / kein Upgrade verfuegbar -> Erfolg
+# Bekannte 'eigentlich erfolgreich' Codes:
+#   -1978335212 (0x8a150014) NO_APPLICABLE_INSTALLER bzw. installiert
+#   -1978335189 (0x8a15002B) INSTALL_NOTHING_TO_UPGRADE
 if ($code -eq -1978335212 -or $code -eq -1978335189) {{
     exit 0
+}}
+# -1978335162 (0x8a150046) APPINSTALLER_CLI_ERROR_NO_UNINSTALL_INFO_FOUND
+# Tritt typischerweise auf wenn das Paket per-user installiert ist und
+# winget unter SYSTEM keine Maschinen-Registry-UninstallString findet.
+if ($code -eq -1978335162) {{
+    Write-Error "winget hat keine Uninstall-Information gefunden — das Paket ist vermutlich per-user oder als Store-App installiert und kann nicht aus dem SYSTEM-Kontext entfernt werden. (ExitCode $code)"
+    exit $code
 }}
 Write-Error "winget {action} beendete mit ExitCode $code"
 exit $code
