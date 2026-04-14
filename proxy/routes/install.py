@@ -399,10 +399,19 @@ _CHOCO_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
         "Der Installer-Download von der Hersteller-URL ist 404 — das Paket ist im Chocolatey-Repo aufgeführt, der Download-Link beim Hersteller existiert aber nicht mehr.",
     ),
     (
+        "please also run the command",
+        "Choco hat ein abhängiges Sub-Paket nicht entfernen können (typisch bei Metapaketen wie 'vlc' → 'vlc.install'). Müsste eigentlich von --remove-dependencies abgedeckt sein — falls nicht, manuell auf dem Agent das Sub-Paket hinterher uninstallen.",
+    ),
+    (
         "the install of",
         "Choco-Install fehlgeschlagen — siehe Choco-Log auf dem Agent (C:\\ProgramData\\chocolatey\\logs\\chocolatey.log).",
     ),
 ]
+
+# Pattern für „Chocolatey installed X/Y packages" wo X < Y (partial success)
+_CHOCO_PARTIAL_RE = re.compile(
+    r"chocolatey\s+(?:installed|uninstalled)\s+(\d+)/(\d+)\s+packages?"
+)
 
 
 def _detect_choco_soft_error(output: str, exit_code: int | None) -> str | None:
@@ -420,11 +429,30 @@ def _detect_choco_soft_error(output: str, exit_code: int | None) -> str | None:
     if not output:
         return None
     lower = output.lower()
+
+    # Partial success: „Chocolatey uninstalled 1/2 packages" — exit ist 0
+    # weil mindestens eines erfolgreich war, aber wir wollen den User
+    # informieren dass nicht alles weg ist.
+    m = _CHOCO_PARTIAL_RE.search(lower)
+    if m:
+        done = int(m.group(1))
+        total = int(m.group(2))
+        if done < total:
+            for needle, message in _CHOCO_SOFT_ERROR_PATTERNS:
+                if needle in lower:
+                    return f"Nur {done} von {total} Choco-Paketen erledigt — {message}"
+            return f"Nur {done} von {total} Choco-Paketen erledigt — siehe Choco-Log auf dem Agent."
+
     if "0/1 packages" in lower or "1/1 packages failed" in lower:
         for needle, message in _CHOCO_SOFT_ERROR_PATTERNS:
             if needle in lower:
                 return message
         return "Choco-Install fehlgeschlagen — Detail im Choco-Log auf dem Agent"
+
+    # Choco hat einen interaktiven Prompt aufgerufen (passiert bei
+    # Metapaketen wenn --remove-dependencies trotzdem nicht greift)
+    if "timeout or your choice of" in lower or "is not a valid selection" in lower:
+        return "Choco wartete auf eine interaktive Antwort und hat den Timeout abgewartet — wahrscheinlich ein Metapaket bei dem ein abhängiges Sub-Paket geprüft werden sollte. Im Choco-Log auf dem Agent steht der Kontext."
     return None
 
 
@@ -445,7 +473,15 @@ def _build_choco_command(action: str, package_name: str) -> str:
     if action == "install":
         choco_args = f"install '{safe}' -y --no-progress --limit-output"
     else:
-        choco_args = f"uninstall '{safe}' -y --no-progress --limit-output"
+        # --remove-dependencies (-x) entfernt zusätzlich alle Sub-Pakete die
+        # NUR von diesem Paket benötigt wurden. Wichtig für Metapakete wie
+        # 'vlc' das eigentlich 'vlc.install' wrappt — ohne diesen Flag
+        # bleibt 'vlc.install' nach `choco uninstall vlc` zurück und choco
+        # fragt interaktiv nach (Timeout = Sub-Paket wird nicht entfernt).
+        choco_args = (
+            f"uninstall '{safe}' -y --remove-dependencies "
+            f"--no-progress --limit-output"
+        )
 
     return f"""$ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -486,7 +522,7 @@ async def _run_choco_command_bg(
     last_action_error in scan_meta, chain targeted re-scan."""
     error_msg: str | None = None
     raw_output = ""
-    exit_code: int | None = None
+    success = False
     try:
         raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=600)
         if raw_output and raw_output.startswith('"'):
@@ -495,8 +531,13 @@ async def _run_choco_command_bg(
                 raw_output = _json.loads(raw_output)
             except Exception:
                 pass
-        # Bei Erfolg gibt's keinen ExitCode im stdout — wir vertrauen dass
-        # run_command nicht raised heißt exit 0
+        # run_command kam ohne Exception zurück → Tactical hat 200 zurück-
+        # geliefert → der PowerShell-Wrapper hat exit 0 gemacht. Aber
+        # Choco selbst kann partial success haben (z.B. „1/2 packages")
+        # — das landet trotzdem auf exit 0 weil unser Wrapper nur
+        # 0/1641/3010 als success durchlässt und alles andere mit
+        # Write-Error abbricht.
+        success = True
         soft_err = _detect_choco_soft_error(raw_output, exit_code=0)
         if soft_err:
             error_msg = soft_err
@@ -506,17 +547,10 @@ async def _run_choco_command_bg(
             )
         else:
             logger.info("choco %s ok: %s auf %s", action, display_name, hostname)
-            # Bei Erfolg auch das Tracking aktualisieren
-            try:
-                if action == "install":
-                    await database.set_agent_installation(agent_id, package_name, None)
-                else:
-                    await database.delete_agent_installation(agent_id, package_name)
-            except Exception as e:
-                logger.warning("agent_installations update failed: %s", e)
     except Exception as e:
-        # run_command raised — Tactical hat Non-200 zurückgegeben, wahrscheinlich
-        # Choco exit non-zero. Die Exception-Message enthält oft den letzten Output.
+        # run_command raised — entweder Tactical Non-200 oder unser Wrapper
+        # hat Write-Error gemacht weil exit ≠ success_code. Die Exception-
+        # Message enthält meist den letzten Output mit dem ExitCode.
         msg = str(e)
         soft_err = _detect_choco_soft_error(msg, exit_code=1)
         error_msg = soft_err or msg[:300]
@@ -524,6 +558,18 @@ async def _run_choco_command_bg(
             "choco %s fehlgeschlagen: %s auf %s — %s",
             action, display_name, hostname, error_msg,
         )
+
+    # Tracking nur updaten wenn der Wrapper exit 0 hatte UND wir keinen
+    # Soft-Error im Output sehen. Bei Soft-Errors ist der State unklar —
+    # der nachgelagerte Re-Scan korrigiert ihn ohnehin.
+    if success and not error_msg:
+        try:
+            if action == "install":
+                await database.set_agent_installation(agent_id, package_name, None)
+            else:
+                await database.delete_agent_installation(agent_id, package_name)
+        except Exception as e:
+            logger.warning("agent_installations update failed: %s", e)
 
     try:
         await database.upsert_action_result(agent_id, package_name, error_msg)
