@@ -158,6 +158,15 @@ async def init_db():
                 PRIMARY KEY (agent_id, winget_id)
             );
 
+            CREATE TABLE IF NOT EXISTS agent_choco_state (
+                agent_id          TEXT NOT NULL,
+                choco_name        TEXT NOT NULL,
+                installed_version TEXT,
+                available_version TEXT,
+                scanned_at        TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (agent_id, choco_name)
+            );
+
             CREATE TABLE IF NOT EXISTS agent_scan_meta (
                 agent_id             TEXT PRIMARY KEY,
                 last_scan_at         TEXT,
@@ -177,6 +186,8 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_install_log_agent  ON install_log(agent_id, id DESC);
             CREATE INDEX IF NOT EXISTS idx_agent_winget_id    ON agent_winget_state(winget_id);
             CREATE INDEX IF NOT EXISTS idx_agent_winget_avail ON agent_winget_state(available_version) WHERE available_version IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_agent_choco_name   ON agent_choco_state(choco_name);
+            CREATE INDEX IF NOT EXISTS idx_agent_choco_avail  ON agent_choco_state(available_version) WHERE available_version IS NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_audit_log_ts       ON audit_log(ts);
             CREATE INDEX IF NOT EXISTS idx_build_log_ts      ON build_log(started_at DESC);
             CREATE INDEX IF NOT EXISTS idx_admin_sessions_user ON admin_sessions(user_id);
@@ -1723,5 +1734,60 @@ async def cleanup_winget_state_for_package(package_name: str):
     async with _db() as db:
         await db.execute(
             "DELETE FROM agent_winget_state WHERE winget_id = ?", (package_name,)
+        )
+        await db.commit()
+
+
+# ── Agent Choco State ────────────────────────────────────────────────────────
+
+
+async def replace_agent_choco_state(agent_id: str, rows: list[dict]):
+    """Atomarer Replace aller choco-State-Rows eines Agents. `rows` ist eine
+    Liste von dicts mit den Keys `choco_name, installed_version,
+    available_version`. Wird nach jedem nightly oder targeted Choco-Scan
+    aufgerufen."""
+    async with _db() as db:
+        await db.execute(
+            "DELETE FROM agent_choco_state WHERE agent_id = ?", (agent_id,)
+        )
+        if rows:
+            await db.executemany(
+                "INSERT INTO agent_choco_state "
+                "(agent_id, choco_name, installed_version, available_version, scanned_at) "
+                "VALUES (?, ?, ?, ?, datetime('now'))",
+                [
+                    (
+                        agent_id,
+                        r["choco_name"],
+                        r.get("installed_version"),
+                        r.get("available_version"),
+                    )
+                    for r in rows
+                ],
+            )
+        await db.commit()
+
+
+async def get_agent_choco_state(agent_id: str) -> dict[str, dict]:
+    """Liefert den aktuellen choco-State eines Agents als dict[choco_name → row].
+    Wird vom packages.py /api/v1/packages und vom admin agent_software endpoint
+    benutzt um installed_version / available_version pro choco-Paket
+    deterministisch zu zeigen."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT choco_name, installed_version, available_version, scanned_at "
+            "FROM agent_choco_state WHERE agent_id = ?",
+            (agent_id,),
+        ) as cur:
+            return {r["choco_name"]: dict(r) for r in await cur.fetchall()}
+
+
+async def cleanup_choco_state_for_package(package_name: str):
+    """Bei Disable eines choco-Pakets — analog zu winget. State bleibt sonst
+    im DB liegen und kommt beim nächsten Scan wieder."""
+    async with _db() as db:
+        await db.execute(
+            "DELETE FROM agent_choco_state WHERE choco_name = ?", (package_name,)
         )
         await db.commit()

@@ -5018,6 +5018,19 @@ function _markRowBusy(key) {
   });
 }
 
+// Fingerprint vergleicht den größten der beiden Zeitstempel
+// last_scan_at (winget/choco scanner) UND last_action_at (custom/winget/choco
+// post-action). Damit triggert das Polling für jede Aktion die irgendwas
+// am scan_meta-Zustand bewegt — egal ob es ein Scan oder ein direktes
+// Action-Result war.
+function _scanMetaFingerprint(scanMeta) {
+  if (!scanMeta) return null;
+  const a = scanMeta.last_scan_at || '';
+  const b = scanMeta.last_action_at || '';
+  if (!a && !b) return null;
+  return a > b ? a : b;
+}
+
 async function _pollUntilScanned(snapshotIso, displayName) {
   if (!_currentAgent) return;
   const a = _currentAgent;
@@ -5028,16 +5041,17 @@ async function _pollUntilScanned(snapshotIso, displayName) {
   async function tick() {
     if (!_currentAgent || _currentAgent.agent_id !== a.agent_id) return;
     if (Date.now() - startedAt > maxMs) {
-      toast(`„${displayName}" — kein frischer Scan nach 6 Minuten. Versuche „Neu scannen".`, true);
+      toast(`„${displayName}" — kein Status-Update nach 6 Minuten. Versuche „Neu scannen".`, true);
       _agentSoftwareBusy.clear();
       openAgentDetail(a.agent_id, a.hostname);
       return;
     }
     try {
       const data = await api('GET', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/software`);
-      const newScan = data && data.scan_meta && data.scan_meta.last_scan_at;
-      // Fertig wenn der scan_meta.last_scan_at sich seit dem Klick bewegt hat
-      if (newScan && (!snapshotIso || newScan > snapshotIso)) {
+      const newPrint = _scanMetaFingerprint(data && data.scan_meta);
+      // Fertig wenn sich der größere von last_scan_at / last_action_at seit
+      // dem Klick bewegt hat (Scan oder Action-Result)
+      if (newPrint && (!snapshotIso || newPrint > snapshotIso)) {
         _agentSoftwareBusy.clear();
         toast(`„${displayName}" — Status aktualisiert`);
         const log = await api('GET', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/installs`).catch(() => []);
@@ -5056,7 +5070,7 @@ async function _captureScanSnapshot() {
   if (!_currentAgent) return null;
   try {
     const data = await api('GET', `/admin/api/agents/${encodeURIComponent(_currentAgent.agent_id)}/software`);
-    return (data && data.scan_meta && data.scan_meta.last_scan_at) || null;
+    return _scanMetaFingerprint(data && data.scan_meta);
   } catch (e) {
     return null;
   }

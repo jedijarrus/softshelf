@@ -14,6 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 import admin_auth
+import choco_scanner
 import database
 import file_uploads
 import winget_catalog
@@ -93,6 +94,13 @@ async def _winget_enrichment_job():
         logger.exception("winget enrichment job crashed: %s", e)
 
 
+async def _choco_nightly_job():
+    try:
+        await choco_scanner.run_nightly_scan()
+    except Exception as e:
+        logger.exception("nightly choco scan job crashed: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.init_db()
@@ -130,6 +138,14 @@ async def lifespan(app: FastAPI):
         _winget_enrichment_job,
         CronTrigger(hour=2, minute=30),
         id="winget_enrichment",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _choco_nightly_job,
+        CronTrigger(hour=2, minute=15),
+        id="choco_nightly_scan",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,
