@@ -1117,6 +1117,29 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   gap: 6px;
   flex-shrink: 0;
 }
+.sw-row-busy {
+  opacity: .8;
+  background: var(--bg-soft);
+  border-color: var(--border-s);
+}
+.sw-busy-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-3);
+  padding: 4px 10px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  white-space: nowrap;
+}
+.sw-busy-label .spinner {
+  width: 11px;
+  height: 11px;
+  border-width: 1.5px;
+}
 .sw-action {
   font-size: 11px;
   font-weight: 500;
@@ -4663,6 +4686,11 @@ function closeAgentDetailPage() {
   document.getElementById('agents-detail-view').style.display = 'none';
   document.getElementById('agents-list-view').style.display = '';
   _currentAgent = null;
+  _agentSoftwareBusy.clear();
+  if (_agentSoftwarePollTimer) {
+    clearTimeout(_agentSoftwarePollTimer);
+    _agentSoftwarePollTimer = null;
+  }
   loadAgents();
 }
 
@@ -4766,7 +4794,16 @@ function _renderSoftwareRow(item) {
   if (publisher && !wid) subParts.push(publisher);
   const sub = subParts.join(' · ');
 
-  return `<div class="sw-row">
+  // Wenn die Row gerade in einer Aktion drin ist, blockieren wir die Buttons
+  // und zeigen einen Spinner. Key ist entweder package_name (managed) oder
+  // winget_id (unmanaged winget).
+  const busyKey = item.managed ? (item.package_name || '') : (item.winget_id || '');
+  const isBusy = busyKey && _agentSoftwareBusy.has(busyKey);
+  const actionsHtml = isBusy
+    ? '<span class="sw-busy-label"><span class="spinner"></span> läuft…</span>'
+    : action;
+
+  return `<div class="sw-row${isBusy ? ' sw-row-busy' : ''}" data-sw-key="${esc(busyKey)}">
     <div class="sw-info">
       <div class="sw-name-line">
         <span class="sw-name">${name}</span>
@@ -4774,19 +4811,87 @@ function _renderSoftwareRow(item) {
       </div>
       ${sub ? `<div class="sw-sub">${sub}</div>` : ''}
     </div>
-    <div class="sw-actions-wrap">${action}</div>
+    <div class="sw-actions-wrap">${actionsHtml}</div>
   </div>`;
+}
+
+// Trackt welche Zeilen aktuell „in Arbeit" sind (Install/Upgrade/Uninstall läuft).
+// Schlüssel: package_name (managed) oder winget_id (unmanaged winget).
+let _agentSoftwareBusy = new Set();
+let _agentSoftwarePollTimer = null;
+let _agentScanSnapshot = null;  // last_scan_at zum Zeitpunkt des Klicks
+
+function _markRowBusy(key) {
+  if (key) _agentSoftwareBusy.add(key);
+  // Direkt im DOM markieren falls die Row gerade gerendert ist
+  const escKey = (key || '').replace(/"/g, '\\"');
+  document.querySelectorAll('.sw-row').forEach(row => {
+    if (row.getAttribute('data-sw-key') === key) {
+      row.classList.add('sw-row-busy');
+      const actions = row.querySelector('.sw-actions-wrap');
+      if (actions) {
+        actions.innerHTML = '<span class="sw-busy-label"><span class="spinner"></span> läuft…</span>';
+      }
+    }
+  });
+}
+
+async function _pollUntilScanned(snapshotIso, displayName) {
+  if (!_currentAgent) return;
+  const a = _currentAgent;
+  const startedAt = Date.now();
+  const maxMs = 6 * 60 * 1000; // 6 Minuten Hartstop
+  if (_agentSoftwarePollTimer) clearTimeout(_agentSoftwarePollTimer);
+
+  async function tick() {
+    if (!_currentAgent || _currentAgent.agent_id !== a.agent_id) return;
+    if (Date.now() - startedAt > maxMs) {
+      toast(`„${displayName}" — kein frischer Scan nach 6 Minuten. Versuche „Neu scannen".`, true);
+      _agentSoftwareBusy.clear();
+      openAgentDetail(a.agent_id, a.hostname);
+      return;
+    }
+    try {
+      const data = await api('GET', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/software`);
+      const newScan = data && data.scan_meta && data.scan_meta.last_scan_at;
+      // Fertig wenn der scan_meta.last_scan_at sich seit dem Klick bewegt hat
+      if (newScan && (!snapshotIso || newScan > snapshotIso)) {
+        _agentSoftwareBusy.clear();
+        toast(`„${displayName}" — Status aktualisiert`);
+        const log = await api('GET', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/installs`).catch(() => []);
+        renderAgentDetail(data, log);
+        return;
+      }
+      _agentSoftwarePollTimer = setTimeout(tick, 5000);
+    } catch (e) {
+      _agentSoftwarePollTimer = setTimeout(tick, 8000);
+    }
+  }
+  _agentSoftwarePollTimer = setTimeout(tick, 5000);
+}
+
+async function _captureScanSnapshot() {
+  if (!_currentAgent) return null;
+  try {
+    const data = await api('GET', `/admin/api/agents/${encodeURIComponent(_currentAgent.agent_id)}/software`);
+    return (data && data.scan_meta && data.scan_meta.last_scan_at) || null;
+  } catch (e) {
+    return null;
+  }
 }
 
 async function agentSoftwareInstall(packageName, displayName) {
   if (!_currentAgent || !packageName) return;
   const a = _currentAgent;
+  const snapshot = await _captureScanSnapshot();
   try {
+    _markRowBusy(packageName);
     await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/install/${encodeURIComponent(packageName)}`);
-    toast(`„${displayName}" wird auf ${a.hostname} aktualisiert/installiert…`);
-    // nach 8 Sekunden refreshen damit der targeted re-scan durch ist
-    setTimeout(() => openAgentDetail(a.agent_id, a.hostname), 8000);
-  } catch (e) {}
+    toast(`„${displayName}" auf ${a.hostname} läuft — winget kann ein paar Minuten brauchen.`);
+    _pollUntilScanned(snapshot, displayName);
+  } catch (e) {
+    _agentSoftwareBusy.delete(packageName);
+  }
 }
 
 function agentSoftwareUninstall(packageName, displayName) {
@@ -4794,13 +4899,17 @@ function agentSoftwareUninstall(packageName, displayName) {
   const a = _currentAgent;
   showConfirm(
     `„${displayName}" deinstallieren`,
-    `Das Paket wird auf ${a.hostname} via Tactical-run_command deinstalliert. Das kann einige Minuten dauern; danach aktualisiert sich der Scan automatisch.`,
+    `Das Paket wird auf ${a.hostname} via Tactical-run_command deinstalliert. Das kann einige Minuten dauern; der Status aktualisiert sich automatisch sobald der Re-Scan durch ist.`,
     async () => {
+      const snapshot = await _captureScanSnapshot();
       try {
+        _markRowBusy(packageName);
         await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/uninstall/${encodeURIComponent(packageName)}`);
         toast(`Deinstallation von „${displayName}" gestartet`);
-        setTimeout(() => openAgentDetail(a.agent_id, a.hostname), 8000);
-      } catch (e) {}
+        _pollUntilScanned(snapshot, displayName);
+      } catch (e) {
+        _agentSoftwareBusy.delete(packageName);
+      }
     },
     'Deinstallieren'
   );
@@ -4811,15 +4920,19 @@ function agentWingetUninstall(wingetId, displayName) {
   const a = _currentAgent;
   showConfirm(
     `„${displayName}" via winget entfernen`,
-    `winget uninstall --id "${wingetId}" wird als SYSTEM auf ${a.hostname} ausgeführt. Das Paket bleibt NICHT in der Softshelf-Whitelist; es wird einfach nur runtergeworfen.`,
+    `winget uninstall --id "${wingetId}" wird als SYSTEM auf ${a.hostname} ausgeführt. Das Paket bleibt NICHT in der Softshelf-Whitelist; es wird einfach nur runtergeworfen. Status-Refresh läuft automatisch sobald der Re-Scan durch ist.`,
     async () => {
+      const snapshot = await _captureScanSnapshot();
       try {
+        _markRowBusy(wingetId);
         await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/winget-uninstall`, {
           winget_id: wingetId,
         });
         toast(`Entfernung von „${displayName}" gestartet`);
-        setTimeout(() => openAgentDetail(a.agent_id, a.hostname), 8000);
-      } catch (e) {}
+        _pollUntilScanned(snapshot, displayName);
+      } catch (e) {
+        _agentSoftwareBusy.delete(wingetId);
+      }
     },
     'Entfernen'
   );
