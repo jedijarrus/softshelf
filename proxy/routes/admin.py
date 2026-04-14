@@ -56,6 +56,8 @@ _PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,99}$")
 _AGENT_ID_RE = re.compile(r"^[a-zA-Z0-9\-]{8,64}$")
 _TEXT_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,80}$")
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9._\-@]{2,80}$")
+# winget PackageIdentifier (z. B. 'Mozilla.Firefox', 'Microsoft.VisualStudioCode')
+_WINGET_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,199}$")
 # Versions-Label: alphanumerisch, Punkt, Bindestrich, Unterstrich
 _VERSION_LABEL_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,49}$")
 # Reject anything with control chars, NUL, newlines — for free-text fields
@@ -1256,24 +1258,57 @@ async def _resolve_agent(agent_id: str) -> dict:
     dependencies=[Depends(_require_admin)],
 )
 async def admin_install_on_agent(agent_id: str, package_name: str):
-    """Admin-getriggerter (Re-)Install der current-Version eines custom-Pakets
-    auf einem einzelnen Agent — fire-and-forget über Tactical-cmd."""
-    from routes.install import _build_install_command, _run_custom_command_bg
+    """Admin-getriggerter Install (oder Upgrade bei winget) eines whitelisted
+    Pakets auf einem einzelnen Agent. Dispatch nach packages.type."""
+    from routes.install import (
+        _build_install_command,
+        _run_custom_command_bg,
+        _build_winget_command,
+        _run_winget_command_bg,
+    )
 
-    if not _PKG_NAME_RE.fullmatch(package_name):
-        raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+    if not _AGENT_ID_RE.fullmatch(agent_id):
+        raise HTTPException(status_code=400, detail="Ungültige Agent-ID")
     pkg = await database.get_package(package_name)
-    if not pkg or pkg.get("type") != "custom":
-        raise HTTPException(status_code=404, detail="Custom-Paket nicht gefunden")
-    if not pkg.get("sha256"):
-        raise HTTPException(status_code=400, detail="Paket hat keine aktive Version")
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Paket nicht gefunden")
 
     agent = await _resolve_agent(agent_id)
-    cmd = await _build_install_command(pkg, agent_id)
-    _spawn_bg(_run_custom_command_bg(
-        agent_id, agent["hostname"], package_name, pkg["display_name"],
-        cmd, "install", pkg.get("current_version_id"),
-    ))
+    ptype = pkg.get("type") or "choco"
+
+    if ptype == "custom":
+        if not _PKG_NAME_RE.fullmatch(package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        if not pkg.get("sha256"):
+            raise HTTPException(status_code=400, detail="Paket hat keine aktive Version")
+        cmd = await _build_install_command(pkg, agent_id)
+        _spawn_bg(_run_custom_command_bg(
+            agent_id, agent["hostname"], package_name, pkg["display_name"],
+            cmd, "install", pkg.get("current_version_id"),
+        ))
+    elif ptype == "winget":
+        if not _WINGET_ID_RE.fullmatch(package_name):
+            raise HTTPException(status_code=400, detail="Ungültige winget-ID")
+        # Install vs Upgrade: aus dem aktuellen agent_winget_state entscheiden
+        state = await database.get_agent_winget_state(agent_id)
+        st = state.get(package_name)
+        if st and st.get("installed_version") and st.get("available_version"):
+            action = "upgrade"
+        else:
+            action = "install"
+        cmd = _build_winget_command(action, package_name, pkg.get("winget_version"))
+        _spawn_bg(_run_winget_command_bg(
+            agent_id, agent["hostname"], package_name, pkg["display_name"],
+            cmd, action, package_name,
+        ))
+    else:
+        if not _PKG_NAME_RE.fullmatch(package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        try:
+            await TacticalClient().install_software(agent_id, package_name)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Tactical-Fehler: {e}")
+
     await database.log_install(
         agent_id, agent["hostname"], package_name, pkg["display_name"], "install"
     )
@@ -1285,33 +1320,295 @@ async def admin_install_on_agent(agent_id: str, package_name: str):
     dependencies=[Depends(_require_admin)],
 )
 async def admin_uninstall_on_agent(agent_id: str, package_name: str):
-    """Admin-getriggerter Uninstall eines custom-Pakets auf einem einzelnen
-    Agent. Verwendet das im Paket hinterlegte Uninstall-Command."""
-    from routes.install import _run_custom_command_bg, _build_uninstall_command
+    """Admin-getriggerter Uninstall eines whitelisted Pakets auf einem
+    einzelnen Agent. Dispatch nach packages.type."""
+    from routes.install import (
+        _run_custom_command_bg,
+        _build_uninstall_command,
+        _build_winget_command,
+        _run_winget_command_bg,
+    )
 
-    if not _PKG_NAME_RE.fullmatch(package_name):
-        raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+    if not _AGENT_ID_RE.fullmatch(agent_id):
+        raise HTTPException(status_code=400, detail="Ungültige Agent-ID")
     pkg = await database.get_package(package_name)
-    if not pkg or pkg.get("type") != "custom":
-        raise HTTPException(status_code=404, detail="Custom-Paket nicht gefunden")
-
-    uninstall_cmd = (pkg.get("uninstall_cmd") or "").strip()
-    if not uninstall_cmd:
-        raise HTTPException(
-            status_code=400,
-            detail="Für dieses Paket wurde kein Uninstall-Command hinterlegt.",
-        )
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Paket nicht gefunden")
 
     agent = await _resolve_agent(agent_id)
-    ps_cmd = _build_uninstall_command(uninstall_cmd)
-    _spawn_bg(_run_custom_command_bg(
-        agent_id, agent["hostname"], package_name, pkg["display_name"],
-        ps_cmd, "uninstall", pkg.get("current_version_id"),
-    ))
+    ptype = pkg.get("type") or "choco"
+
+    if ptype == "custom":
+        if not _PKG_NAME_RE.fullmatch(package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        uninstall_cmd = (pkg.get("uninstall_cmd") or "").strip()
+        if not uninstall_cmd:
+            raise HTTPException(
+                status_code=400,
+                detail="Für dieses Paket wurde kein Uninstall-Command hinterlegt.",
+            )
+        ps_cmd = _build_uninstall_command(uninstall_cmd)
+        _spawn_bg(_run_custom_command_bg(
+            agent_id, agent["hostname"], package_name, pkg["display_name"],
+            ps_cmd, "uninstall", pkg.get("current_version_id"),
+        ))
+    elif ptype == "winget":
+        if not _WINGET_ID_RE.fullmatch(package_name):
+            raise HTTPException(status_code=400, detail="Ungültige winget-ID")
+        cmd = _build_winget_command("uninstall", package_name)
+        _spawn_bg(_run_winget_command_bg(
+            agent_id, agent["hostname"], package_name, pkg["display_name"],
+            cmd, "uninstall", package_name,
+        ))
+    else:
+        if not _PKG_NAME_RE.fullmatch(package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        try:
+            await TacticalClient().uninstall_software(agent_id, package_name)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Tactical-Fehler: {e}")
+
     await database.log_install(
         agent_id, agent["hostname"], package_name, pkg["display_name"], "uninstall"
     )
     return {"ok": True, "agent": agent["hostname"]}
+
+
+_SOFTWARE_PARENS_RE = re.compile(r"\s*[\(\[].*?[\)\]]\s*")
+_SOFTWARE_WS_RE = re.compile(r"\s+")
+_SOFTWARE_NON_ALNUM_RE = re.compile(r"[^a-z0-9]")
+
+
+def _normalize_software_name(name: str) -> str:
+    if not name:
+        return ""
+    s = _SOFTWARE_PARENS_RE.sub(" ", name)
+    return _SOFTWARE_WS_RE.sub(" ", s).strip().lower()
+
+
+def _alnum_haystack(name: str) -> str:
+    return _SOFTWARE_NON_ALNUM_RE.sub("", _normalize_software_name(name))
+
+
+# Generische Architektur-/Edition-Tokens die KEIN sinnvoller Match-Anker sind.
+# Wenn z. B. das letzte Segment einer winget-ID '64-bit' ist, würde
+# 'Adobe.Acrobat.Reader.64-bit' sonst gegen 'SAP GUI 64bit' matchen — totaler
+# Quatsch. Diese Tokens werden ignoriert.
+_GENERIC_WINGET_TOKENS = frozenset({
+    "64bit", "32bit", "x64", "x86", "amd64", "arm64", "arm",
+    "win32", "win64", "msix", "msi", "exe", "appx",
+    "pro", "home", "enterprise", "std", "standard", "ultimate",
+    "free", "preview", "beta", "nightly",
+    "en", "de", "english", "german", "deutsch",
+})
+
+
+def _winget_id_tokens(winget_id: str) -> tuple[list[str], str]:
+    """Extracts comparable tokens from a winget PackageIdentifier.
+
+    Each dot-separated segment is stripped of punctuation, lowercased, and
+    kept if it is at least 3 alphanum chars, not purely numeric, and not in
+    `_GENERIC_WINGET_TOKENS`. Returns (tokens, last_meaningful_segment).
+    The last_meaningful_segment is the LAST kept token (skipping single-digit
+    or generic trailing segments wie '7' bei RoyalApps.RoyalTS.7).
+    """
+    tokens: list[str] = []
+    segs = (winget_id or "").lower().split(".")
+    for seg in segs:
+        seg_clean = _SOFTWARE_NON_ALNUM_RE.sub("", seg)
+        if len(seg_clean) < 3:
+            continue
+        if seg_clean.isdigit():
+            continue
+        if seg_clean in _GENERIC_WINGET_TOKENS:
+            continue
+        tokens.append(seg_clean)
+    last_clean = tokens[-1] if tokens else ""
+    return tokens, last_clean
+
+
+def _winget_match_strength(tactical_name: str, winget_id: str) -> int:
+    """
+    Score-basiertes Matching zwischen einem Tactical-Software-Scan Display-Namen
+    und einer winget PackageIdentifier. Höhere Scores = stärkere Matches.
+
+    Regeln:
+      - Tokens werden gegen den alphanumerisch-normalisierten Display-Namen
+        substring-gematcht.
+      - Stark: mehrere Tokens matchen (Score = Summe der Längen).
+      - Schwach (aber gültig): genau ein Token matcht UND es ist das letzte
+        Segment der winget-ID. So matcht z. B. 'Bitwarden' gegen
+        Bitwarden.Bitwarden, aber 'Microsoft Office' matcht NICHT
+        Microsoft.Edge, weil 'microsoft' nicht das letzte Segment ist.
+    """
+    haystack = _alnum_haystack(tactical_name)
+    if not haystack:
+        return 0
+    tokens, last_clean = _winget_id_tokens(winget_id)
+    if not tokens:
+        return 0
+    matched = [t for t in tokens if t in haystack]
+    if not matched:
+        return 0
+    if len(matched) >= 2:
+        return sum(len(t) for t in matched)
+    if len(matched) == 1 and last_clean and matched[0] == last_clean:
+        return len(matched[0])
+    return 0
+
+
+@router.get(
+    "/admin/api/agents/{agent_id}/software",
+    dependencies=[Depends(_require_admin)],
+)
+async def get_agent_software(agent_id: str):
+    """
+    Liefert ALLE installierte Software auf einem Agent + Management-Status.
+
+    Zwei Quellen werden gemerged:
+      - agent_winget_state (per Tactical run_command winget export gescraped)
+      - Tactical software-scan API (ARP-basiert)
+
+    Pro Eintrag:
+      managed     = True wenn das Paket in der Softshelf-Whitelist ist
+      managed_type = winget | choco | custom | None
+      package_name = der packages.name falls managed
+      can_activate = True wenn ein winget-id existiert und das Paket noch
+                     nicht whitelisted ist (One-Click-Aktivieren möglich)
+    """
+    if not _AGENT_ID_RE.fullmatch(agent_id):
+        raise HTTPException(status_code=400, detail="Ungültige Agent-ID")
+    agent = await _resolve_agent(agent_id)
+
+    # Quelle 1: Tactical software-scan
+    tactical_error: str | None = None
+    try:
+        tactical_items = await TacticalClient().get_installed_software(agent_id)
+    except Exception as e:
+        logger.warning("software-scan failed for %s: %s", agent_id, e)
+        tactical_items = []
+        tactical_error = str(e)[:200]
+
+    # Quelle 2: per-Agent winget state aus dem nightly Scan
+    winget_state = await database.get_agent_winget_state(agent_id)
+
+    # Whitelist nach Typ aufteilen
+    pkg_rows = await database.get_packages()
+    winget_whitelist: dict[str, dict] = {}
+    other_whitelist: list[dict] = []
+    for pkg in pkg_rows:
+        ptype = pkg.get("type") or "choco"
+        if ptype == "winget":
+            winget_whitelist[pkg["name"]] = pkg
+        else:
+            other_whitelist.append(pkg)
+
+    def _find_other_match(display_name: str) -> dict | None:
+        nl = (display_name or "").lower().strip()
+        if not nl:
+            return None
+        for pkg in other_whitelist:
+            for needle in (
+                pkg.get("detection_name"),
+                pkg.get("display_name"),
+                pkg["name"],
+            ):
+                if not needle:
+                    continue
+                ln = needle.lower()
+                if ln in nl or nl in ln:
+                    return pkg
+        return None
+
+    items: list[dict] = []
+    matched_winget_ids: set[str] = set()
+
+    # Pass 1: Tactical-Items, mit Best-Score-Matching gegen winget_state
+    for item in tactical_items:
+        name = (item.get("name") or "").strip()
+        if not name:
+            continue
+        version = (item.get("version") or "").strip() or None
+        publisher = (item.get("publisher") or "").strip() or None
+
+        # Bestes winget-Match finden (token-score-basiert)
+        best_score = 0
+        best_wid: str | None = None
+        for wid in winget_state.keys():
+            if wid in matched_winget_ids:
+                continue
+            score = _winget_match_strength(name, wid)
+            if score > best_score:
+                best_score = score
+                best_wid = wid
+
+        if best_wid:
+            matched_winget_ids.add(best_wid)
+            wstate = winget_state[best_wid]
+            wpkg = winget_whitelist.get(best_wid)
+            items.append({
+                "name":              wpkg["display_name"] if wpkg else name,
+                "winget_id":         best_wid,
+                "installed_version": wstate.get("installed_version") or version,
+                "available_version": wstate.get("available_version"),
+                "publisher":         (wpkg.get("winget_publisher") if wpkg else None) or publisher,
+                "source":            "winget",
+                "managed":           bool(wpkg),
+                "managed_type":      "winget" if wpkg else None,
+                "package_name":      best_wid if wpkg else None,
+                "can_activate":      not wpkg,
+                "update_available":  bool(wstate.get("available_version")),
+            })
+            continue
+
+        # Tactical-only: gegen choco/custom whitelist matchen
+        wpkg = _find_other_match(name)
+        items.append({
+            "name":              name,
+            "winget_id":         None,
+            "installed_version": version,
+            "available_version": None,
+            "publisher":         publisher,
+            "source":            "tactical_scan",
+            "managed":           bool(wpkg),
+            "managed_type":      (wpkg.get("type") if wpkg else None),
+            "package_name":      wpkg["name"] if wpkg else None,
+            "can_activate":      False,
+            "update_available":  False,
+        })
+
+    # Pass 2: winget_state Einträge die KEIN Tactical-Match hatten
+    for wid, wstate in winget_state.items():
+        if wid in matched_winget_ids:
+            continue
+        wpkg = winget_whitelist.get(wid)
+        items.append({
+            "name":              wpkg["display_name"] if wpkg else wid,
+            "winget_id":         wid,
+            "installed_version": wstate.get("installed_version"),
+            "available_version": wstate.get("available_version"),
+            "publisher":         wpkg.get("winget_publisher") if wpkg else (wid.split(".")[0] if "." in wid else None),
+            "source":            "winget",
+            "managed":           bool(wpkg),
+            "managed_type":      "winget" if wpkg else None,
+            "package_name":      wid if wpkg else None,
+            "can_activate":      not wpkg,
+            "update_available":  bool(wstate.get("available_version")),
+        })
+
+    # Sortieren: Updates zuerst, dann managed, dann unmanaged, jeweils nach Name
+    items.sort(key=lambda i: (
+        0 if i["update_available"] else (1 if i["managed"] else 2),
+        (i["name"] or "").lower(),
+    ))
+
+    return {
+        "agent_id":       agent_id,
+        "hostname":       agent["hostname"],
+        "tactical_error": tactical_error,
+        "items":          items,
+        "total":          len(items),
+    }
 
 
 # ── Audit Log ─────────────────────────────────────────────────────────────────
@@ -1927,9 +2224,6 @@ async def _run_build_async(build_id: int, builder_url: str, proxy_url: str, vers
 
 # ── Winget ────────────────────────────────────────────────────────────────────
 
-# winget PackageIdentifier (z. B. 'Mozilla.Firefox', 'Microsoft.VisualStudioCode')
-_WINGET_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,199}$")
-
 
 class WingetSearchResult(BaseModel):
     id: str
@@ -2109,3 +2403,46 @@ async def winget_run_enrichment_now():
     """Manueller Trigger für den Enrichment-Job."""
     _spawn_bg(winget_enrichment.run_enrichment_job())
     return {"ok": True, "started": True}
+
+
+class WingetUninstallOnAgentRequest(BaseModel):
+    winget_id: str = Field(min_length=1, max_length=200)
+
+    @field_validator("winget_id")
+    @classmethod
+    def _check_id(cls, v: str) -> str:
+        if not _WINGET_ID_RE.fullmatch(v):
+            raise ValueError("Ungültige winget-PackageIdentifier")
+        return v
+
+
+@router.post(
+    "/admin/api/agents/{agent_id}/winget-uninstall",
+    dependencies=[Depends(_require_admin)],
+)
+async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentRequest):
+    """
+    Deinstalliert ein winget-Paket auf einem Agent — funktioniert auch wenn
+    das Paket NICHT in der Softshelf-Whitelist steht. Wird vom Agent-Detail
+    benutzt um unerwünschte Software via `winget uninstall --id <ID>` direkt
+    aufzuräumen.
+    """
+    from routes.install import _build_winget_command, _run_winget_command_bg
+
+    if not _AGENT_ID_RE.fullmatch(agent_id):
+        raise HTTPException(status_code=400, detail="Ungültige Agent-ID")
+    agent = await _resolve_agent(agent_id)
+
+    wid = body.winget_id
+    cmd = _build_winget_command("uninstall", wid)
+    # Display-Name aus der Whitelist falls vorhanden, sonst die ID selbst
+    pkg = await database.get_package(wid)
+    display_name = pkg["display_name"] if pkg else wid
+
+    _spawn_bg(_run_winget_command_bg(
+        agent_id, agent["hostname"], wid, display_name, cmd, "uninstall", wid,
+    ))
+    await database.log_install(
+        agent_id, agent["hostname"], wid, display_name, "uninstall"
+    )
+    return {"ok": True, "agent": agent["hostname"]}
