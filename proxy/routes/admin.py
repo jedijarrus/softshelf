@@ -1610,6 +1610,47 @@ async def get_agent_software(agent_id: str):
             "os_managed":        os_managed,
         })
 
+    # Pass 3: custom-Pakete aus agent_installations die NICHT bereits über
+    # einen Tactical-Scan-Match in Pass 1 als managed gelandet sind. Tritt
+    # auf wenn der User gerade ein custom-Paket installiert hat und Tactical's
+    # software-scan es noch nicht aufgegriffen hat (kann Minuten bis Stunden
+    # dauern). Softshelf weiß durch das eigene Tracking trotzdem dass das
+    # Paket installiert ist — also blenden wir es hier ein.
+    already_managed_pkgs = {
+        i["package_name"] for i in items
+        if i.get("package_name") and i.get("managed")
+    }
+    tracked = await database.get_agent_installations(agent_id)
+    for t in tracked:
+        pkg_name = t["package_name"]
+        if pkg_name in already_managed_pkgs:
+            continue
+        # Nur custom-Pakete: choco-Detection läuft eh über Tactical-Scan,
+        # ein synthetischer Eintrag wäre da unnötig
+        if t.get("type") != "custom":
+            continue
+        # Whitelist-Row holen für display_name + Metadaten
+        whitelist_row = next(
+            (p for p in pkg_rows if p["name"] == pkg_name and (p.get("type") or "choco") == "custom"),
+            None,
+        )
+        if not whitelist_row:
+            continue
+        items.append({
+            "name":              whitelist_row.get("display_name") or pkg_name,
+            "winget_id":         None,
+            "installed_version": t.get("version_label"),
+            "available_version": None,
+            "publisher":         None,
+            "source":            "softshelf_tracking",
+            "managed":           True,
+            "managed_type":      "custom",
+            "package_name":      pkg_name,
+            "can_activate":      False,
+            "update_available":  bool(t.get("outdated")),
+            "os_managed":        False,
+        })
+
     # Sortieren: Updates zuerst, dann managed, dann unmanaged, jeweils nach Name
     items.sort(key=lambda i: (
         0 if i["update_available"] else (1 if i["managed"] else 2),
