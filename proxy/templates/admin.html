@@ -1036,6 +1036,61 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   color: var(--fg-5);
   font-variant-numeric: tabular-nums;
 }
+.sw-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.sw-filter-search {
+  flex: 1;
+  min-width: 220px;
+  max-width: 360px;
+}
+.sw-filter-chips {
+  display: flex;
+  gap: 4px;
+}
+.sw-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 5px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--fg-3);
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+  white-space: nowrap;
+}
+.sw-chip:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-s);
+  color: var(--fg);
+}
+.sw-chip.active {
+  background: var(--fg);
+  border-color: var(--fg);
+  color: var(--bg);
+}
+.sw-chip.active .sw-chip-count {
+  background: rgba(255,255,255,0.18);
+  color: var(--bg);
+}
+.sw-chip-count {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 5px;
+  background: var(--bg-hover);
+  color: var(--fg-5);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
 .agent-software-list {
   display: flex;
   flex-direction: column;
@@ -4754,8 +4809,14 @@ async function agentDetailRescan() {
   } catch (e) {}
 }
 
+// State für die Filter im Agent-Detail. Wird bei jedem Re-Render aus dem UI
+// gelesen und dann in der nächsten _applySoftwareFilter-Call angewandt.
+let _agentSoftwareItems = [];
+let _agentSoftwareFilter = { q: '', mode: 'all' };
+
 function renderAgentDetail(softwareData, log) {
-  const items = (softwareData && softwareData.items) || [];
+  _agentSoftwareItems = (softwareData && softwareData.items) || [];
+  const items = _agentSoftwareItems;
   const errorBlock = (softwareData && softwareData._error)
     ? `<div class="panel-error" style="margin-bottom:12px">Software-Liste konnte nicht geladen werden: ${esc(softwareData._error)}</div>`
     : (softwareData && softwareData.tactical_error
@@ -4781,11 +4842,24 @@ function renderAgentDetail(softwareData, log) {
 
   const updates = items.filter(i => i.update_available).length;
   const managed = items.filter(i => i.managed).length;
+  const unmanaged = items.length - managed;
   const total = items.length;
 
-  const swRows = items.length
-    ? items.map(i => _renderSoftwareRow(i)).join('')
-    : '<div class="empty-mini">Keine Software-Daten — der nightly Scan war noch nicht da oder Tactical ist nicht erreichbar.</div>';
+  const filterBar = `
+    <div class="sw-filter-bar">
+      <div class="input-search sw-filter-search">
+        <input class="input" type="search" id="sw-filter-q"
+               placeholder="Filtern…" value="${esc(_agentSoftwareFilter.q)}"
+               oninput="_onSoftwareFilterInput()">
+      </div>
+      <div class="sw-filter-chips">
+        <button class="sw-chip${_agentSoftwareFilter.mode==='all'?' active':''}" type="button" onclick="_setSoftwareFilterMode('all')">Alle <span class="sw-chip-count">${total}</span></button>
+        <button class="sw-chip${_agentSoftwareFilter.mode==='managed'?' active':''}" type="button" onclick="_setSoftwareFilterMode('managed')">Verwaltet <span class="sw-chip-count">${managed}</span></button>
+        <button class="sw-chip${_agentSoftwareFilter.mode==='updates'?' active':''}" type="button" onclick="_setSoftwareFilterMode('updates')">Updates <span class="sw-chip-count">${updates}</span></button>
+        <button class="sw-chip${_agentSoftwareFilter.mode==='unmanaged'?' active':''}" type="button" onclick="_setSoftwareFilterMode('unmanaged')">Unverwaltet <span class="sw-chip-count">${unmanaged}</span></button>
+      </div>
+    </div>
+  `;
 
   const logBlock = log.length
     ? log.map(e => `
@@ -4804,15 +4878,67 @@ function renderAgentDetail(softwareData, log) {
     ${actionBanner}
     <div class="agent-section-head">
       <span class="agent-section-title">Installierte Software</span>
-      <span class="agent-section-count">${total} · ${managed} verwaltet · ${updates} Update${updates === 1 ? '' : 's'}</span>
+      <span class="agent-section-count" id="sw-section-count">${total} · ${managed} verwaltet · ${updates} Update${updates === 1 ? '' : 's'}</span>
     </div>
-    <div class="agent-software-list">${swRows}</div>
+    ${filterBar}
+    <div class="agent-software-list" id="agent-software-list"></div>
     <div class="agent-section-head" style="margin-top:24px">
       <span class="agent-section-title">Installations-Verlauf</span>
       <span class="agent-section-count">${log.length} Einträge</span>
     </div>
     <div>${logBlock}</div>
   `;
+  _applySoftwareFilter();
+}
+
+function _onSoftwareFilterInput() {
+  const inp = document.getElementById('sw-filter-q');
+  _agentSoftwareFilter.q = (inp && inp.value || '').toLowerCase().trim();
+  _applySoftwareFilter();
+}
+
+function _setSoftwareFilterMode(mode) {
+  _agentSoftwareFilter.mode = mode;
+  // Chips neu zeichnen
+  document.querySelectorAll('.sw-chip').forEach(c => {
+    const text = c.textContent.trim().split(' ')[0].toLowerCase();
+    const matchMode = ({alle:'all', verwaltet:'managed', updates:'updates', unverwaltet:'unmanaged'})[text];
+    c.classList.toggle('active', matchMode === mode);
+  });
+  _applySoftwareFilter();
+}
+
+function _applySoftwareFilter() {
+  const list = document.getElementById('agent-software-list');
+  if (!list) return;
+  const q = _agentSoftwareFilter.q;
+  const mode = _agentSoftwareFilter.mode;
+
+  const filtered = _agentSoftwareItems.filter(i => {
+    if (mode === 'managed' && !i.managed) return false;
+    if (mode === 'updates' && !i.update_available) return false;
+    if (mode === 'unmanaged' && i.managed) return false;
+    if (q) {
+      const hay = ((i.name || '') + ' ' + (i.winget_id || '') + ' ' + (i.publisher || '')).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    list.innerHTML = '<div class="empty-mini">Keine Treffer für den aktuellen Filter.</div>';
+  } else {
+    list.innerHTML = filtered.map(i => _renderSoftwareRow(i)).join('');
+  }
+  // Sub-text aktualisieren mit gefilterter Anzahl
+  const count = document.getElementById('sw-section-count');
+  if (count) {
+    if (mode === 'all' && !q) {
+      count.textContent = `${_agentSoftwareItems.length} insgesamt`;
+    } else {
+      count.textContent = `${filtered.length} von ${_agentSoftwareItems.length} angezeigt`;
+    }
+  }
 }
 
 function _renderSoftwareRow(item) {
