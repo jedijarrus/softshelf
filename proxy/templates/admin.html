@@ -4841,9 +4841,16 @@ function renderAgentDetail(softwareData, log) {
     : '';
 
   const updates = items.filter(i => i.update_available).length;
-  const managed = items.filter(i => i.managed).length;
+  const winget = items.filter(i => i.managed && i.managed_type === 'winget').length;
+  const choco = items.filter(i => i.managed && i.managed_type === 'choco').length;
+  const custom = items.filter(i => i.managed && i.managed_type === 'custom').length;
+  const managed = winget + choco + custom;
   const unmanaged = items.length - managed;
   const total = items.length;
+
+  const f = _agentSoftwareFilter.mode;
+  const chip = (mode, label, count) =>
+    `<button class="sw-chip${f===mode?' active':''}" type="button" data-mode="${esc(mode)}" onclick="_setSoftwareFilterMode('${esc(mode)}')">${label} <span class="sw-chip-count">${count}</span></button>`;
 
   const filterBar = `
     <div class="sw-filter-bar">
@@ -4853,10 +4860,12 @@ function renderAgentDetail(softwareData, log) {
                oninput="_onSoftwareFilterInput()">
       </div>
       <div class="sw-filter-chips">
-        <button class="sw-chip${_agentSoftwareFilter.mode==='all'?' active':''}" type="button" onclick="_setSoftwareFilterMode('all')">Alle <span class="sw-chip-count">${total}</span></button>
-        <button class="sw-chip${_agentSoftwareFilter.mode==='managed'?' active':''}" type="button" onclick="_setSoftwareFilterMode('managed')">Verwaltet <span class="sw-chip-count">${managed}</span></button>
-        <button class="sw-chip${_agentSoftwareFilter.mode==='updates'?' active':''}" type="button" onclick="_setSoftwareFilterMode('updates')">Updates <span class="sw-chip-count">${updates}</span></button>
-        <button class="sw-chip${_agentSoftwareFilter.mode==='unmanaged'?' active':''}" type="button" onclick="_setSoftwareFilterMode('unmanaged')">Unverwaltet <span class="sw-chip-count">${unmanaged}</span></button>
+        ${chip('all',       'Alle',         total)}
+        ${chip('updates',   'Updates',      updates)}
+        ${chip('winget',    'Winget',       winget)}
+        ${chip('choco',     'Chocolatey',   choco)}
+        ${chip('custom',    'Eigene',       custom)}
+        ${chip('unmanaged', 'Unverwaltet',  unmanaged)}
       </div>
     </div>
   `;
@@ -4899,11 +4908,10 @@ function _onSoftwareFilterInput() {
 
 function _setSoftwareFilterMode(mode) {
   _agentSoftwareFilter.mode = mode;
-  // Chips neu zeichnen
+  // Chips neu zeichnen — wir nutzen jetzt das data-mode Attribut für eindeutige
+  // Identifikation (vorher aus dem Text-Inhalt geraten, was bei Sonderzeichen brach)
   document.querySelectorAll('.sw-chip').forEach(c => {
-    const text = c.textContent.trim().split(' ')[0].toLowerCase();
-    const matchMode = ({alle:'all', verwaltet:'managed', updates:'updates', unverwaltet:'unmanaged'})[text];
-    c.classList.toggle('active', matchMode === mode);
+    c.classList.toggle('active', c.getAttribute('data-mode') === mode);
   });
   _applySoftwareFilter();
 }
@@ -4915,8 +4923,10 @@ function _applySoftwareFilter() {
   const mode = _agentSoftwareFilter.mode;
 
   const filtered = _agentSoftwareItems.filter(i => {
-    if (mode === 'managed' && !i.managed) return false;
-    if (mode === 'updates' && !i.update_available) return false;
+    if (mode === 'updates'   && !i.update_available) return false;
+    if (mode === 'winget'    && !(i.managed && i.managed_type === 'winget')) return false;
+    if (mode === 'choco'     && !(i.managed && i.managed_type === 'choco')) return false;
+    if (mode === 'custom'    && !(i.managed && i.managed_type === 'custom')) return false;
     if (mode === 'unmanaged' && i.managed) return false;
     if (q) {
       const hay = ((i.name || '') + ' ' + (i.winget_id || '') + ' ' + (i.publisher || '')).toLowerCase();
