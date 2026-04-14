@@ -301,35 +301,26 @@ def _build_winget_command(action: str, winget_id: str, version: str | None = Non
             f"{version_arg}"
         ).strip()
 
-    return f"""$ErrorActionPreference = 'Stop'
+    # Selbe Marker-Strategie wie beim choco-Wrapper: wir exitieren IMMER
+    # mit 0 und kodieren den echten winget-ExitCode in einer
+    # ===SOFTSHELF_EXIT=== Marker-Zeile am Ende. Damit landet der gesamte
+    # winget-stdout (inkl. Soft-Error-Texten wie „install technology is
+    # different" oder „No available upgrade found") garantiert bei uns,
+    # statt von einem PowerShell Write-Error-Record überdeckt zu werden.
+    return f"""$ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 {_PS_FIND_WINGET}
 $wingetExe = Find-WingetExe
 if (-not $wingetExe) {{
-    Write-Error "winget ist nicht installiert (App Installer fehlt)"
-    exit 9009
+    Write-Output "winget ist nicht installiert (App Installer fehlt)"
+    Write-Output "===SOFTSHELF_EXIT=== 9009"
+    exit 0
 }}
 $out = (& $wingetExe {winget_args} 2>&1) -join "`n"
-Write-Output $out
 $code = $LASTEXITCODE
-if ($code -eq 0) {{
-    exit 0
-}}
-# Bekannte 'eigentlich erfolgreich' Codes:
-#   -1978335212 (0x8a150014) NO_APPLICABLE_INSTALLER bzw. installiert
-#   -1978335189 (0x8a15002B) INSTALL_NOTHING_TO_UPGRADE
-if ($code -eq -1978335212 -or $code -eq -1978335189) {{
-    exit 0
-}}
-# -1978335162 (0x8a150046) APPINSTALLER_CLI_ERROR_NO_UNINSTALL_INFO_FOUND
-# Tritt typischerweise auf wenn das Paket per-user installiert ist und
-# winget unter SYSTEM keine Maschinen-Registry-UninstallString findet.
-if ($code -eq -1978335162) {{
-    Write-Error "winget hat keine Uninstall-Information gefunden — das Paket ist vermutlich per-user oder als Store-App installiert und kann nicht aus dem SYSTEM-Kontext entfernt werden. (ExitCode $code)"
-    exit $code
-}}
-Write-Error "winget {action} beendete mit ExitCode $code"
-exit $code
+Write-Output $out
+Write-Output "===SOFTSHELF_EXIT=== $code"
+exit 0
 """
 
 
@@ -387,6 +378,12 @@ def _detect_winget_soft_error(output: str) -> str | None:
 #   404  - download failure (was the 3cx case)
 # Wir werten 0/1641/3010 als Erfolg.
 _CHOCO_SUCCESS_CODES = {0, 1641, 3010}
+
+# winget exit codes die als "ist eigentlich Erfolg" gewertet werden:
+#   0           - normaler Erfolg
+#   -1978335212 - schon installiert / kein anwendbarer Installer
+#   -1978335189 - kein Upgrade verfügbar (= bereits aktuell)
+_WINGET_SUCCESS_CODES = {0, -1978335212, -1978335189}
 
 # Bekannte Choco-Soft-Error Patterns im stdout (selbst wenn exit != 0)
 _CHOCO_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
@@ -462,6 +459,25 @@ def _detect_choco_soft_error(output: str, exit_code: int | None) -> str | None:
 
 _CHOCO_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,99}$")
 
+# Marker den unsere PowerShell-Wrapper am Ende des stdout schreiben damit
+# wir den echten ExitCode kennen ohne dass wir uns auf nicht-200-Responses
+# von Tactical verlassen müssen
+_EXIT_MARKER_RE = re.compile(r"===SOFTSHELF_EXIT===\s*(-?\d+)")
+
+
+def _extract_exit_marker(output: str) -> tuple[int | None, str]:
+    """Sucht im stdout den Marker `===SOFTSHELF_EXIT=== <code>` und
+    entfernt die Marker-Zeile aus dem Output. Returns (code, cleaned_output).
+    Wenn kein Marker gefunden wird, returns (None, original_output)."""
+    if not output:
+        return None, output
+    m = _EXIT_MARKER_RE.search(output)
+    if not m:
+        return None, output
+    code = int(m.group(1))
+    cleaned = output[:m.start()] + output[m.end():]
+    return code, cleaned.rstrip()
+
 
 def _build_choco_command(action: str, package_name: str) -> str:
     """
@@ -487,6 +503,14 @@ def _build_choco_command(action: str, package_name: str) -> str:
             f"--no-progress --limit-output"
         )
 
+    # Wichtig: Wir exitieren IMMER mit 0 und kodieren den echten ExitCode
+    # in einer Marker-Zeile am Ende des stdout. Hintergrund: PowerShell's
+    # `Write-Error` + `exit non-zero` erzeugt einen Error-Record mit dem
+    # gesamten Script-Body als InvocationInfo, und Tactical's run_command-
+    # Response enthält dann NUR diesen Error-Record — die `Write-Output`-
+    # Zeilen mit dem echten choco-stdout (inkl. wertvoller Fehlermeldungen
+    # wie „vlc is not installed") gehen verloren. Mit „immer exit 0" landen
+    # alle stdout-Zeilen sauber bei uns, und Python parsed den Marker.
     return f"""$ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -498,26 +522,26 @@ if (-not $choco) {{
     if (Test-Path -LiteralPath $candidate) {{ $choco = $candidate }}
 }}
 if (-not $choco) {{
-    Write-Error "choco ist nicht installiert (Chocolatey fehlt auf dem Agent)"
-    exit 9009
-}}
-$out = (& $choco {choco_args} 2>&1) -join "`n"
-Write-Output $out
-$code = $LASTEXITCODE
-# choco success codes: 0 ok, 1641 reboot initiated, 3010 reboot required
-if ($code -eq 0 -or $code -eq 1641 -or $code -eq 3010) {{
+    Write-Output "choco ist nicht installiert (Chocolatey fehlt auf dem Agent)"
+    Write-Output "===SOFTSHELF_EXIT=== 9009"
     exit 0
 }}
-Write-Error "choco {action} beendete mit ExitCode $code"
-exit $code
+$out = (& $choco {choco_args} 2>&1) -join "`n"
+$code = $LASTEXITCODE
+Write-Output $out
+Write-Output "===SOFTSHELF_EXIT=== $code"
+exit 0
 """
 
 
-async def _run_choco_one(agent_id: str, cmd: str) -> tuple[bool, str]:
+async def _run_choco_one(agent_id: str, cmd: str) -> tuple[int | None, str]:
     """Einzelner Tactical run_command-Aufruf für eine fertige choco-Powershell.
-    Returns (success_no_softerror, raw_output). success ist False entweder bei
-    Exception oder wenn der Wrapper mit Write-Error abgebrochen hat. Die
-    Soft-Error-Detection bleibt dem Caller überlassen."""
+    Returns (real_exit_code_or_None, cleaned_output).
+
+    Der Wrapper exitiert immer mit 0 und kodiert den echten ExitCode in einer
+    `===SOFTSHELF_EXIT=== <code>` Marker-Zeile am Ende. Wir extrahieren die
+    und geben sie zusammen mit dem geputzten stdout zurück. Wenn der Marker
+    fehlt (z.B. Tactical-Verbindungsfehler), returns (None, error_text)."""
     try:
         raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=600)
         if raw_output and raw_output.startswith('"'):
@@ -526,9 +550,10 @@ async def _run_choco_one(agent_id: str, cmd: str) -> tuple[bool, str]:
                 raw_output = _json.loads(raw_output)
             except Exception:
                 pass
-        return True, raw_output or ""
     except Exception as e:
-        return False, str(e)
+        return None, str(e)
+    code, cleaned = _extract_exit_marker(raw_output or "")
+    return code, cleaned
 
 
 async def _run_choco_command_bg(
@@ -547,15 +572,19 @@ async def _run_choco_command_bg(
     aber die `<name>.install`-Variante existiert (z.B. 'vlc' weg, 'vlc.install'
     noch da), retry mit dem .install-Namen. Behebt Orphans aus früheren
     halb-fehlgeschlagenen Uninstalls."""
-    success, raw_output = await _run_choco_one(agent_id, cmd)
-    soft_err = _detect_choco_soft_error(raw_output, exit_code=0 if success else 1)
+    exit_code, raw_output = await _run_choco_one(agent_id, cmd)
+    soft_err = _detect_choco_soft_error(raw_output, exit_code)
+    success = exit_code in _CHOCO_SUCCESS_CODES and not soft_err
 
-    # Auto-Retry: wenn uninstall fehlschlägt mit „is not installed" UND der
-    # Paket-Name endet nicht schon auf .install, versuche `<name>.install`.
+    # Auto-Retry: wenn uninstall fehlschlägt UND der stdout sagt
+    # „is not installed" UND der Paket-Name endet nicht schon auf .install,
+    # versuche `<name>.install` als Fallback. Behebt Orphans aus früheren
+    # halb-fehlgeschlagenen Uninstalls (z.B. vlc weg, vlc.install noch da).
     retried_name: str | None = None
     if (
         action == "uninstall"
-        and "is not installed. cannot uninstall" in (raw_output or "").lower()
+        and not success
+        and "is not installed" in (raw_output or "").lower()
         and not package_name.endswith(".install")
         and _CHOCO_NAME_RE.fullmatch(f"{package_name}.install")
     ):
@@ -565,21 +594,19 @@ async def _run_choco_command_bg(
             package_name, retry_target,
         )
         retry_cmd = _build_choco_command("uninstall", retry_target)
-        retry_success, retry_output = await _run_choco_one(agent_id, retry_cmd)
-        retry_soft_err = _detect_choco_soft_error(
-            retry_output, exit_code=0 if retry_success else 1
-        )
-        if retry_success and not retry_soft_err:
+        retry_exit, retry_output = await _run_choco_one(agent_id, retry_cmd)
+        retry_soft_err = _detect_choco_soft_error(retry_output, retry_exit)
+        if retry_exit in _CHOCO_SUCCESS_CODES and not retry_soft_err:
             success = True
             raw_output = retry_output
             soft_err = None
             retried_name = retry_target
         else:
-            # Beide fehlgeschlagen — kombinierte Meldung
             success = False
             soft_err = (
-                f"Weder '{package_name}' noch '{retry_target}' konnten deinstalliert werden. "
-                f"{retry_soft_err or retry_output[:200]}"
+                f"Weder '{package_name}' noch '{retry_target}' konnten "
+                f"deinstalliert werden. "
+                f"{retry_soft_err or (retry_output or '')[:200]}"
             )
 
     error_msg = soft_err if soft_err else None
@@ -589,11 +616,10 @@ async def _run_choco_command_bg(
             action, display_name, hostname, error_msg,
         )
     elif not success:
-        # Sollte selten passieren — Exception ohne erkennbaren Soft-Error
-        error_msg = (raw_output or "unbekannter Fehler")[:300]
+        error_msg = f"choco beendete unerwartet (ExitCode {exit_code})"
         logger.warning(
-            "choco %s fehlgeschlagen: %s auf %s — %s",
-            action, display_name, hostname, error_msg,
+            "choco %s fehlgeschlagen: %s auf %s — exit=%s",
+            action, display_name, hostname, exit_code,
         )
     else:
         logger.info(
@@ -602,9 +628,7 @@ async def _run_choco_command_bg(
             f" (via {retried_name})" if retried_name else "",
         )
 
-    # Tracking nur updaten wenn der Wrapper exit 0 hatte UND wir keinen
-    # Soft-Error im Output sehen. Bei Soft-Errors ist der State unklar —
-    # der nachgelagerte Re-Scan korrigiert ihn ohnehin.
+    # Tracking nur updaten wenn alles sauber durch ist
     if success and not error_msg:
         try:
             if action == "install":
@@ -646,6 +670,7 @@ async def _run_winget_command_bg(
     """
     error_msg: str | None = None
     raw_output = ""
+    exit_code: int | None = None
     try:
         raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=600)
         # Tactical wrappt stdout als JSON-string — entpacken wenn nötig
@@ -655,12 +680,23 @@ async def _run_winget_command_bg(
                 raw_output = _json.loads(raw_output)
             except Exception:
                 pass
+        # Marker-Zeile mit dem echten winget-ExitCode extrahieren
+        exit_code, raw_output = _extract_exit_marker(raw_output or "")
         soft_err = _detect_winget_soft_error(raw_output)
         if soft_err:
             error_msg = soft_err
             logger.warning(
-                "winget %s soft-error für %s auf %s: %s",
-                action, display_name, hostname, soft_err,
+                "winget %s soft-error für %s auf %s (exit=%s): %s",
+                action, display_name, hostname, exit_code, soft_err,
+            )
+        elif exit_code is not None and exit_code not in _WINGET_SUCCESS_CODES:
+            # winget hat non-zero exit der NICHT zu den bekannten
+            # „eigentlich erfolgreich"-Codes gehört, und kein Soft-Error-
+            # Pattern im stdout. Trotzdem reporten.
+            error_msg = f"winget {action} beendete mit ExitCode {exit_code}"
+            logger.warning(
+                "winget %s unhandled exit für %s auf %s: %s",
+                action, display_name, hostname, exit_code,
             )
         else:
             logger.info("winget %s ok: %s auf %s", action, display_name, hostname)
