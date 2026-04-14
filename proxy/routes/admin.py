@@ -1309,6 +1309,12 @@ async def admin_install_on_agent(agent_id: str, package_name: str):
             await TacticalClient().install_software(agent_id, package_name)
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Tactical-Fehler: {e}")
+        # Choco-Tracking damit Pass 3 in get_agent_software das Paket sofort
+        # als verwaltet:choco erkennt — unabhängig vom Tactical-Software-Scan
+        try:
+            await database.set_agent_installation(agent_id, package_name, None)
+        except Exception as e:
+            logger.warning("set_agent_installation choco failed: %s", e)
 
     await database.log_install(
         agent_id, agent["hostname"], package_name, pkg["display_name"], "install"
@@ -1368,6 +1374,11 @@ async def admin_uninstall_on_agent(agent_id: str, package_name: str):
             await TacticalClient().uninstall_software(agent_id, package_name)
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Tactical-Fehler: {e}")
+        # Tracking-Eintrag entfernen
+        try:
+            await database.delete_agent_installation(agent_id, package_name)
+        except Exception as e:
+            logger.warning("delete_agent_installation choco failed: %s", e)
 
     await database.log_install(
         agent_id, agent["hostname"], package_name, pkg["display_name"], "uninstall"
@@ -1505,8 +1516,13 @@ async def get_agent_software(agent_id: str):
             other_whitelist.append(pkg)
 
     def _find_other_match(display_name: str) -> dict | None:
-        nl = (display_name or "").lower().strip()
-        if not nl:
+        # Alphanumerisch-stripped Match (Hyphen, Spaces, Camelcase, Versions-
+        # Suffixe spielen keine Rolle):
+        #   'StarfaceUCC' (whitelist) ↔ 'STARFACE UCC Client v6.7.3.81' (tactical)
+        #   beide → 'starfaceucc...' → starfaceucc Substring-Match findet
+        #   sich im längeren String.
+        nl_alnum = _alnum_haystack(display_name)
+        if not nl_alnum:
             return None
         for pkg in other_whitelist:
             for needle in (
@@ -1516,8 +1532,10 @@ async def get_agent_software(agent_id: str):
             ):
                 if not needle:
                     continue
-                ln = needle.lower()
-                if ln in nl or nl in ln:
+                ln_alnum = _alnum_haystack(needle)
+                if not ln_alnum or len(ln_alnum) < 3:
+                    continue
+                if ln_alnum in nl_alnum or nl_alnum in ln_alnum:
                     return pkg
         return None
 
@@ -1610,12 +1628,15 @@ async def get_agent_software(agent_id: str):
             "os_managed":        os_managed,
         })
 
-    # Pass 3: custom-Pakete aus agent_installations die NICHT bereits über
-    # einen Tactical-Scan-Match in Pass 1 als managed gelandet sind. Tritt
-    # auf wenn der User gerade ein custom-Paket installiert hat und Tactical's
-    # software-scan es noch nicht aufgegriffen hat (kann Minuten bis Stunden
-    # dauern). Softshelf weiß durch das eigene Tracking trotzdem dass das
-    # Paket installiert ist — also blenden wir es hier ein.
+    # Pass 3: custom- UND choco-Pakete aus agent_installations die NICHT
+    # bereits über einen Tactical-Scan-Match in Pass 1 als managed gelandet
+    # sind. Tritt auf wenn der User gerade ein Paket über Softshelf
+    # installiert hat und Tactical's software-scan es noch nicht aufgegriffen
+    # hat (Minuten bis Stunden), ODER wenn der Tactical-Display-Name nicht
+    # ähnlich genug zum Paket-Namen ist um per Substring-Heuristik zu
+    # matchen (z.B. choco 'StarfaceUCC' vs Tactical 'STARFACE UCC Client
+    # v6.7.3.81'). Softshelf weiß durch sein eigenes Tracking immer
+    # deterministisch was installiert ist.
     already_managed_pkgs = {
         i["package_name"] for i in items
         if i.get("package_name") and i.get("managed")
@@ -1625,13 +1646,12 @@ async def get_agent_software(agent_id: str):
         pkg_name = t["package_name"]
         if pkg_name in already_managed_pkgs:
             continue
-        # Nur custom-Pakete: choco-Detection läuft eh über Tactical-Scan,
-        # ein synthetischer Eintrag wäre da unnötig
-        if t.get("type") != "custom":
+        ttype = t.get("type")
+        if ttype not in ("custom", "choco"):
             continue
         # Whitelist-Row holen für display_name + Metadaten
         whitelist_row = next(
-            (p for p in pkg_rows if p["name"] == pkg_name and (p.get("type") or "choco") == "custom"),
+            (p for p in pkg_rows if p["name"] == pkg_name and (p.get("type") or "choco") == ttype),
             None,
         )
         if not whitelist_row:
@@ -1644,7 +1664,7 @@ async def get_agent_software(agent_id: str):
             "publisher":         None,
             "source":            "softshelf_tracking",
             "managed":           True,
-            "managed_type":      "custom",
+            "managed_type":      ttype,
             "package_name":      pkg_name,
             "can_activate":      False,
             "update_available":  bool(t.get("outdated")),
