@@ -482,6 +482,81 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
   border-bottom-color: var(--fg);
 }
 
+.pkg-choco-clickable {
+  cursor: pointer;
+  transition: color .12s;
+}
+.pkg-choco-clickable:hover {
+  color: var(--fg-2);
+  text-decoration: underline;
+  text-decoration-color: var(--border-s);
+  text-underline-offset: 2px;
+}
+
+/* ── Paket-Agenten-Panel ─────────────────────────────────────────── */
+.pkg-agents-summary {
+  font-size: 12px;
+  color: var(--fg-3);
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-soft);
+}
+.pkg-agents-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+}
+.pkg-agent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.pkg-agent-row:hover {
+  background: var(--bg-soft);
+  border-color: var(--border-s);
+}
+.pkg-agent-info {
+  min-width: 0;
+  flex: 1;
+}
+.pkg-agent-host {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+}
+.pkg-agent-meta {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--fg-4);
+  font-variant-numeric: tabular-nums;
+}
+.pkg-agent-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.pkg-agent-badge.pkg-agent-ok {
+  color: #047857;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+}
+.pkg-agent-badge.pkg-agent-update {
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+}
+
 .pkg-choco {
   font-family: var(--mono);
   font-size: 11px;
@@ -3318,27 +3393,19 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   </div>
 </aside>
 
-<!-- AGENT DETAIL -->
-<aside class="panel" id="agent-panel">
+<!-- PACKAGE AGENTS PANEL — zeigt die Liste Agents auf denen ein Paket installiert ist -->
+<aside class="panel" id="pkg-agents-panel">
   <div class="panel-head">
     <div>
-      <h2 class="panel-title" id="agent-panel-title">Installationen</h2>
-      <div class="panel-sub" id="agent-panel-sub">Verlauf</div>
+      <h2 class="panel-title" id="pkg-agents-title">Installiert auf</h2>
+      <div class="panel-sub" id="pkg-agents-sub">—</div>
     </div>
     <button class="panel-close" onclick="closeAll()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
   </div>
-  <div class="panel-body" id="agent-panel-body">
+  <div class="panel-body" id="pkg-agents-body">
     <div class="loading-block"><span class="spinner"></span></div>
-  </div>
-  <div class="upload-actions" id="agent-panel-actions" style="flex-wrap:wrap; gap:6px">
-    <button class="btn btn-ghost btn-sm" type="button" onclick="closeAll()">Schließen</button>
-    <span style="flex:1"></span>
-    <button class="btn btn-ghost btn-sm" type="button" id="agent-revoke-btn" onclick="agentRevoke()" title="Token revoken — Client muss neu registriert werden">Token widerrufen</button>
-    <button class="btn btn-danger btn-sm" type="button" id="agent-delete-btn" onclick="agentDelete()" title="Aus Datenbank entfernen">Löschen</button>
-    <button class="btn push-update-btn btn-sm" type="button" id="agent-ban-btn" onclick="agentBan()" title="Sperren — auch nach Re-Register blockiert">Sperren</button>
-    <button class="btn btn-ghost btn-sm" type="button" id="agent-unban-btn" onclick="agentUnban()" title="Sperre aufheben" style="display:none">Entsperren</button>
   </div>
 </aside>
 
@@ -3741,7 +3808,7 @@ function render() {
             </button>
             <input class="pkg-name" value="${esc(pkg.display_name)}"
                    onchange="renamePkg('${esc(pkg.name)}',this.value)">
-            <div class="pkg-choco">${subText}</div>
+            <div class="pkg-choco pkg-choco-clickable" onclick="openPkgAgentsPanel(${jsStr(pkg.name)},${jsStr(pkg.display_name)})" title="Zeigt auf welchen Geräten dieses Paket installiert ist">${subText}</div>
             <div class="pkg-meta">
               <span class="pkg-tag ${tagClass}">${tagLabel}</span>
               <button class="cat-pill" onclick="openCatPanel(${jsStr(pkg.name)})">${esc(cat)}</button>
@@ -4427,6 +4494,85 @@ function selectCat(cat) { if(pendingCatPkg) setCat(pendingCatPkg, cat); closeCat
 function createCat() {
   const val = document.getElementById('cat-new-input').value.trim();
   if (val && pendingCatPkg) selectCat(val);
+}
+
+// ── Paket-Agenten-Panel ──────────────────────────────────────────────────────
+// Slide-in der zeigt auf welchen Rechnern ein Paket installiert ist. Wird
+// vom Click auf die pkg-choco-Subzeile im Pakete-Tab geöffnet. Liest aus
+// /admin/api/packages/{name}/agents das den richtigen State pro Paket-Typ
+// (agent_choco_state / agent_winget_state / agent_installations) abfragt.
+function _openAgentFromPkgPanel(agentId, hostname) {
+  closeAll();
+  const btn = document.querySelector('[data-tab="agents"]');
+  if (btn) switchTab('agents', btn);
+  setTimeout(() => openAgentDetail(agentId, hostname), 120);
+}
+
+async function openPkgAgentsPanel(name, displayName) {
+  document.getElementById('pkg-agents-title').textContent = displayName || name;
+  document.getElementById('pkg-agents-sub').textContent = name;
+  document.getElementById('pkg-agents-body').innerHTML = '<div class="loading-block"><span class="spinner"></span></div>';
+  document.getElementById('overlay').classList.add('open');
+  document.getElementById('pkg-agents-panel').classList.add('open');
+  try {
+    const data = await api('GET', `/admin/api/packages/${encodeURIComponent(name)}/agents`);
+    renderPkgAgentsPanel(data);
+  } catch (e) {
+    document.getElementById('pkg-agents-body').innerHTML =
+      `<div class="panel-error">Fehler: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderPkgAgentsPanel(data) {
+  const agents = (data && data.agents) || [];
+  const total = data.total || 0;
+  const ptype = data.package?.type || 'choco';
+
+  // Sub-Text updaten mit Total
+  const subEl = document.getElementById('pkg-agents-sub');
+  if (subEl) subEl.textContent = `${data.package?.name} · ${total} ${total === 1 ? 'Gerät' : 'Geräte'}`;
+
+  if (!agents.length) {
+    document.getElementById('pkg-agents-body').innerHTML = `
+      <div class="empty-mini" style="padding:24px 16px; text-align:center; color:var(--fg-4)">
+        <p style="margin:0 0 6px"><b>Kein Gerät hat dieses Paket aktuell installiert.</b></p>
+        ${ptype === 'choco' || ptype === 'winget'
+          ? '<p style="margin:0; font-size:11px">Der nightly Scan oder ein targeted Re-Scan muss zuerst den State aufbauen.</p>'
+          : '<p style="margin:0; font-size:11px">Sobald ein Agent dieses Paket über den Kiosk-Client installiert, erscheint er hier.</p>'}
+      </div>`;
+    return;
+  }
+
+  // Aufteilung: aktuelle vs veraltete
+  const updates = agents.filter(a => a.outdated).length;
+  const summaryLine = updates > 0
+    ? `${total} installiert · <b style="color:#92400e">${updates} mit Update</b>`
+    : `${total} installiert · alle aktuell`;
+
+  const rows = agents.map(a => {
+    const lastSeen = a.last_seen ? relTime(a.last_seen) : '—';
+    const installedV = a.installed_version ? esc(a.installed_version) : '—';
+    const availV = a.available_version ? esc(a.available_version) : null;
+    const badge = a.outdated
+      ? (availV
+          ? `<span class="pkg-agent-badge pkg-agent-update">Update ${availV}</span>`
+          : '<span class="pkg-agent-badge pkg-agent-update">veraltet</span>')
+      : '<span class="pkg-agent-badge pkg-agent-ok">aktuell</span>';
+
+    // Click auf die Row öffnet die Agent-Detail-Page (via Helper)
+    return `<div class="pkg-agent-row" onclick="_openAgentFromPkgPanel(${jsStr(a.agent_id)},${jsStr(a.hostname)})">
+      <div class="pkg-agent-info">
+        <div class="pkg-agent-host">${esc(a.hostname)}</div>
+        <div class="pkg-agent-meta">v${installedV} · zuletzt online ${esc(lastSeen)}</div>
+      </div>
+      ${badge}
+    </div>`;
+  }).join('');
+
+  document.getElementById('pkg-agents-body').innerHTML = `
+    <div class="pkg-agents-summary">${summaryLine}</div>
+    <div class="pkg-agents-list">${rows}</div>
+  `;
 }
 
 // ── Distribution ─────────────────────────────────────────────────────────────

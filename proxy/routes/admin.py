@@ -1042,6 +1042,83 @@ async def list_package_installations(name: str):
     return {"installations": installs, "summary": summary}
 
 
+@router.get(
+    "/admin/api/packages/{name}/agents",
+    dependencies=[Depends(_require_admin)],
+)
+async def list_package_agents(name: str):
+    """
+    Universelle Paket-Detail-Sicht: auf welchen Agents ist dieses Paket
+    installiert. Dispatched nach packages.type:
+
+      - winget: agent_winget_state (winget_id = name)
+      - choco:  agent_choco_state (choco_name = name)
+      - custom: agent_installations + package_versions für version-label,
+                current-version-vergleich für outdated-flag
+
+    Pro Eintrag: agent_id, hostname, last_seen (online-state ableitbar),
+    installed_version, available_version (nur winget/choco), outdated
+    (nur custom — ob die installierte Version unter der current liegt).
+    """
+    if not _PKG_NAME_RE.fullmatch(name) and not _WINGET_ID_RE.fullmatch(name):
+        raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+    pkg = await database.get_package(name)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Paket nicht gefunden")
+    ptype = pkg.get("type") or "choco"
+
+    agents: list[dict] = []
+    if ptype == "winget":
+        rows = await database.get_agents_with_winget_package(name)
+        for r in rows:
+            agents.append({
+                "agent_id":          r["agent_id"],
+                "hostname":          r["hostname"],
+                "last_seen":         r["last_seen"],
+                "installed_version": r["installed_version"],
+                "available_version": r["available_version"],
+                "scanned_at":        r["scanned_at"],
+                "outdated":          bool(r["available_version"]),
+            })
+    elif ptype == "choco":
+        rows = await database.get_agents_with_choco_package(name)
+        for r in rows:
+            agents.append({
+                "agent_id":          r["agent_id"],
+                "hostname":          r["hostname"],
+                "last_seen":         r["last_seen"],
+                "installed_version": r["installed_version"],
+                "available_version": r["available_version"],
+                "scanned_at":        r["scanned_at"],
+                "outdated":          bool(r["available_version"]),
+            })
+    else:
+        # custom: bestehende get_installations_for_package liefert version-
+        # label und outdated-flag gegen current_version_id
+        rows = await database.get_installations_for_package(name)
+        for r in rows:
+            agents.append({
+                "agent_id":          r["agent_id"],
+                "hostname":          r["hostname"],
+                "last_seen":         r["last_seen"],
+                "installed_version": r.get("version_label"),
+                "available_version": None,
+                "scanned_at":        r.get("installed_at"),
+                "outdated":          bool(r.get("outdated")),
+            })
+
+    return {
+        "package": {
+            "name":         name,
+            "display_name": pkg.get("display_name"),
+            "type":         ptype,
+            "category":     pkg.get("category"),
+        },
+        "total":  len(agents),
+        "agents": agents,
+    }
+
+
 @router.post(
     "/admin/api/packages/{name}/push-update",
     dependencies=[Depends(_require_admin)],
