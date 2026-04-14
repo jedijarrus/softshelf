@@ -488,6 +488,14 @@ async def install_package(
             msg = await TacticalClient().install_software(agent_id, body.package_name)
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Fehler: {e}")
+        # Choco-Install via Softshelf → in agent_installations tracken, damit
+        # die Software-Sicht den Eintrag deterministisch matched ohne Tactical-
+        # Scan-Heuristik. version_id=None weil choco kein eigenes Versions-
+        # Tracking via Softshelf hat.
+        try:
+            await database.set_agent_installation(agent_id, body.package_name, None)
+        except Exception as e:
+            logger.warning("set_agent_installation choco failed: %s", e)
 
     await database.log_install(
         agent_id, hostname, body.package_name, pkg["display_name"], "install"
@@ -561,6 +569,13 @@ async def uninstall_package(
             pkg_lower in item.get("name", "").lower() or item.get("name", "").lower() in pkg_lower
             for item in installed
         )
+        # Falls Tactical's Substring-Heuristik den Eintrag nicht findet, aber
+        # Softshelf weiß dass der Agent das Paket installiert hat (eigenes
+        # Tracking) → trotzdem versuchen
+        if not is_installed:
+            tracked = await database.get_agent_installations(agent_id)
+            if any(t["package_name"] == body.package_name for t in tracked):
+                is_installed = True
         if not is_installed:
             raise HTTPException(status_code=409, detail="Paket ist nicht installiert")
 
@@ -568,6 +583,11 @@ async def uninstall_package(
             msg = await TacticalClient().uninstall_software(agent_id, body.package_name)
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Fehler: {e}")
+        # Tracking-Eintrag entfernen
+        try:
+            await database.delete_agent_installation(agent_id, body.package_name)
+        except Exception as e:
+            logger.warning("delete_agent_installation choco failed: %s", e)
 
     await database.log_install(
         agent_id, hostname, body.package_name, pkg["display_name"], "uninstall"
