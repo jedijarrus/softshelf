@@ -123,14 +123,14 @@
     </tr>
     <tr>
       <td><b>Update</b></td>
-      <td>Automatisch beim nächsten <code>choco upgrade</code></td>
+      <td>Wird vom nightly choco-Scan (02:15 UTC) detected. <code>choco outdated --limit-output</code> liefert pro Paket installierte und verfügbare Version, beides landet in <code>agent_choco_state</code>. Im Kiosk-Client erscheint dann der „Updaten"-Button. Klick → <code>choco install &lt;name&gt; -y</code> als SYSTEM via Tactical (choco regelt das in-place-upgrade selbst), danach automatischer Re-Scan</td>
       <td>Im Kiosk-Client erscheint pro Paket ein „Updaten"-Button sobald der nightly Scan eine neuere Version gefunden hat. Klick → <code>winget upgrade --id …</code> als SYSTEM via Tactical, danach automatischer Re-Scan</td>
       <td>Admin lädt neue Version im Edit-Panel hoch und kann sie auf
         veraltete Geräte pushen — siehe <a href="#wf-versions">Versionierung</a></td>
     </tr>
     <tr>
       <td><b>Deinstall</b></td>
-      <td>Tactical führt <code>choco uninstall</code> aus</td>
+      <td><code>choco uninstall &lt;name&gt; -y --no-progress --limit-output</code> via Tactical run_command</td>
       <td><code>winget uninstall --id &lt;ID&gt; --silent --force</code> via Tactical</td>
       <td>Agent führt den gespeicherten Uninstall-Command aus</td>
     </tr>
@@ -142,12 +142,25 @@
     </tr>
     <tr>
       <td><b>Detection</b></td>
-      <td>Substring-Match Choco-Name ↔ Windows-Anzeigename</td>
+      <td>Strukturierter Match aus <code>agent_choco_state</code> (vom choco_scanner nightly + nach jeder Aktion gefüllt). Pakete die via Softshelf installiert wurden landen zusätzlich im <code>agent_installations</code>-Tracking. Pre-existing Software fällt auf alphanum-Substring-Match gegen die Whitelist zurück.</td>
       <td>Strukturierter Match: nightly <code>winget export</code> + <code>winget upgrade</code> auf jedem online Agent via Tactical, Result wird in <code>agent_winget_state</code> persistiert. Kein Substring-Rätselraten — die winget-PackageIdentifier ist eindeutig</td>
-      <td>Substring-Match <code>detection_name</code> ↔ Windows-Anzeigename</td>
+      <td>Substring-Match <code>detection_name</code> ↔ Windows-Anzeigename, plus <code>agent_installations</code>-Tracking für via Softshelf installierte Pakete</td>
     </tr>
   </tbody>
 </table>
+
+<div class="doc-callout info">
+  <b>Einheitliches Fehler-Reporting (seit v1.5.0):</b> Alle drei Quellen
+  laufen über Tactical's <code>run_command</code>-Endpoint mit Output-Capture
+  und Soft-Error-Detection. Wenn ein Install/Update/Uninstall fehlschlägt
+  (z.B. choco-Paket mit kaputtem Hersteller-Download wie das ältere 3cx,
+  oder winget Installer-Technology-Mismatch bei Edge), wird die Meldung in
+  <code>agent_scan_meta.last_action_error</code> persistiert und im
+  Agent-Detail als gelber Warning-Banner über der Software-Liste angezeigt.
+  Der nachgelagerte targeted Re-Scan und das Frontend-Polling
+  (Vergleich von <code>last_scan_at</code> ODER <code>last_action_at</code>)
+  refreshen die UI automatisch sobald der Background-Task fertig ist.
+</div>
 
 <h2>Wie "Installiert"-Status erkannt wird</h2>
 

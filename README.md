@@ -22,12 +22,15 @@ from a browser.
     a daily-refreshed mirror of `cdn.winget.microsoft.com/cache/source.msix`,
     enable a package with one click, and have the agent install/upgrade
     silently as SYSTEM via `winget install --scope machine`.
-- **Per-agent winget inventory** built nightly. A scheduler triggers
-  `winget export` + `winget upgrade` on every online agent, dedupes the result
-  with the Tactical software-scan, and surfaces it as a single deduplicated
-  per-agent software view in the admin UI — including which packages are
-  managed by Softshelf, which are installed but unmanaged, and which have
-  upgrades waiting.
+- **Per-agent inventory for winget AND choco** built nightly. Two schedulers
+  run on every online agent: the winget scanner triggers `winget export` +
+  `winget upgrade` and the choco scanner triggers `choco list` +
+  `choco outdated`. Both feed structured per-agent state tables. The agent
+  detail view in the admin UI deduplicates the result with the Tactical
+  software-scan and surfaces a single combined per-agent software list —
+  including which packages are managed by Softshelf, which source they
+  come from (winget / choco / custom), which are installed but unmanaged,
+  and which have upgrades waiting.
 - **Fleet discovery** that turns the nightly scan into actionable suggestions:
   any winget package installed on at least one agent but not yet whitelisted
   shows up in a one-click *Activate* list. A bonus enrichment pass takes
@@ -35,7 +38,12 @@ from a browser.
   winget catalog with a confidence label.
 - **Silent install + uninstall** via Tactical RMM's agent command channel.
   The end user never sees a UAC prompt, never types credentials, never waits
-  for a ticket. Choco, custom and winget all share the same dispatch path.
+  for a ticket. Choco, custom and winget all share the same dispatch path
+  (Tactical `run_command` with PowerShell wrapper, captured stdout, exit
+  code checking, and known-failure-pattern detection — so a broken upstream
+  package like `choco install 3cx` whose installer 404s lands as a
+  human-readable error banner in the admin UI instead of disappearing into
+  Tactical fire-and-forget land).
 - **Version tracking** per uploaded package. Softshelf knows which agent runs
   which version, and lets an admin push updates to every outdated endpoint
   with a single click. For winget packages the upgrade state comes straight
@@ -119,9 +127,18 @@ admin workflows.
    (5-minute JWT, bound to package hash + agent ID), builds a PowerShell
    command, and dispatches it via Tactical's command channel. The agent
    downloads the file from the proxy, runs the installer, and reports back.
-7. The proxy records the installed version against that agent for later
+7. **Failures from any of the three sources** land in
+   `agent_scan_meta.last_action_error` and surface as a yellow warning
+   banner on the agent detail page. Known failure modes get a human
+   message (`Likely broken for FOSS users` for choco packages with paid
+   downloads, `install technology is different` for winget OS-managed
+   packages like Edge, etc.) — anything unknown surfaces with the raw
+   choco/winget exit code and the trailing output.
+8. The proxy records the installed version against that agent for later
    outdated-detection and push updates. For winget the upgrade state comes
-   from the next per-agent re-scan via `winget export` + `winget upgrade`.
+   from `winget export` + `winget upgrade`. For choco it comes from
+   `choco list --limit-output` + `choco outdated --limit-output`. Both run
+   nightly via APScheduler and after every targeted action.
 
 There is no persistent reverse-tunnel, no open port on the endpoint, and
 no shared credential on the client side — just a signed JWT issued once
@@ -223,6 +240,8 @@ softshelf/
 │   ├── winget_catalog.py # local mirror of the Microsoft winget source
 │   ├── winget_scanner.py # nightly + targeted per-agent winget scan
 │   ├── winget_enrichment.py # daily Tactical-scan → winget-id matcher
+│   ├── choco_scanner.py  # nightly + targeted per-agent choco scan
+│   │                     # (choco list + choco outdated)
 │   └── Dockerfile
 ├── builder/              # Wine + PyInstaller cross-compile service
 │   ├── server.py
