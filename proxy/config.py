@@ -166,6 +166,20 @@ RUNTIME_KEYS: dict[str, dict] = {
         "required": False,
         "default": "Softshelf",
     },
+    "publisher": {
+        "label": "Publisher (Apps & Features)",
+        "help": (
+            "Herausgeber-Name, der unter Apps & Features als Publisher des "
+            "installierten Clients erscheint. Frei wählbar, max. 60 Zeichen, "
+            "keine HTML-Sonderzeichen. Wird beim nächsten EXE-Build in den "
+            "Installer eingebacken — Endgeräte sehen die Änderung erst nach "
+            "Rebuild + Neuinstallation."
+        ),
+        "type": "display_title",
+        "secret": False,
+        "required": False,
+        "default": "Softshelf",
+    },
     # ── SSO (Microsoft Entra ID / Azure AD) ──
     "sso_enabled": {
         "label": "SSO aktivieren",

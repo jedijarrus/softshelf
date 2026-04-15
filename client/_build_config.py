@@ -15,5 +15,7 @@ Autostart-Name. Wird im Admin-UI unter Einstellungen gepflegt und
 vom Builder beim nächsten Build hier eingebacken.
 """
 DEFAULT_PROXY_URL = ""
-BUILD_VERSION = "1.5.0"
+BUILD_VERSION = "1.6.0"
 PRODUCT_SLUG = "Softshelf"
+PUBLISHER = "Softshelf"
+CLIENT_APP_NAME = "Softshelf"

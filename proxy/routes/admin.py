@@ -4,7 +4,9 @@ Session-Cookie-Auth mit lokaler User-DB + optionalem Microsoft-Entra-SSO.
 CSRF-Schutz via Middleware (X-Requested-With) bleibt aktiv.
 """
 import asyncio
+import base64
 import html
+import io
 import logging
 import os
 import re
@@ -14,10 +16,12 @@ from typing import Optional
 from fastapi import (
     APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile,
 )
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
 import httpx
+from PIL import Image, UnidentifiedImageError
+from PIL.Image import DecompressionBombError
 
 import admin_auth
 import database
@@ -2333,6 +2337,148 @@ async def reveal_setting(key: str):
     return {"key": key, "value": value}
 
 
+# ── Branding (App-Icon fuer Apps & Features) ──────────────────────────────────
+
+def _branding_dir() -> str:
+    return os.path.join(os.path.dirname(database.DB_PATH), "branding")
+
+
+def _branding_icon_path() -> str:
+    return os.path.join(_branding_dir(), "icon.ico")
+
+
+_ALLOWED_ICON_EXTS = (".ico", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
+_MAX_ICON_BYTES = 5 * 1024 * 1024  # 5 MB
+# Pixel-Limit gegen Decompression-Bombs: 1024x1024 RGBA = ~4 MB RAM, das reicht
+# fuer Apps & Features (max sinnvolle Groesse ist 256x256, wir lassen 2x Buffer).
+_MAX_ICON_PIXELS = 2 * 1024 * 1024
+_ICON_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+
+
+def _convert_to_ico(raw: bytes) -> bytes:
+    """Liest ein beliebiges Bildformat und gibt ein Multi-Resolution ICO zurueck.
+
+    Hardening:
+      - Pixel-Limit (~2 Mpx) gegen Decompression-Bomb-DoS
+      - DecompressionBombError wird explizit gefangen
+      - img.load() forciert vollstaendigen Decode bevor convert() Speicher allokiert
+    """
+    try:
+        img = Image.open(io.BytesIO(raw))
+    except UnidentifiedImageError:
+        raise HTTPException(status_code=400, detail="Datei ist kein gueltiges Bild")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Bild konnte nicht gelesen werden: {e}")
+
+    if img.size[0] * img.size[1] > _MAX_ICON_PIXELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bild zu gross ({img.size[0]}x{img.size[1]}, max ~2 Megapixel)",
+        )
+    if img.size[0] < 16 or img.size[1] < 16:
+        raise HTTPException(
+            status_code=400,
+            detail="Bild zu klein (min 16x16 Pixel)",
+        )
+
+    try:
+        img.load()
+    except DecompressionBombError:
+        raise HTTPException(status_code=400, detail="Bild als Dekompressionsbombe erkannt")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Bild-Decode fehlgeschlagen: {e}")
+
+    img = img.convert("RGBA")
+
+    # Nur die Groessen behalten die in das Original passen (kein Hochskalieren —
+    # Pillow upsampled sonst aliased).
+    max_dim = max(img.size)
+    sizes = [s for s in _ICON_SIZES if s[0] <= max_dim]
+
+    out = io.BytesIO()
+    img.save(out, format="ICO", sizes=sizes)
+    return out.getvalue()
+
+
+def _icon_status() -> dict:
+    path = _branding_icon_path()
+    if not os.path.isfile(path):
+        return {"exists": False, "uploaded_at": None, "size": None}
+    stat = os.stat(path)
+    return {
+        "exists": True,
+        "uploaded_at": int(stat.st_mtime),
+        "size": stat.st_size,
+    }
+
+
+@router.get("/admin/api/branding", dependencies=[Depends(_require_admin)])
+async def get_branding():
+    """Status des Branding-Icons (existiert ja/nein, mtime fuer Cache-Busting)."""
+    return {"icon": _icon_status()}
+
+
+@router.post("/admin/api/branding/icon", dependencies=[Depends(_require_admin)])
+async def upload_branding_icon(file: UploadFile = File(...)):
+    """Nimmt ein Icon (ICO/PNG/JPG/...) entgegen und speichert es als Multi-Res ICO."""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in _ALLOWED_ICON_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Dateityp nicht erlaubt. Erlaubt: {', '.join(_ALLOWED_ICON_EXTS)}",
+        )
+
+    raw = await file.read(_MAX_ICON_BYTES + 1)
+    if len(raw) > _MAX_ICON_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Datei zu gross (max {_MAX_ICON_BYTES // 1024 // 1024} MB)",
+        )
+    if not raw:
+        raise HTTPException(status_code=400, detail="Datei ist leer")
+
+    ico_bytes = _convert_to_ico(raw)
+
+    os.makedirs(_branding_dir(), exist_ok=True)
+    icon_path = _branding_icon_path()
+    tmp_path = icon_path + ".tmp"
+    with open(tmp_path, "wb") as f:
+        f.write(ico_bytes)
+    os.replace(tmp_path, icon_path)
+
+    return {"ok": True, "icon": _icon_status()}
+
+
+@router.delete("/admin/api/branding/icon", dependencies=[Depends(_require_admin)])
+async def delete_branding_icon():
+    """Entfernt das hochgeladene Icon (PyInstaller faellt dann auf Default zurueck)."""
+    try:
+        os.unlink(_branding_icon_path())
+    except FileNotFoundError:
+        pass
+    return {"ok": True, "icon": _icon_status()}
+
+
+@router.get("/admin/api/branding/icon", dependencies=[Depends(_require_admin)])
+async def get_branding_icon():
+    """Liefert das gespeicherte Icon zur Vorschau im Admin-UI."""
+    path = _branding_icon_path()
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Kein Icon hochgeladen")
+    with open(path, "rb") as f:
+        data = f.read()
+    return Response(content=data, media_type="image/x-icon")
+
+
+def _read_icon_b64() -> str | None:
+    """Liest das Icon vom Disk und gibt es base64-encoded zurueck (oder None)."""
+    path = _branding_icon_path()
+    if not os.path.isfile(path):
+        return None
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("ascii")
+
+
 # ── Client Build (Wine PyInstaller builder) ───────────────────────────────────
 
 @router.get("/admin/api/build/status", dependencies=[Depends(_require_admin)])
@@ -2392,33 +2538,50 @@ async def trigger_build():
     # Slug aus Runtime-Settings. Der Validator beim Speichern stellt sicher,
     # dass hier nur ein legitimer Wert stehen kann — zusaetzlich validiert
     # der Builder und build.sh das nochmal vor der Verwendung (defense in depth).
-    slug = await runtime_value("product_slug") or "Softshelf"
+    slug        = await runtime_value("product_slug") or "Softshelf"
+    publisher   = await runtime_value("publisher") or slug
+    app_name    = await runtime_value("client_app_name") or slug
+    icon_b64    = _read_icon_b64()  # None wenn kein Icon hochgeladen
 
     cfg = get_settings()
-    version = "1.5.0"  # wird in der EXE angezeigt
+    version = "1.6.0"  # wird in der EXE angezeigt
 
     build_id = await database.start_build_log(proxy_url, version)
 
     # Build im Hintergrund starten, nicht auf Ergebnis warten
-    _spawn_bg(_run_build_async(build_id, cfg.builder_url, proxy_url, version, slug))
+    _spawn_bg(_run_build_async(
+        build_id, cfg.builder_url, proxy_url, version, slug, publisher,
+        app_name, icon_b64,
+    ))
 
     return {"ok": True, "build_id": build_id, "status": "running"}
 
 
-async def _run_build_async(build_id: int, builder_url: str, proxy_url: str, version: str, slug: str):
+async def _run_build_async(
+    build_id: int,
+    builder_url: str,
+    proxy_url: str,
+    version: str,
+    slug: str,
+    publisher: str,
+    app_name: str,
+    icon_b64: str | None,
+):
     """Ruft den Builder-Container auf und speichert das Ergebnis im build_log."""
     status = "failed"
     log = ""
     try:
         async with httpx.AsyncClient(timeout=600) as c:
-            r = await c.post(
-                f"{builder_url}/build",
-                json={
-                    "proxy_url": proxy_url,
-                    "version": version,
-                    "product_slug": slug,
-                },
-            )
+            payload = {
+                "proxy_url": proxy_url,
+                "version": version,
+                "product_slug": slug,
+                "publisher": publisher,
+                "client_app_name": app_name,
+            }
+            if icon_b64:
+                payload["icon_ico_b64"] = icon_b64
+            r = await c.post(f"{builder_url}/build", json=payload)
             data = r.json()
             log = data.get("log", "")
             status = "success" if data.get("ok") else "failed"
