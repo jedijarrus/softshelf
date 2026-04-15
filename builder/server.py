@@ -2,7 +2,7 @@
 Builder-HTTP-API — triggert PyInstaller-Builds via Wine.
 
 POST /build
-  Body: {"proxy_url": "http://10.0.0.5:8765", "version": "1.2.0",
+  Body: {"proxy_url": "http://10.0.0.5:8765", "version": "1.5.0",
          "product_slug": "Softshelf"}
   Response: {"ok": true, "log": "...", "slug": "Softshelf",
              "artifacts": ["Softshelf.exe", "Softshelf-setup.exe"]}
@@ -28,7 +28,7 @@ _SLUG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,30}$")
 
 class BuildRequest(BaseModel):
     proxy_url: str = Field(min_length=1)
-    version: str = Field(default="1.2.0")
+    version: str = Field(default="1.5.0")
     product_slug: str = Field(default="Softshelf")
 
     @field_validator("product_slug")
