@@ -2751,6 +2751,50 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   border-color: var(--fg-5);
 }
 
+/* Branding (Icon Upload) */
+.branding-block {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+.branding-preview {
+  width: 96px; height: 96px;
+  border-radius: var(--r);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.branding-preview img {
+  max-width: 80px;
+  max-height: 80px;
+  image-rendering: -webkit-optimize-contrast;
+}
+.branding-empty {
+  font-size: 11px;
+  color: var(--fg-5);
+  text-align: center;
+  padding: 0 8px;
+}
+.branding-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.branding-meta {
+  font-size: 11px;
+  color: var(--fg-5);
+  font-family: var(--mono);
+}
+
 /* Build status */
 .build-status {
   background: var(--bg);
@@ -3057,6 +3101,25 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
 
     <div id="settings-form" class="settings-form">
       <div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Einstellungen werden geladen</span></div>
+    </div>
+
+    <div class="section-head" style="margin-top:48px; margin-bottom:20px">
+      <div>
+        <h2 class="section-title" style="font-size:18px">App-Icon (Branding)</h2>
+        <div class="section-sub">Wird beim naechsten EXE-Build in den Tray-Client und Installer eingebacken und unter <i>Apps &amp; Features</i> als DisplayIcon angezeigt. Akzeptiert ICO/PNG/JPG (max 5&nbsp;MB) — PNG/JPG werden automatisch in ein Multi-Resolution-ICO konvertiert. Aenderung wird erst nach <i>EXEs bauen</i> + Neu-Deploy auf den Endpunkten sichtbar.</div>
+      </div>
+    </div>
+    <div id="branding-block" class="branding-block">
+      <div class="branding-preview">
+        <img id="branding-icon-img" alt="" hidden>
+        <div id="branding-icon-empty" class="branding-empty">Kein Icon hochgeladen</div>
+      </div>
+      <div class="branding-actions">
+        <label class="btn btn-primary btn-sm" for="branding-icon-input">Icon hochladen</label>
+        <input type="file" id="branding-icon-input" accept=".ico,.png,.jpg,.jpeg,.gif,.bmp,.webp" style="display:none" onchange="uploadBrandingIcon(this.files[0])">
+        <button class="btn btn-ghost btn-sm" id="branding-icon-delete-btn" onclick="deleteBrandingIcon()" hidden>Entfernen</button>
+        <span id="branding-icon-meta" class="branding-meta"></span>
+      </div>
     </div>
 
     <div class="section-head" style="margin-top:48px; margin-bottom:20px">
@@ -6399,10 +6462,80 @@ async function loadSettings() {
     const data = await api('GET', '/admin/api/settings');
     _settingsMeta = data.settings;
     renderSettings();
+    loadBranding();
     loadBuildStatus();
   } catch (e) {
     document.getElementById('settings-form').innerHTML =
       `<div class="empty"><h3>Fehler beim Laden</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+// ── Branding (App-Icon Upload) ───────────────────────────────────────────────
+
+async function loadBranding() {
+  try {
+    const data = await api('GET', '/admin/api/branding');
+    renderBranding(data.icon);
+  } catch (e) {
+    // nicht kritisch — Branding-Block bleibt leer
+  }
+}
+
+function renderBranding(icon) {
+  const img    = document.getElementById('branding-icon-img');
+  const empty  = document.getElementById('branding-icon-empty');
+  const delBtn = document.getElementById('branding-icon-delete-btn');
+  const meta   = document.getElementById('branding-icon-meta');
+  if (icon && icon.exists) {
+    img.src = `/admin/api/branding/icon?t=${icon.uploaded_at || Date.now()}`;
+    img.hidden = false;
+    empty.hidden = true;
+    delBtn.hidden = false;
+    const kb = Math.max(1, Math.round((icon.size || 0) / 1024));
+    meta.textContent = `${kb} KB · gespeichert`;
+  } else {
+    img.hidden = true;
+    img.removeAttribute('src');
+    empty.hidden = false;
+    delBtn.hidden = true;
+    meta.textContent = '';
+  }
+}
+
+async function uploadBrandingIcon(file) {
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  try {
+    const r = await fetch('/admin/api/branding/icon', {
+      method: 'POST',
+      headers: {'X-Requested-With': 'XMLHttpRequest'},
+      body: fd,
+      credentials: 'same-origin',
+    });
+    if (!r.ok) {
+      let msg = `HTTP ${r.status}`;
+      try { msg = (await r.json()).detail || msg; } catch (_) {}
+      toast(msg, false);
+      return;
+    }
+    const data = await r.json();
+    renderBranding(data.icon);
+    toast('Icon gespeichert');
+  } catch (e) {
+    toast('Upload fehlgeschlagen: ' + e.message, false);
+  } finally {
+    document.getElementById('branding-icon-input').value = '';
+  }
+}
+
+async function deleteBrandingIcon() {
+  try {
+    await api('DELETE', '/admin/api/branding/icon');
+    await loadBranding();
+    toast('Icon entfernt');
+  } catch (e) {
+    // api() shows toast already, kein doppelter
   }
 }
 
