@@ -2377,7 +2377,7 @@ async def trigger_build():
     slug = await runtime_value("product_slug") or "Softshelf"
 
     cfg = get_settings()
-    version = "1.2.0"  # wird in der EXE angezeigt
+    version = "1.5.0"  # wird in der EXE angezeigt
 
     build_id = await database.start_build_log(proxy_url, version)
 
