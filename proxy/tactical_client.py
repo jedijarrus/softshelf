@@ -12,10 +12,13 @@ Verwendete Endpoints:
   POST /software/<agent_id>/uninstall/ → Choco-Uninstall
   POST /agents/<agent_id>/cmd/         → Raw Command (für custom MSI/EXE)
 """
+import asyncio
 import re
 import httpx
 
 from config import runtime_value
+
+_RETRYABLE_STATUS = {502, 503, 504}
 
 # Defense-in-depth: Namens-Validierung vor jeder URL-/Shell-Interpolation
 _PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,99}$")
@@ -51,13 +54,31 @@ class TacticalClient:
     async def get_installed_software(self, agent_id: str) -> list[dict]:
         _check_agent(agent_id)
         base, headers = await self._connection()
+        url = f"{base}/software/{agent_id}/"
+        delays = [0, 1.0, 2.5]
+        last_exc: Exception | None = None
         async with self._client(headers) as c:
-            r = await c.get(f"{base}/software/{agent_id}/")
-            r.raise_for_status()
-            data = r.json()
-            if isinstance(data, dict):
-                return data.get("software", [])
-            return data
+            for delay in delays:
+                if delay:
+                    await asyncio.sleep(delay)
+                try:
+                    r = await c.get(url)
+                    if r.status_code in _RETRYABLE_STATUS:
+                        last_exc = httpx.HTTPStatusError(
+                            f"Tactical RMM returned HTTP {r.status_code}",
+                            request=r.request, response=r,
+                        )
+                        continue
+                    r.raise_for_status()
+                    data = r.json()
+                    if isinstance(data, dict):
+                        return data.get("software", [])
+                    return data
+                except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+                    last_exc = e
+                    continue
+        assert last_exc is not None
+        raise last_exc
 
     async def install_software(self, agent_id: str, package_name: str) -> str:
         _check_agent(agent_id)
