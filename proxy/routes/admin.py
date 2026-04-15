@@ -1568,10 +1568,24 @@ async def get_agent_software(agent_id: str):
     tactical_error: str | None = None
     try:
         tactical_items = await TacticalClient().get_installed_software(agent_id)
+    except httpx.HTTPStatusError as e:
+        logger.warning("software-scan HTTP %s for %s", e.response.status_code, agent_id)
+        tactical_items = []
+        tactical_error = (
+            f"Tactical RMM nicht erreichbar (HTTP {e.response.status_code}). "
+            "Liste zeigt nur von Softshelf verwaltete Pakete."
+        )
+    except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+        logger.warning("software-scan network error for %s: %s", agent_id, e)
+        tactical_items = []
+        tactical_error = (
+            "Tactical RMM nicht erreichbar (Netzwerkfehler). "
+            "Liste zeigt nur von Softshelf verwaltete Pakete."
+        )
     except Exception as e:
         logger.warning("software-scan failed for %s: %s", agent_id, e)
         tactical_items = []
-        tactical_error = str(e)[:200]
+        tactical_error = f"Tactical-Scan fehlgeschlagen: {str(e)[:180]}"
 
     # Quelle 2: per-Agent winget state aus dem nightly Scan
     winget_state = await database.get_agent_winget_state(agent_id)
