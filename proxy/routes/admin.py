@@ -159,9 +159,27 @@ async def admin_page(request: Request):
 @router.get("/admin/api/help", response_class=HTMLResponse,
             dependencies=[Depends(_require_admin)])
 async def admin_help():
-    """HTML-Fragment mit der Admin-Dokumentation. Wird vom Hilfe-Tab lazy geladen."""
+    """HTML-Fragment mit der Admin-Dokumentation. Wird vom Hilfe-Tab lazy geladen.
+
+    Ersetzt {{SF_*}}-Platzhalter durch die aktuellen Runtime-Werte (Proxy-URL,
+    Registration-Secret, Setup-EXE-URL, Slug). Damit sind die PowerShell-
+    Deployment-Snippets im Hilfe-Tab direkt copy-paste-faehig fuer die
+    konkrete Installation. Endpoint ist admin-only — das Secret bleibt also
+    in der Session des angemeldeten Admins.
+    """
     with open(_HELP_PATH, encoding="utf-8") as f:
-        return f.read()
+        page = f.read()
+
+    proxy_url = (await runtime_value("proxy_public_url") or "").rstrip("/")
+    secret    = await runtime_value("registration_secret") or ""
+    slug      = await runtime_value("product_slug") or "Softshelf"
+    setup_url = f"{proxy_url}/download/{slug}-setup.exe" if proxy_url else ""
+
+    page = page.replace("{{SF_PROXY_URL}}",     html.escape(proxy_url, quote=True))
+    page = page.replace("{{SF_REG_SECRET}}",    html.escape(secret,    quote=True))
+    page = page.replace("{{SF_SETUP_EXE_URL}}", html.escape(setup_url, quote=True))
+    page = page.replace("{{SF_SLUG}}",          html.escape(slug,      quote=True))
+    return page
 
 
 # ── Login / Logout / Whoami ───────────────────────────────────────────────────

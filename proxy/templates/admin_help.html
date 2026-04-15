@@ -1119,14 +1119,11 @@ Remove-Item $tmp -Force -ErrorAction SilentlyContinue</pre>
       <li><b>Shell</b>: <code>Powershell</code></li>
       <li><b>Category</b>: Deployment (o.ä.)</li>
       <li><b>Script Body</b>: den Code aus dem nächsten Block einfügen</li>
-      <li><b>Script Arguments</b> (unter dem Body konfigurieren):
-        <ul>
-          <li><code>-ProxyUrl</code>: wie in den Admin-Einstellungen gesetzt</li>
-          <li><code>-RegistrationSecret</code>: aktueller Wert (im Settings-Tab auf <b>Anzeigen</b> klicken zum Kopieren)</li>
-          <li><code>-SetupExeUrl</code>: <code>&lt;proxy_public_url&gt;/download/softshelf-setup.exe</code></li>
-          <li><code>-AgentId</code>: <code>{{agent.agent_id}}</code> — Tactical setzt das automatisch pro Agent ein</li>
-        </ul>
-      </li>
+      <li><b>Script Arguments</b>: kopier die vorausgefuellte Zeile aus dem
+        <i>Script Arguments</i>-Block weiter unten in das Tactical-Feld unter
+        dem Script-Body. Die Werte stammen direkt aus deinen aktuellen
+        Admin-Einstellungen — wenn du das Registration-Secret rotierst,
+        einfach den Hilfe-Tab neu laden.</li>
     </ul>
   </li>
   <li>Script auf die gewünschten Agents ausführen (Agents-Übersicht → Auswahl → <b>Run Script</b>). Der Rest läuft ohne User-Interaction:
@@ -1141,45 +1138,75 @@ Remove-Item $tmp -Force -ErrorAction SilentlyContinue</pre>
   </li>
 </ol>
 
-<h3>PowerShell-Script (copy-paste)</h3>
+<h3>Script Arguments (in Tactical eintragen)</h3>
+
+<p>Diese Zeile in das <b>Script Arguments</b>-Feld unter dem Script-Body
+  eintragen. Die Werte sind aus den aktuellen Admin-Einstellungen
+  vorausgefuellt — Hilfe neu laden falls du gerade etwas geaendert hast:</p>
+
+<pre class="doc-code-block">-ProxyUrl "{{SF_PROXY_URL}}" -RegistrationSecret "{{SF_REG_SECRET}}" -SetupExeUrl "{{SF_SETUP_EXE_URL}}"</pre>
+
+<div class="doc-callout warn">
+  Das <code>RegistrationSecret</code> ist ein Shared-Secret. Trag es nur
+  in das Tactical-Argumentfeld ein, niemals in den Script-Body kopieren —
+  dann taucht es in der Tactical Run-History nicht im Klartext auf.
+</div>
+
+<h3>PowerShell-Script (copy-paste in Script Body)</h3>
 
 <p>Script 1:1 in den Tactical Script-Body packen. Es ist identisch zu
-  <code>installer/deploy_via_trmm.ps1</code> im Proxy-Repo.</p>
+  <code>installer/deploy_via_trmm.ps1</code> im Proxy-Repo. <code>--agent-id</code>
+  wird nicht uebergeben — der Installer liest die Tactical-Agent-ID selbst aus
+  <code>HKLM\SOFTWARE\TacticalRMM\agentid</code>.</p>
 
 <pre class="doc-code-block">&lt;#
 .SYNOPSIS
-    Deployment Script
+    Softshelf - Deployment Script
     Laedt den Installer herunter und fuehrt ihn still aus.
 #&gt;
 param(
-    [Parameter(Mandatory=$true)]  [string]$ProxyUrl,
-    [Parameter(Mandatory=$true)]  [string]$RegistrationSecret,
-    [Parameter(Mandatory=$true)]  [string]$SetupExeUrl,
-    [Parameter(Mandatory=$false)] [string]$AgentId = "{{agent.agent_id}}"
+    [Parameter(Mandatory=$true)] [string]$ProxyUrl,
+    [Parameter(Mandatory=$true)] [string]$RegistrationSecret,
+    [Parameter(Mandatory=$true)] [string]$SetupExeUrl
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference    = "SilentlyContinue"
+
+# TLS 1.2 erzwingen — sonst schlaegt Invoke-WebRequest auf aelteren Windows-
+# Builds bei modernen Reverse-Proxies fehl.
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# Temp-Pfade. Der Error-Log-Name muss zum slug passen den setup.py schreibt
+# (sonst sieht man bei einem Fehler nur "Unbekannter Fehler").
 $SetupFile = [System.IO.Path]::GetFileName(([Uri]$SetupExeUrl).AbsolutePath)
 if ([string]::IsNullOrWhiteSpace($SetupFile)) { $SetupFile = "setup.exe" }
 $TempSetup = Join-Path $env:TEMP $SetupFile
-$ErrorLog  = Join-Path $env:TEMP "setup_error.txt"
+$Slug      = [System.IO.Path]::GetFileNameWithoutExtension($SetupFile) -replace '-setup$',''
+$ErrorLog  = Join-Path $env:TEMP ("{0}_setup_error.txt" -f $Slug.ToLower())
 
 Write-Host "=== Deployment ===" -ForegroundColor Cyan
-Write-Host "Proxy:   $ProxyUrl"
-Write-Host "AgentId: $AgentId"
-Write-Host "Setup:   $SetupFile"
+Write-Host "Proxy: $ProxyUrl"
+Write-Host "Setup: $SetupFile"
 Write-Host ""
 
+# Installer herunterladen
 Write-Host "Lade $SetupFile herunter..."
-Invoke-WebRequest -Uri $SetupExeUrl -OutFile $TempSetup -UseBasicParsing
+try {
+    Invoke-WebRequest -Uri $SetupExeUrl -OutFile $TempSetup -UseBasicParsing
+} catch {
+    Write-Host "Download fehlgeschlagen: $($_.Exception.Message)" -ForegroundColor Red
+    exit 2
+}
 Write-Host "Download abgeschlossen." -ForegroundColor Green
 
-# Installation starten (laeuft als SYSTEM, schreibt in HKLM)
+# Installation starten. -NoNewWindow ist Pflicht unter SYSTEM/Session 0.
+# Args werden als ARRAY uebergeben, damit PowerShell nichts re-quoten muss.
 Write-Host "Starte Installation..."
 $proc = Start-Process `
     -FilePath $TempSetup `
-    -ArgumentList "--proxy-url `"$ProxyUrl`" --reg-secret `"$RegistrationSecret`" --agent-id `"$AgentId`"" `
-    -Wait -PassThru
+    -ArgumentList @("--proxy-url", $ProxyUrl, "--reg-secret", $RegistrationSecret) `
+    -Wait -PassThru -NoNewWindow
 
 if ($proc.ExitCode -ne 0) {
     $errMsg = if (Test-Path $ErrorLog) { Get-Content $ErrorLog -Raw } else { "Unbekannter Fehler" }
@@ -1198,12 +1225,10 @@ Write-Host "=== Deployment abgeschlossen ===" -ForegroundColor Cyan
 Write-Host "Der Tray-Client startet beim naechsten Benutzer-Login automatisch." -ForegroundColor Green</pre>
 
 <div class="doc-callout info">
-  <b>Sicherheit:</b> Das Script ruft <code>$RegistrationSecret = $null</code> und
-  <code>GC::Collect()</code> auf, damit das Shared-Secret nach dem Install nicht
-  mehr im PowerShell-Variable-Scope hängen bleibt. In Tactical's Run-History
-  siehst du nur die Parameter-Namen — die Secret-Werte werden nicht im Klartext
-  geloggt wenn du sie über Tactical's <b>Script Arguments</b> setzt (nicht im
-  Script-Body hardcoden!).
+  <b>Was am alten Script kaputt war:</b> kein <code>-NoNewWindow</code> (deadlocked
+  unter SYSTEM/Session 0), kein TLS 1.2 (HTTPS-Reverse-Proxies haben Downloads
+  abgewiesen), und der Error-Log wurde unter dem falschen Pfad gesucht — jeder
+  Fehler erschien als "Unbekannter Fehler" statt mit echter Ursache.
 </div>
 
 <h2>Variante B: Manuell auf einzelnen PCs</h2>
