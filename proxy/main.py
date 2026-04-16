@@ -29,7 +29,7 @@ from routes import packages, install, admin, register
 
 logger = logging.getLogger("softshelf")
 
-VERSION = "1.6.0"
+VERSION = "2.0.0"
 
 # /app/downloads — shared volume mit dem builder-Container
 DOWNLOADS_DIR = "/app/downloads"
@@ -101,6 +101,230 @@ async def _choco_nightly_job():
         logger.exception("nightly choco scan job crashed: %s", e)
 
 
+async def _rollout_auto_start_tick():
+    """Startet fuer alle staged+auto_advance Pakete OHNE aktiven Rollout
+    automatisch einen neuen Rollout — sobald Updates verfuegbar sind.
+
+    Konsequenz: staged + auto_advance = kontinuierlicher Rollout. Admin
+    setzt einmal die Flags, neue Versionen werden automatisch durch die
+    Phasen gepushed.
+    """
+    try:
+        pkgs = await database.get_packages()
+        candidates = [
+            p for p in pkgs
+            if p.get("staged_rollout") and p.get("auto_advance")
+        ]
+        if not candidates:
+            return
+        active = await database.get_active_rollout_phases()
+        from routes.admin import _dispatch_rollout_phase
+        for p in candidates:
+            if p["name"] in active:
+                continue  # Rollout laeuft bereits
+            # Has updates? Check ob mindestens ein Agent outdated ist
+            ptype = p.get("type") or "choco"
+            has_updates = False
+            if ptype == "winget":
+                raw = await database.get_agents_with_winget_package(p["name"])
+                has_updates = any(r.get("available_version") for r in raw)
+            elif ptype == "choco":
+                raw = await database.get_agents_with_choco_package(p["name"])
+                has_updates = any(r.get("available_version") for r in raw)
+            else:
+                raw = await database.get_installations_for_package(p["name"])
+                has_updates = any(r.get("outdated") for r in raw)
+            if not has_updates:
+                continue
+            # Rollout anlegen + Phase 1 dispatchen
+            rollout_id = await database.create_rollout(
+                package_name=p["name"],
+                display_name=p.get("display_name") or p["name"],
+                action="push_update",
+                created_by=None,  # system-gestartet
+            )
+            try:
+                await _dispatch_rollout_phase(p, 1)
+                logger.info(
+                    "auto-started rollout %s for %s (staged + auto_advance)",
+                    rollout_id, p["name"],
+                )
+            except Exception as e:
+                logger.exception("auto-start dispatch failed for %s: %s", p["name"], e)
+    except Exception as e:
+        logger.exception("rollout auto-start tick crashed: %s", e)
+
+
+async def _rollout_auto_advance_tick():
+    """Alle 15 Min: pruefe aktive Rollouts, advance automatisch wenn
+    Bedingungen erfuellt:
+      1. Das Paket des Rollouts hat packages.auto_advance=1 (opt-in per
+         Paket, kein globaler Switch).
+      2. Zeit seit last_advanced_at >= rollout_auto_advance_hours_N_to_M.
+      3. Fehler-Rate in aktueller Phase unter rollout_max_error_pct
+         (0 = striktes Blocken schon bei einem Fehler).
+
+    Fehler-Rate = offene (un-acked) Fehler mit
+    last_action_package == rollout.package_name / Agents-in-Stage.
+    """
+    from datetime import datetime, timezone, timedelta
+    try:
+        from config import runtime_value
+        # Per-Transition Wartezeit: 1→2 vs 2→3 separat konfigurierbar.
+        # Fallback fuer Legacy-Key rollout_auto_advance_hours: wenn gesetzt,
+        # gilt das fuer 1→2 (2→3 bekommt Default 168h).
+        async def _get_hours(key: str, fallback: int) -> int:
+            raw = await runtime_value(key)
+            if raw:
+                try: return int(raw)
+                except: pass
+            return fallback
+        legacy_hours = await _get_hours("rollout_auto_advance_hours", 0)
+        hours_1_to_2 = await _get_hours("rollout_auto_advance_hours_1_to_2",
+                                        legacy_hours if legacy_hours > 0 else 24)
+        hours_2_to_3 = await _get_hours("rollout_auto_advance_hours_2_to_3", 168)
+        max_err_pct_raw = await runtime_value("rollout_max_error_pct") or "0"
+        try:
+            max_err_pct = int(max_err_pct_raw)
+        except Exception:
+            max_err_pct = 0
+        now = datetime.now(timezone.utc)
+
+        # Stage-Mapping fuer Fehler-Ring-Counting
+        phase_stage = {1: "ring1", 2: "ring2", 3: "prod"}
+        from routes.admin import _stage_to_ring_filter
+
+        rollouts = await database.list_rollouts(status="active", limit=500)
+        for r in rollouts:
+            # Per-Paket opt-in: nur Pakete mit auto_advance=1 werden
+            # automatisch weitergeschaltet.
+            pkg_row = await database.get_package(r["package_name"])
+            if not pkg_row or not pkg_row.get("auto_advance"):
+                continue
+            la_raw = r.get("last_advanced_at")
+            if not la_raw:
+                continue
+            try:
+                la = datetime.fromisoformat(la_raw.replace(" ", "T").replace("Z", "+00:00"))
+                if la.tzinfo is None:
+                    la = la.replace(tzinfo=timezone.utc)
+            except Exception:
+                continue
+            # Welche Transition steht an? current_phase=1 → 1→2-Hours
+            if r["current_phase"] == 1:
+                wait_hours = hours_1_to_2
+            elif r["current_phase"] == 2:
+                wait_hours = hours_2_to_3
+            elif r["current_phase"] == 3:
+                # Phase 3 dispatched → nach kurzer Observations-Zeit
+                # (Default 1h, wenn Fehler auftreten pausiert der Tick
+                # weiter) Rollout auf 'done' setzen via advance.
+                wait_hours = 1
+            else:
+                continue
+            threshold = now - timedelta(hours=max(1, wait_hours))
+            if la > threshold:
+                continue
+
+            # Fehler-Anteil berechnen
+            errors = await database.get_fleet_errors(limit=500)
+            err_for_pkg = [e for e in errors
+                           if e.get("last_action_package") == r["package_name"]]
+            stage = phase_stage.get(r["current_phase"])
+            agents_in_stage = await database.get_agents_by_ring(
+                _stage_to_ring_filter(stage)
+            ) if stage else []
+            total_agents = len(agents_in_stage) or 1
+            err_pct = (len(err_for_pkg) * 100) // total_agents
+
+            if max_err_pct > 0:
+                # Nur blocken wenn Schwelle ueberschritten
+                if err_pct > max_err_pct:
+                    logger.info(
+                        "auto-advance skip rollout %s (paket=%s): "
+                        "Fehlerrate %d%% > Schwelle %d%%",
+                        r["id"], r["package_name"], err_pct, max_err_pct,
+                    )
+                    continue
+            else:
+                # max_err_pct = 0: schon ein einziger Fehler blockt
+                if err_for_pkg:
+                    logger.info(
+                        "auto-advance skip rollout %s (paket=%s): "
+                        "%d offene Fehler (max_error_pct=0)",
+                        r["id"], r["package_name"], len(err_for_pkg),
+                    )
+                    continue
+
+            # Advance (pkg schon oben geholt)
+            pkg = pkg_row
+            from routes.admin import _dispatch_rollout_phase
+            updated = await database.advance_rollout(
+                r["id"],
+                {
+                    "at": datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                    "auto": True,
+                    "error_pct": err_pct,
+                },
+                expected_phase=r["current_phase"],
+            )
+            if updated and updated["status"] == "active":
+                await _dispatch_rollout_phase(pkg, updated["current_phase"])
+                logger.info("auto-advanced rollout %s to phase %s (err_pct=%d)",
+                            r["id"], updated["current_phase"], err_pct)
+            elif updated and updated["status"] == "done":
+                logger.info("auto-advanced rollout %s → done", r["id"])
+    except Exception as e:
+        logger.exception("rollout auto-advance tick crashed: %s", e)
+
+
+async def _scheduled_jobs_tick():
+    """Minuetlicher Tick: checkt pending scheduled_jobs deren run_at <= now,
+    fuehrt sie aus und markiert als done/failed."""
+    from datetime import datetime, timezone
+    try:
+        pending = await database.list_pending_scheduled_jobs()
+        now = datetime.now(timezone.utc)
+        from routes.admin import execute_scheduled_job
+        for job in pending:
+            try:
+                run_at = datetime.fromisoformat(job["run_at"].replace("Z", "+00:00"))
+                if run_at.tzinfo is None:
+                    run_at = run_at.replace(tzinfo=timezone.utc)
+            except Exception:
+                logger.warning("scheduled job %s hat ungueltiges run_at — skipping", job["id"])
+                continue
+            if run_at > now:
+                continue
+            logger.info("executing scheduled job %s (%s)", job["id"], job["action_type"])
+            import json as _json
+            try:
+                res = await execute_scheduled_job(job)
+                status = "done" if res.get("ok") else "failed"
+                await database.update_scheduled_job_status(
+                    job["id"], status, _json.dumps(res),
+                )
+            except Exception as e:
+                logger.exception("scheduled job %s crashed", job["id"])
+                await database.update_scheduled_job_status(
+                    job["id"], "failed", _json.dumps({"error": str(e)[:300]}),
+                )
+    except Exception as e:
+        logger.exception("scheduled jobs tick crashed: %s", e)
+
+
+async def _profile_autoupdate_job():
+    """Nightly auto-update fuer alle Profile mit auto_update=1. Laeuft NACH
+    den Scans (winget 02:00, choco 02:15) damit agent_winget_state und
+    agent_choco_state frisch sind und die Smart-Skip-Logik korrekt arbeitet."""
+    try:
+        from routes.admin import run_all_profile_autoupdates
+        result = await run_all_profile_autoupdates()
+        logger.info("nightly profile auto-update done: %s", result)
+    except Exception as e:
+        logger.exception("nightly profile auto-update job crashed: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.init_db()
@@ -149,6 +373,45 @@ async def lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _profile_autoupdate_job,
+        CronTrigger(hour=3, minute=0),
+        id="profile_autoupdate",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    # Minuetlicher Tick fuer scheduled_jobs (Maintenance-Windows).
+    # Ein einzelner Job statt per-Schedule-DateTrigger — einfacher zu
+    # handhaben + ueberlebt Restarts (wir lesen beim Tick aus der DB).
+    from apscheduler.triggers.interval import IntervalTrigger
+    scheduler.add_job(
+        _scheduled_jobs_tick,
+        IntervalTrigger(minutes=1),
+        id="scheduled_jobs_tick",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=120,
+    )
+    # Alle 15 Min: pruefe Rollouts, auto-advance wenn enabled + Bedingungen passen
+    scheduler.add_job(
+        _rollout_auto_advance_tick,
+        IntervalTrigger(minutes=15),
+        id="rollout_auto_advance",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=900,
+    )
+    # Alle 15 Min: pruefe staged+auto_advance Pakete ohne aktiven Rollout →
+    # starte automatisch neuen Rollout wenn Updates verfuegbar.
+    scheduler.add_job(
+        _rollout_auto_start_tick,
+        IntervalTrigger(minutes=15),
+        id="rollout_auto_start",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=900,
     )
     scheduler.start()
     app.state.scheduler = scheduler

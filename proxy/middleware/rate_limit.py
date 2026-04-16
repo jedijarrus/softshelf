@@ -5,8 +5,10 @@ Bewusst ohne externe Dependency (Redis/slowapi). Reicht für eine kleine
 interne Deployment, wo der Proxy nur einen Worker-Prozess hat.
 
 Limits:
-  /api/v1/register     5 Requests / 60 s   (Brute-Force des Registration-Secrets)
-  /admin und /admin/*  60 Requests / 60 s  (Login-Brute-Force + normale UI-Nutzung)
+  /api/v1/register      5 Requests / 60 s   (Brute-Force des Registration-Secrets)
+  /admin/login         10 Requests / 60 s   (Login-Brute-Force)
+  /admin/api/*        600 Requests / 60 s   (SPA macht viele parallele API-Calls)
+  /admin/* (Rest)     120 Requests / 60 s   (Admin-Portal HTML + Assets)
 
 Hinter einem Reverse-Proxy auf demselben Host wird X-Forwarded-For respektiert,
 damit nicht alle Clients den Bucket des Proxies teilen. Es werden NUR Forwarded-
@@ -22,8 +24,10 @@ from fastapi.responses import JSONResponse
 _buckets: dict[str, dict[str, deque]] = defaultdict(lambda: defaultdict(deque))
 
 LIMITS: dict[str, tuple[int, int]] = {
-    "register": (5, 60),
-    "admin":    (60, 60),
+    "register":   (5,   60),
+    "admin_login": (10,  60),
+    "admin_api":  (600, 60),
+    "admin":      (120, 60),
 }
 
 # Loopback-IPs deren X-Forwarded-For wir akzeptieren (Reverse-Proxy lokal)
@@ -81,6 +85,13 @@ def _sweep():
 def _bucket_for(path: str) -> str | None:
     if path == "/api/v1/register":
         return "register"
+    # Login ist der eigentliche Brute-Force-Pfad → eigener, harter Bucket
+    if path == "/admin/login" or path == "/admin/logout":
+        return "admin_login"
+    # API-Calls vom SPA: viele parallele Requests pro Tab-Wechsel → viel hoeher
+    if path.startswith("/admin/api/"):
+        return "admin_api"
+    # Rest (/admin, static assets) → moderater Bucket
     if path == "/admin" or path.startswith("/admin/"):
         return "admin"
     return None
