@@ -40,6 +40,14 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
     agent_id = token["agent_id"]
     pkg_rows = await database.get_packages()
 
+    # Staged-Rollout Gate: fuer Pakete mit staged_rollout=1 zeigen wir
+    # update_available nur dann, wenn es einen aktiven Rollout gibt UND
+    # dessen current_phase den Ring dieses Agents erreicht hat.
+    # Ring 1 = erste Phase, Ring 3 = letzte (Produktion).
+    agent = await database.get_agent(agent_id)
+    agent_ring = (agent or {}).get("ring") or 3
+    active_rollouts = await database.get_active_rollout_phases()
+
     if not pkg_rows:
         raise HTTPException(status_code=503, detail="Keine Pakete freigegeben. Admin-Oberfläche öffnen.")
 
@@ -82,7 +90,10 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
         ptype = row.get("type") or "choco"
 
         if ptype == "winget":
-            # Status kommt komplett aus agent_winget_state, kein Tactical-Call
+            # Status primaer aus agent_winget_state. Fallback: agent_installations
+            # — wenn winget heuristisch via ARP installiert hat aber `winget list`
+            # / `winget export` das Paket nicht zeigt (z.B. 1Password installiert
+            # via Hersteller-EXE, winget findet's nur per DisplayName-Match).
             wid = row["name"]
             state = winget_state.get(wid)
             os_managed = winget_catalog.is_os_managed(wid)
@@ -102,6 +113,15 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
                 installed_label = installed_version or None
                 current_label = available_version or None
                 update_avail = bool(available_version)
+            elif tracked_by_pkg.get(wid):
+                # Heuristisch installiert via Softshelf — Kiosk soll's als
+                # installiert anzeigen, ohne Versions-Info.
+                is_installed = True
+                version = None
+                publisher = row.get("winget_publisher") or None
+                installed_label = None
+                current_label = None
+                update_avail = False
             else:
                 is_installed = False
                 version = None
@@ -180,4 +200,31 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
             current_version_label=current_label,
             update_available=update_avail,
         ))
-    return result
+
+    # Staged-Rollout Update-Gate: fuer staged Pakete wird update_available
+    # nur sichtbar gemacht wenn der Rollout den Agent-Ring erreicht hat.
+    # Rollout in Phase N → alle Agents in Ring <= N kriegen das Update.
+    # Kein Rollout aktiv → staged Paket zeigt kein Update (Admin muss erst
+    # Rollout starten).
+    staged_map = {p["name"]: bool(p.get("staged_rollout")) for p in pkg_rows}
+    for p in result:
+        if not staged_map.get(p.name):
+            continue
+        if not p.update_available:
+            continue
+        phase = active_rollouts.get(p.name)
+        if phase is None or phase < agent_ring:
+            # Kein aktiver Rollout ODER Rollout hat Ring dieses Agents noch nicht erreicht
+            p.update_available = False
+            p.current_version_label = None  # Version-Info verstecken damit UI nicht verwirrt
+
+    # "Hidden in Kiosk"-Filter: Pakete mit packages.hidden_in_kiosk=1 werden
+    # nur ausgeliefert wenn sie auf DIESEM Agent installiert sind.
+    # Use-case: Admin-only Remote-Deploy-Software — User sieht sie nicht im
+    # Kiosk-Grid, aber sobald installiert kann er sie sehen/updaten/removen.
+    hidden_map = {p["name"]: bool(p.get("hidden_in_kiosk")) for p in pkg_rows}
+    def _keep(p: Package) -> bool:
+        if not hidden_map.get(p.name):
+            return True
+        return p.installed
+    return [p for p in result if _keep(p)]
