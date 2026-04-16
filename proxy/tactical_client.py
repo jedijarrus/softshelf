@@ -123,7 +123,15 @@ class TacticalClient:
         cmd: str,
         shell: str = "powershell",
         timeout: int = 600,
+        run_as_user: bool = False,
     ) -> str:
+        """Fuehrt cmd via Tactical run_command aus.
+
+        run_as_user=True laesst Tactical den Befehl im Kontext des interaktiv
+        eingeloggten Users ausfuehren statt als SYSTEM. Wird fuer winget
+        per-user-only Pakete (LastPass, Bitwarden etc.) gebraucht — ohne
+        interaktiven User lehnt Tactical das ab.
+        """
         _check_agent(agent_id)
         base, headers = await self._connection()
         async with httpx.AsyncClient(headers=headers, timeout=timeout + 15) as c:
@@ -134,7 +142,7 @@ class TacticalClient:
                     "cmd": cmd,
                     "timeout": timeout,
                     "custom_shell": "",
-                    "run_as_user": False,
+                    "run_as_user": bool(run_as_user),
                 },
             )
             r.raise_for_status()

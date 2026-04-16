@@ -55,3 +55,5 @@ desktop.ini
 *.swo
 *~
 
+docs/superpowers/
+CLAUDE.md

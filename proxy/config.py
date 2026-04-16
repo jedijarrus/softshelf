@@ -221,6 +221,60 @@ RUNTIME_KEYS: dict[str, dict] = {
         "required": False,
         "default": "false",
     },
+    "rollout_ring1_label": {
+        "label": "Ring 1 Name",
+        "help": "Anzeigename fuer Ring 1 (Canary — kleinste Testgruppe, erste Phase).",
+        "type": "string", "secret": False, "required": False,
+        "default": "Canary",
+    },
+    "rollout_ring2_label": {
+        "label": "Ring 2 Name",
+        "help": "Anzeigename fuer Ring 2 (Pilot — zweite Phase).",
+        "type": "string", "secret": False, "required": False,
+        "default": "Pilot",
+    },
+    "rollout_ring3_label": {
+        "label": "Ring 3 Name",
+        "help": "Anzeigename fuer Ring 3 (Produktion — Default bei neuen Agents, letzte Phase).",
+        "type": "string", "secret": False, "required": False,
+        "default": "Produktion",
+    },
+    "rollout_default_staged": {
+        "label": "Neue winget-Pakete automatisch als Staged",
+        "help": "Wenn aktiv: alle neu aktivierten winget-Pakete werden als staged_rollout markiert.",
+        "type": "bool", "secret": False, "required": False,
+        "default": "false",
+    },
+    "rollout_auto_advance_enabled": {
+        "label": "Auto-Advance aktivieren",
+        "help": "Wenn aktiv: aktive Rollouts gehen automatisch zur naechsten Phase nach X Stunden ohne neue Fehler.",
+        "type": "bool", "secret": False, "required": False,
+        "default": "false",
+    },
+    "rollout_auto_advance_hours_1_to_2": {
+        "label": "Auto-Advance: Ring 1 → Ring 2 (Std)",
+        "help": "Wartezeit nach Dispatch auf Ring 1 bevor Auto-Advance zu Ring 2 geht. Default 24h.",
+        "type": "int", "secret": False, "required": False,
+        "default": "24",
+    },
+    "rollout_auto_advance_hours_2_to_3": {
+        "label": "Auto-Advance: Ring 2 → Ring 3 (Std)",
+        "help": "Wartezeit nach Dispatch auf Ring 2 bevor Auto-Advance zu Produktion (Ring 3) geht. Default 168h = 7 Tage.",
+        "type": "int", "secret": False, "required": False,
+        "default": "168",
+    },
+    "rollout_auto_advance_hours": {
+        "label": "(deprecated) Auto-Advance Wartezeit (Stunden)",
+        "help": "Legacy-Key. Wird bei Migration in hours_1_to_2 uebernommen. Nicht mehr benutzen.",
+        "type": "int", "secret": False, "required": False,
+        "default": "24",
+    },
+    "rollout_max_error_pct": {
+        "label": "Max. Fehler-Rate (%)",
+        "help": "Wenn in einer Phase mehr als N% der Dispatches scheitern: Rollout pausieren. 0 = Feature aus.",
+        "type": "int", "secret": False, "required": False,
+        "default": "0",
+    },
 }
 
 

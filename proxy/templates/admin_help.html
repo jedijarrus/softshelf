@@ -1,2127 +1,750 @@
 <div class="doc">
 
+<div class="doc-hero">
+  <div class="doc-hero-title">Softshelf · Admin-Handbuch</div>
+  <div class="doc-hero-sub">Software-Verteilung für Windows-Flotten mit optionalem Self-Service. Integriert mit Tactical RMM.</div>
+  <div class="doc-hero-meta">Version 2.0 · Stand April 2026</div>
+</div>
+
 <div class="doc-toc">
   <div class="doc-toc-label">Inhalt</div>
   <ol>
-    <li><a href="#quickstart">Schnellstart</a></li>
-    <li><a href="#konzepte">Grundkonzepte</a></li>
-    <li><a href="#dateifluss">Wie kommen Dateien zum Client?</a></li>
-    <li><a href="#paket-workflows">Paket-Workflows</a>
+    <li><a href="#schnellstart">Schnellstart</a></li>
+    <li><a href="#navigation">Navigation & Tabs</a></li>
+    <li><a href="#rollen">Rollen & Rechte (RBAC)</a></li>
+    <li><a href="#paket-typen">Paket-Typen</a>
       <ol>
-        <li><a href="#wf-choco">Chocolatey-Paket freigeben</a></li>
         <li><a href="#wf-winget">Winget-Paket freigeben</a></li>
-        <li><a href="#wf-msi">Eigene MSI hochladen</a></li>
-        <li><a href="#wf-exe">Eigene EXE hochladen</a></li>
-        <li><a href="#wf-folder">Programm-Ordner hochladen</a></li>
-        <li><a href="#wf-edit">Paket nachträglich bearbeiten</a></li>
-        <li><a href="#wf-versions">Versionierung &amp; Updates pushen</a></li>
-        <li><a href="#wf-distribution">Verteilung-Tab</a></li>
-        <li><a href="#wf-discovery">Fleet-Discovery (Winget)</a></li>
-        <li><a href="#wf-detect">Uninstall aus Tactical übernehmen</a></li>
-        <li><a href="#wf-delete">Paket löschen</a></li>
+        <li><a href="#wf-choco">Choco-Paket freigeben</a></li>
+        <li><a href="#wf-custom">Eigenes MSI/EXE/Ordner hochladen</a></li>
+        <li><a href="#wf-import">Bulk-Import winget-IDs</a></li>
       </ol>
     </li>
-    <li><a href="#agent-detail">Agent-Detail-Page: Software pro Client</a></li>
-    <li><a href="#agent-lifecycle">Agent-Lifecycle: Revoke / Löschen / Sperren</a></li>
-    <li><a href="#client-deploy">Kiosk-Client auf PCs ausrollen</a></li>
-    <li><a href="#exe-build">Client-EXEs neu bauen</a></li>
-    <li><a href="#settings">Einstellungen ändern</a></li>
-    <li><a href="#security">Sicherheit</a>
+    <li><a href="#profile">Profile</a></li>
+    <li><a href="#rollouts">Phased Rollouts</a>
       <ol>
-        <li><a href="#sec-auth">Admin-Authentifizierung &amp; Sessions</a></li>
-        <li><a href="#sec-cookies">Cookie-Härtung &amp; CSRF</a></li>
-        <li><a href="#sec-rate">Rate-Limiting &amp; Reverse-Proxy</a></li>
-        <li><a href="#sec-tokens">Machine-Tokens &amp; Download-URLs</a></li>
-        <li><a href="#sec-uploads">Upload- und Archiv-Härtung</a></li>
-        <li><a href="#sec-build">Build-Pipeline-Härtung</a></li>
-        <li><a href="#sec-validation">Input-Validierung</a></li>
-        <li><a href="#sec-db">Datenbank-Integrität</a></li>
-        <li><a href="#sec-checklist">Operative Checkliste</a></li>
+        <li><a href="#rollout-konzept">Konzept: Ringe & Phasen</a></li>
+        <li><a href="#rollout-workflow">Workflow: Paket staged ausrollen</a></li>
+        <li><a href="#rollout-auto">Auto-Advance-Einstellungen</a></li>
       </ol>
     </li>
-    <li><a href="#migration">Auf neuen Host migrieren</a></li>
-    <li><a href="#backup">Backup &amp; Restore</a></li>
+    <li><a href="#compliance">Compliance</a></li>
+    <li><a href="#verteilung">Verteilung & Updates</a></li>
+    <li><a href="#fehler">Fehler & Acknowledgement</a></li>
+    <li><a href="#scheduled">Wartungsfensters (Geplant)</a></li>
+    <li><a href="#clients">Clients & Agent-Detail</a></li>
+    <li><a href="#deployment">Deployment & Updates</a>
+      <ol>
+        <li><a href="#client-deploy">Kiosk-Client ausrollen</a></li>
+        <li><a href="#exe-build">Client-EXEs bauen</a></li>
+        <li><a href="#settings">Einstellungen</a></li>
+        <li><a href="#migration">Auf neuen Host migrieren</a></li>
+        <li><a href="#backup">Backup & Restore</a></li>
+      </ol>
+    </li>
+    <li><a href="#security">Sicherheit</a></li>
+    <li><a href="#tricks">Tricks & Shortcuts</a></li>
     <li><a href="#troubleshooting">Troubleshooting</a></li>
-    <li><a href="#referenz">Referenz</a></li>
   </ol>
 </div>
 
-<!-- ═════════════════════════════════════════════════════════════════════ -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
 
-<section id="quickstart">
+<section id="schnellstart">
 <h1>Schnellstart</h1>
 
-<p>Die häufigsten Aktionen in 1-2 Klicks:</p>
+<p class="doc-lead">Die fünf häufigsten Aktionen:</p>
 
 <div class="doc-grid">
   <div class="doc-card">
-    <h4>Chocolatey-Paket freigeben</h4>
-    <p>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → <i>Aus Chocolatey</i> → Name suchen → <code>+</code> klicken. Fertig.</p>
+    <div class="doc-card-icon">📦</div>
+    <h4>Paket freigeben</h4>
+    <p>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → winget/choco/custom wählen → Name suchen → <code>+</code>.</p>
   </div>
   <div class="doc-card">
-    <h4>Winget-Paket freigeben</h4>
-    <p>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → <i>Aus Winget</i> → Name suchen (lokaler Microsoft-Catalog-Mirror) → <code>+</code> klicken. Im selben Panel zeigt der aufklappbare Block „In der Flotte gefunden" alle bereits installierten winget-Pakete die noch nicht whitelisted sind — auch von dort one-click aktivierbar.</p>
+    <div class="doc-card-icon">🚀</div>
+    <h4>Staged Rollout starten</h4>
+    <p>Tab <b>Pakete</b> → ▶-Icon bei staged Paket. Phase 1 (Canary) geht sofort los, danach im <b>Rollouts</b>-Tab weiter.</p>
   </div>
   <div class="doc-card">
-    <h4>Eigene MSI hochladen</h4>
-    <p>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → <i>Eigene Datei</i> → Datei wählen → Anzeigename checken → <code>Hochladen</code>. MSI-Metadaten werden automatisch extrahiert.</p>
+    <div class="doc-card-icon">⚠</div>
+    <h4>Fehler abarbeiten</h4>
+    <p>Tab <b>Fehler</b> zeigt offene Install-Fehler flottenweit. <code>Erneut</code> oder <code>✓</code> zum Bestätigen.</p>
   </div>
   <div class="doc-card">
-    <h4>Software auf einem Client einsehen</h4>
-    <p>Tab <b>Kiosk-Clients</b> → Klick auf eine Zeile öffnet die <b>Agent-Detail-Page</b> mit der gesamten installierten Software des Geräts (Tactical-Scan + winget-Inventur), Status-Badges (verwaltet/unverwaltet, Update verfügbar) und per-Row Aktionen (Updaten, Deinstallieren, Aktivieren, Entfernen).</p>
+    <div class="doc-card-icon">✅</div>
+    <h4>Required-Compliance prüfen</h4>
+    <p>Tab <b>Compliance</b>: Required-Pakete mit Abdeckung pro Agent. „Alles nachinstallieren" für einen Rutsch.</p>
   </div>
   <div class="doc-card">
-    <h4>Custom-Paket bearbeiten</h4>
-    <p>Auf der Karte erscheint bei custom-Paketen ein <b>Stift-Icon</b> neben dem ×. Klick öffnet das Edit-Panel mit allen Feldern.</p>
+    <div class="doc-card-icon">⏰</div>
+    <h4>Wartungsfenster anlegen</h4>
+    <p>Tab <b>Geplant</b> → <code>+ Neuer Job</code> → Zeitpunkt + Aktion + Stage wählen. Läuft automatisch zur eingestellten Zeit.</p>
   </div>
   <div class="doc-card">
-    <h4>Neue <code>softshelf-setup.exe</code> bauen</h4>
-    <p>Tab <b>Einstellungen</b> → ganz unten <code>EXEs bauen</code>. Dauert ~4 Minuten. Danach unter <code>/download/softshelf-setup.exe</code> verfügbar.</p>
-  </div>
-  <div class="doc-card">
-    <h4>Client auf PC ausrollen</h4>
-    <p>Tactical-Script <code>deploy_via_trmm.ps1</code> auf den Agent anwenden. Oder manuell: <code>softshelf-setup.exe</code> herunterladen und als Admin ausführen.</p>
-  </div>
-  <div class="doc-card">
-    <h4>Einstellung ändern</h4>
-    <p>Tab <b>Einstellungen</b> → Feld editieren → <code>Speichern</code>. Gilt sofort, ohne Restart.</p>
+    <div class="doc-card-icon">🔍</div>
+    <h4>Quick-Jump</h4>
+    <p><kbd>⌘K</kbd> / <kbd>Strg+K</kbd> öffnet Blitzsuche über alle Tabs, Pakete, Agents und Profile.</p>
   </div>
 </div>
 </section>
 
-<!-- ═════════════════════════════════════════════════════════════════════ -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
 
-<section id="konzepte">
-<h1>Grundkonzepte</h1>
+<section id="navigation">
+<h1>Navigation & Tabs</h1>
 
-<h2>Drei Arten von Paketen</h2>
+<p>Die Sidebar links ist in vier Gruppen gegliedert:</p>
 
-<p>Das Self-Service Center kennt <b>drei Paket-Typen</b>, die unterschiedlich behandelt werden:</p>
+<table class="doc-table">
+  <thead><tr><th>Gruppe</th><th>Tab</th><th>Zweck</th></tr></thead>
+  <tbody>
+    <tr><td rowspan="1"></td><td><b>Übersicht</b></td><td>Dashboard: KPIs, offene Fehler, aktive Rollouts, Top-outdated.</td></tr>
+    <tr><td rowspan="4" class="doc-td-group">Software</td><td><b>Pakete</b></td><td>Whitelist verwalten: freigeben, taggen (required/staged), Scope-Einstellung, Notizen.</td></tr>
+    <tr><td><b>Verteilung</b></td><td>Wer hat was: Tabelle mit Paket-State pro Flotte, Slide-Over mit Agent-Liste.</td></tr>
+    <tr><td><b>Profile</b></td><td>Paket-Bundles für Teams/Rollen. Auto-Update optional.</td></tr>
+    <tr><td><b>Rollouts</b></td><td>Phased Rollouts starten + Historie + Policy-Einstellungen.</td></tr>
+    <tr><td rowspan="2" class="doc-td-group">Flotte</td><td><b>Clients</b></td><td>Agent-Liste, pro-Agent Detail-Page mit Software-Inventur.</td></tr>
+    <tr><td><b>Compliance</b></td><td>Required-Pakete: wer hat's nicht?</td></tr>
+    <tr><td rowspan="3" class="doc-td-group">Operations</td><td><b>Fehler</b></td><td>Install-Fehler flottenweit, Erneut + Bestätigen.</td></tr>
+    <tr><td><b>Geplant</b></td><td>Wartungsfensters (zeitgesteuerte Aktionen).</td></tr>
+    <tr><td><b>Audit-Log</b></td><td>HTTP-Request-Log, Auto-Pruning nach 90 Tagen.</td></tr>
+    <tr><td rowspan="3" class="doc-td-group">System</td><td><b>Benutzer</b></td><td>Admin-Accounts + Rollen-Zuweisung.</td></tr>
+    <tr><td><b>Einstellungen</b></td><td>Runtime-Konfig, ohne Container-Restart.</td></tr>
+    <tr><td><b>Hilfe</b></td><td>Diese Seite.</td></tr>
+  </tbody>
+</table>
+
+<div class="doc-callout info">
+  <b>Tipp:</b> Der aktuelle Tab landet in der URL-Hash (<code>#rollouts</code>, <code>#fehler</code>, …).
+  Reload, Back/Forward und Bookmarks funktionieren wie erwartet.
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="rollen">
+<h1>Rollen & Rechte (RBAC)</h1>
+
+<p>Softshelf kennt drei Rollen. Eingestellt pro Admin-User unter <b>Benutzer</b>.</p>
 
 <table class="doc-table">
   <thead>
-    <tr><th></th><th>Chocolatey</th><th>Winget</th><th>Eigenes Paket (MSI/EXE)</th></tr>
+    <tr><th>Rolle</th><th>Darf</th><th>Darf <b>nicht</b></th></tr>
   </thead>
   <tbody>
     <tr>
-      <td><b>Quelle</b></td>
-      <td>Public Chocolatey-Repo (community.chocolatey.org)</td>
-      <td>Microsoft winget-Catalog (lokal gemirrowt aus <code>cdn.winget.microsoft.com/cache/source.msix</code>, täglich aktualisiert)</td>
-      <td>Du lädst die Datei ins Admin-UI hoch</td>
-    </tr>
-    <tr>
-      <td><b>Hinzufügen</b></td>
-      <td>Suche im Repo → Klick</td>
-      <td>Suche im lokalen Catalog (volltext im Index) → Klick. Alternativ: aufklappbarer Discovery-Block im selben Panel listet alle in der Flotte installierten winget-Pakete die noch nicht whitelisted sind</td>
-      <td>Upload via Drag-and-Drop</td>
-    </tr>
-    <tr>
-      <td><b>Installation</b></td>
-      <td>Tactical führt <code>choco install &lt;name&gt;</code> aus</td>
-      <td>Tactical führt <code>winget install --id &lt;ID&gt; --scope machine --silent --accept-package-agreements --accept-source-agreements --disable-interactivity -h</code> als SYSTEM aus. <code>winget.exe</code> wird aus <code>C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*</code> resolved (per-user-Shim ist unter SYSTEM nicht im PATH)</td>
-      <td>Agent lädt Datei vom Proxy + startet Installer silent</td>
-    </tr>
-    <tr>
-      <td><b>Update</b></td>
-      <td>Wird vom nightly choco-Scan (02:15 UTC) detected. <code>choco outdated --limit-output</code> liefert pro Paket installierte und verfügbare Version, beides landet in <code>agent_choco_state</code>. Im Kiosk-Client erscheint dann der „Updaten"-Button. Klick → <code>choco install &lt;name&gt; -y</code> als SYSTEM via Tactical (choco regelt das in-place-upgrade selbst), danach automatischer Re-Scan</td>
-      <td>Im Kiosk-Client erscheint pro Paket ein „Updaten"-Button sobald der nightly Scan eine neuere Version gefunden hat. Klick → <code>winget upgrade --id …</code> als SYSTEM via Tactical, danach automatischer Re-Scan</td>
-      <td>Admin lädt neue Version im Edit-Panel hoch und kann sie auf
-        veraltete Geräte pushen — siehe <a href="#wf-versions">Versionierung</a></td>
-    </tr>
-    <tr>
-      <td><b>Deinstall</b></td>
-      <td><code>choco uninstall &lt;name&gt; -y --no-progress --limit-output</code> via Tactical run_command</td>
-      <td><code>winget uninstall --id &lt;ID&gt; --silent --force</code> via Tactical</td>
-      <td>Agent führt den gespeicherten Uninstall-Command aus</td>
-    </tr>
-    <tr>
-      <td><b>Versionierung</b></td>
-      <td>Implizit über Choco-Repo</td>
-      <td>Implizit über winget-Catalog. Per Default immer „latest" — die Spalte <code>winget_version</code> in der DB erlaubt optionales Pinning auf eine spezifische Version (Phase-2-UI)</td>
-      <td>Mehrere Versionen pro Paket; Tracking pro Client</td>
-    </tr>
-    <tr>
-      <td><b>Detection</b></td>
-      <td>Strukturierter Match aus <code>agent_choco_state</code> (vom choco_scanner nightly + nach jeder Aktion gefüllt). Pakete die via Softshelf installiert wurden landen zusätzlich im <code>agent_installations</code>-Tracking. Pre-existing Software fällt auf alphanum-Substring-Match gegen die Whitelist zurück.</td>
-      <td>Strukturierter Match: nightly <code>winget export</code> + <code>winget upgrade</code> auf jedem online Agent via Tactical, Result wird in <code>agent_winget_state</code> persistiert. Kein Substring-Rätselraten — die winget-PackageIdentifier ist eindeutig</td>
-      <td>Substring-Match <code>detection_name</code> ↔ Windows-Anzeigename, plus <code>agent_installations</code>-Tracking für via Softshelf installierte Pakete</td>
-    </tr>
-  </tbody>
-</table>
-
-<div class="doc-callout info">
-  <b>Einheitliches Fehler-Reporting (seit v1.5.0):</b> Alle drei Quellen
-  laufen über Tactical's <code>run_command</code>-Endpoint mit Output-Capture
-  und Soft-Error-Detection. Wenn ein Install/Update/Uninstall fehlschlägt
-  (z.B. choco-Paket mit kaputtem Hersteller-Download wie das ältere 3cx,
-  oder winget Installer-Technology-Mismatch bei Edge), wird die Meldung in
-  <code>agent_scan_meta.last_action_error</code> persistiert und im
-  Agent-Detail als gelber Warning-Banner über der Software-Liste angezeigt.
-  Der nachgelagerte targeted Re-Scan und das Frontend-Polling
-  (Vergleich von <code>last_scan_at</code> ODER <code>last_action_at</code>)
-  refreshen die UI automatisch sobald der Background-Task fertig ist.
-</div>
-
-<h2>Wie "Installiert"-Status erkannt wird</h2>
-
-<p>Je nach Paket-Typ kommen die Daten aus zwei verschiedenen Quellen die kombiniert
-  werden:</p>
-
-<ul>
-  <li><b>Choco-Pakete:</b> Der Choco-Name (<code>firefox</code>) wird per bidirektionalem Substring-Match gegen die Windows-Anzeigenamen aus Tacticals Software-Scan geprüft (<code>Mozilla Firefox (x64 en-US)</code>). Zeigt das Kiosk-UI als „Installiert".</li>
-  <li><b>Custom-Pakete:</b> Der beim Upload gespeicherte <b>Detection-Name</b> wird gegen die Windows-Anzeigenamen geprüft. Bei MSIs ist das der <code>ProductName</code> aus der MSI-Metadatenzone — stimmt fast immer ohne manuellen Eingriff. Bei EXEs muss der Admin den Detection-Name manuell eintragen (erscheint in „Apps &amp; Features" auf dem Windows-PC).</li>
-  <li><b>Winget-Pakete:</b> Strukturiert. Ein nightly Background-Scan (APScheduler 02:00 UTC) iteriert alle online Kiosk-Clients und führt via Tactical run_command <code>winget export</code> (für die installierte Liste, JSON-Output) und <code>winget upgrade</code> (für verfügbare Updates) als SYSTEM aus. Result landet in der DB-Tabelle <code>agent_winget_state</code> — kein Tactical-Round-Trip mehr nötig wenn der Kiosk-Client <code>/api/v1/packages</code> aufruft. Nach jeder User-Aktion (Install/Update/Uninstall) läuft sofort ein „targeted Re-Scan" für nur diesen einen Agent damit der Status binnen Sekunden frisch ist.</li>
-</ul>
-
-<div class="doc-callout info">
-  <b>Wichtig:</b> Tactical scannt die installierte Software nicht in Echtzeit,
-  sondern in Intervallen (Minuten bis Stunden). Nach einem Install kann es einen
-  Moment dauern, bis der Status im Kiosk als „Installiert" angezeigt wird. Wer
-  das beschleunigen will, kann in Tactical auf dem Agent manuell "Scan Installed
-  Software" triggern.
-</div>
-
-<h2>Machine-Tokens</h2>
-
-<p>Jeder Kiosk-Client bekommt bei der Registrierung ein signiertes JWT (Machine-Token),
-  das in <code>HKLM\SOFTWARE\Softshelf</code> gespeichert wird. Das Token enthält:</p>
-
-<ul>
-  <li><code>agent_id</code> — bindet den Token an eine bestimmte Tactical-Agent-ID</li>
-  <li><code>hostname</code> — für Logging</li>
-  <li><code>exp</code> — Ablaufzeit (default 365 Tage, via <code>token_ttl_days</code> änderbar; 0 = unbegrenzt)</li>
-  <li><code>tv</code> — Token-Version, wird bei jedem <code>Re-Register</code> hochgezählt</li>
-</ul>
-
-<p>Das Token wird bei <b>jedem</b> API-Call vom Kiosk-Client mitgeschickt und vom
-  Proxy verifiziert: Signatur + Ablauf + Token-Version gegen die DB. Wenn eines
-  dieser drei fehlt, antwortet der Proxy mit 401:</p>
-
-<ul>
-  <li><b>401 Token abgelaufen</b> — <code>exp</code> ist vorbei. Client muss neu registriert werden.</li>
-  <li><b>401 Token widerrufen</b> — <code>tv</code> stimmt nicht mit der DB überein. Passiert wenn der Admin das Gerät zwischenzeitlich erneut deployt hat oder die Token-Version manuell gebumpt wurde.</li>
-</ul>
-
-<div class="doc-callout info">
-  Der Kiosk-Client selbst kann sich <b>nicht</b> automatisch neu registrieren —
-  er hat kein Registration-Secret. Nach einem Token-Problem musst du den Client
-  erneut ausrollen (via Tactical-Script oder manuell den Installer ausführen).
-</div>
-</section>
-
-<!-- ═════════════════════════════════════════════════════════════════════ -->
-
-<section id="dateifluss">
-<h1>Wie kommen Dateien zum Client?</h1>
-
-<p>Dieser Abschnitt erklärt den vollständigen Weg einer hochgeladenen <code>.msi</code> oder <code>.exe</code>
-  vom Browser des Admins bis zur fertigen Installation auf dem Endgerät — mit allen Stationen,
-  Speicherorten und Sicherheits-Mechanismen. Wichtig zu verstehen wenn du wissen willst <i>wo
-  deine Dateien wirklich liegen</i> und <i>wer sie wann sieht</i>.</p>
-
-<h2>Übersicht</h2>
-
-<pre class="doc-code-block">┌─────────────┐  ① Upload  ┌─────────────────┐
-│  Admin      │ ─multipart→│ Proxy-Container │
-│  Browser    │            │  /admin/api/    │
-└─────────────┘            │  upload         │
-                           └────────┬────────┘
-                                    │ ② sha256 +
-                                    │   msiinfo
-                                    ▼
-                           ┌─────────────────┐
-                           │ /app/data/      │
-                           │  uploads/       │
-                           │  &lt;sha256&gt;.msi   │   ← physische Speicherung
-                           └────────┬────────┘     (Bind-Mount auf Host)
-                                    │
-                                    │ ③ Eintrag in DB
-                                    ▼
-                           ┌─────────────────┐
-                           │  packages-Tab.  │
-                           │  type=custom    │
-                           │  sha256, filen. │
-                           │  install_args   │
-                           └─────────────────┘
-
-                  ╔════════════════════════════════╗
-                  ║     Später, beim Install:      ║
-                  ╚════════════════════════════════╝
-
-┌─────────────┐                ┌─────────────────┐
-│ Kiosk-Client│ ④ install     │ Proxy-Container │
-│ softshelf.exe   │ ─POST /api───→│  /api/v1/       │
-│ (User-Mode) │   /v1/install │  install        │
-└─────────────┘                └────────┬────────┘
-                                        │ ⑤ baut Powershell mit
-                                        │   signierter Download-URL
-                                        ▼
-                               ┌─────────────────┐
-                               │ Tactical RMM    │
-                               │ /agents/&lt;id&gt;/   │
-                               │ cmd/  (NATS)    │
-                               └────────┬────────┘
-                                        │ ⑥ NATS push
-                                        ▼
-┌─────────────────────────────────────────────────┐
-│  Windows-PC, Tactical-Agent (als SYSTEM)        │
-│                                                 │
-│  PowerShell-Job:                                │
-│    Invoke-WebRequest ──⑦──┐                     │
-│    Start-Process msiexec  │                     │
-│    Remove-Item            │                     │
-└───────────────────────────┼─────────────────────┘
-                            │ ⑦ HTTP-GET mit Token
-                            ▼
-                   ┌─────────────────┐
-                   │ Proxy-Container │
-                   │ /api/v1/file/   │
-                   │ &lt;sha&gt;?token=    │
-                   │  &lt;signed JWT&gt;   │
-                   └─────────────────┘</pre>
-
-<h2>Schritt für Schritt</h2>
-
-<h3>Phase A: Upload (Admin → Server)</h3>
-
-<ol class="doc-steps">
-  <li><b>Admin wählt eine Datei</b> im Admin-UI und füllt Display-Name, Kategorie aus. Optional auch Install-Args, Detection-Name, Uninstall-Command (bei MSI werden diese auto-generiert).</li>
-  <li><b>Browser sendet</b> einen <code>POST /admin/api/upload</code> als <code>multipart/form-data</code>. Die Datei wird in einer Streaming-Verbindung übertragen — der Browser hält sie nicht komplett im Speicher.</li>
-  <li><b>Der Proxy-Container empfängt</b> den Stream chunk-weise:
-    <ul>
-      <li>Schreibt zunächst nach <code>/app/data/uploads/_tmp_&lt;random&gt;.&lt;ext&gt;</code></li>
-      <li>Berechnet parallel den SHA-256-Hash über alle Bytes</li>
-      <li>Bricht ab wenn die Datei das Größenlimit (<code>max_upload_mb</code>, default 500 MB) überschreitet</li>
-    </ul>
-  </li>
-  <li><b>Bei einer MSI:</b> der Proxy ruft <code>msiinfo export &lt;file&gt; Property</code> auf (von <code>msitools</code>, im Image installiert) und extrahiert <code>ProductName</code>, <code>ProductCode</code>, <code>ProductVersion</code>, <code>Manufacturer</code>. Daraus werden Detection-Name und Default-Uninstall-Command vorgeschlagen.</li>
-  <li><b>Atomares Rename:</b> nach erfolgreichem Upload wird die temp-Datei nach <code>/app/data/uploads/&lt;sha256&gt;.&lt;ext&gt;</code> umbenannt. Wenn schon eine Datei mit demselben Hash existiert (gleicher Inhalt), wird die temp-Datei verworfen — automatische Deduplikation.</li>
-  <li><b>Eintrag in der Whitelist:</b> ein neuer Datensatz wird in die Tabelle <code>packages</code> geschrieben mit:
-    <ul>
-      <li><code>type='custom'</code></li>
-      <li><code>sha256</code> (Hash, dient als Storage-Key)</li>
-      <li><code>filename</code> (Original-Dateiname für die Anzeige)</li>
-      <li><code>size_bytes</code> (für Anzeige + Limits)</li>
-      <li><code>install_args</code>, <code>uninstall_cmd</code>, <code>detection_name</code></li>
-    </ul>
-  </li>
-</ol>
-
-<h3>Phase B: Speicherung auf dem Proxy-Host</h3>
-
-<p>Der Speicherort <code>/app/data/uploads/</code> innerhalb des Containers ist ein <b>Bind-Mount</b>
-  auf den Host. Der physische Speicherort ist:</p>
-
-<pre class="doc-code-block">/opt/softshelf/data/uploads/
-├── &lt;sha256-1&gt;.msi
-├── &lt;sha256-2&gt;.exe
-└── ...</pre>
-
-<p>Die Dateinamen sind die SHA-256-Hashes des Inhalts plus die ursprüngliche Extension.
-  Eigenschaften dieses Layouts:</p>
-
-<ul>
-  <li><b>Deduplikation:</b> Lädst du dieselbe Datei zweimal hoch (z. B. unter zwei verschiedenen Display-Namen), liegt sie nur einmal physisch auf der Platte.</li>
-  <li><b>Persistent über Container-Restarts:</b> Bind-Mount, daher überleben Dateien <code>docker-compose down</code> + <code>up</code>.</li>
-  <li><b>Im Backup enthalten:</b> wenn du <code>./data/</code> tarst, hast du alle hochgeladenen Files dabei.</li>
-  <li><b>Eigentümer:</b> Im Container UID 1001 (User <code>softshelf</code>), auf dem Host entsprechend abgebildet. Der Container läuft <i>nicht</i> als root.</li>
-  <li><b>Kein direkter Internet-Zugriff:</b> die Dateien sind nur über den authentifizierten Download-Endpoint erreichbar — siehe Phase D.</li>
-</ul>
-
-<h3>Phase C: Install-Anfrage vom Kiosk-Client</h3>
-
-<ol class="doc-steps">
-  <li><b>End-User klickt im Kiosk-UI</b> auf "Installieren" für ein custom-Paket.</li>
-  <li><b>softshelf.exe sendet</b> <code>POST /api/v1/install</code> mit <code>{"package_name": "..."}</code> und seinem <code>Bearer &lt;JWT&gt;</code>-Header.</li>
-  <li><b>Der Proxy verifiziert</b> das Machine-Token (Signatur, Ablauf, token_version), zieht <code>agent_id</code> aus dem Token-Payload.</li>
-  <li><b>Lookup in der DB:</b> Paket muss in der Whitelist sein und vom Typ <code>custom</code>. Der gespeicherte SHA-256 wird gelesen.</li>
-  <li><b>Proxy generiert einen kurzlebigen Download-Token</b> (eigenständiges JWT, signiert mit <code>SECRET_KEY</code>):
-    <ul>
-      <li><code>typ: "dl"</code></li>
-      <li><code>sha: &lt;sha256&gt;</code> — bindet den Token an genau diese Datei</li>
-      <li><code>agent_id: &lt;agent&gt;</code> — bindet ihn an den anfragenden Agent</li>
-      <li><code>exp: now + 300</code> — Token läuft nach 5 Minuten ab</li>
-    </ul>
-  </li>
-  <li><b>Proxy konstruiert den PowerShell-Command:</b>
-    <pre class="doc-code-block">$tmp = Join-Path $env:TEMP 'kiosk_install_xxxx.msi'
-Invoke-WebRequest -Uri 'https://proxy/api/v1/file/&lt;sha&gt;?token=&lt;jwt&gt;' `
-                  -OutFile $tmp -UseBasicParsing
-Start-Process -FilePath msiexec `
-              -ArgumentList '/i', $tmp, '/qn', '/norestart' `
-              -Wait -PassThru -NoNewWindow
-Remove-Item $tmp -Force -ErrorAction SilentlyContinue</pre>
-  </li>
-  <li><b>Fire-and-Forget:</b> Der Proxy schickt diesen Command via <code>POST</code> an Tactical's <code>/agents/&lt;id&gt;/cmd/</code>-Endpoint und gibt <i>sofort</i> eine Antwort an den Kiosk-Client zurück ("Installation gestartet"). Der eigentliche Tactical-Call wartet im Hintergrund auf das Resultat — der Kiosk-Client darf nicht 2-5 Minuten am POST hängen, sonst Timeout im UI.</li>
-</ol>
-
-<h3>Phase D: Tactical-Agent führt aus</h3>
-
-<ol class="doc-steps">
-  <li><b>Tactical RMM</b> empfängt den Command via REST und verteilt ihn via NATS an den entsprechenden Agent auf dem Windows-PC.</li>
-  <li><b>Der Tactical-Agent</b> (Windows-Service, läuft als <code>NT AUTHORITY\SYSTEM</code>) empfängt die NATS-Nachricht und startet einen PowerShell-Job in einem temporären Working-Directory.</li>
-  <li><b>Schritt 1 im Job:</b> <code>Invoke-WebRequest</code> ruft den Proxy-Endpoint <code>/api/v1/file/&lt;sha&gt;?token=&lt;jwt&gt;</code> auf:
-    <ul>
-      <li>Der Proxy verifiziert den Token (Signatur, exp, typ, sha-match)</li>
-      <li>Schaut in der DB nach ob das Paket für diesen Hash existiert</li>
-      <li>Schaut auf der Platte ob die Datei unter <code>/app/data/uploads/&lt;sha&gt;.&lt;ext&gt;</code> liegt</li>
-      <li>Streamt die Datei via FastAPI <code>FileResponse</code> mit der ursprünglichen Filename-Header zurück</li>
-    </ul>
-  </li>
-  <li><b>Der Agent speichert die Datei</b> in <code>%TEMP%\kiosk_install_&lt;random&gt;.&lt;ext&gt;</code> auf dem Windows-PC.</li>
-  <li><b>Schritt 2 im Job:</b> <code>Start-Process</code> ruft den Installer mit den definierten Silent-Args auf und wartet bis er fertig ist (<code>-Wait</code>).
-    <ul>
-      <li>Bei MSI: <code>msiexec /i $tmp /qn /norestart</code></li>
-      <li>Bei EXE: <code>$tmp /S</code> (oder was immer in <code>install_args</code> steht)</li>
-    </ul>
-  </li>
-  <li><b>Exit-Code-Check:</b> 0 oder 3010 = OK, alles andere = Fehler. PowerShell ruft <code>exit</code> entsprechend.</li>
-  <li><b>Cleanup:</b> die temporäre Datei wird gelöscht (<code>Remove-Item $tmp -Force</code>).</li>
-  <li><b>Result-Push:</b> der Tactical-Agent sendet das Job-Result via NATS zurück an Tactical, der es im Job-History-Log ablegt. Dort kannst du als Admin die Ausgabe sehen wenn was schief geht.</li>
-</ol>
-
-<h3>Phase E: Detection — Wann erkennt der Kiosk dass es installiert ist?</h3>
-
-<ol class="doc-steps">
-  <li><b>Tactical scannt periodisch</b> die installierte Software auf jedem Agent (Intervall meist Minuten bis Stunden, abhängig von Tactical-Konfiguration).</li>
-  <li><b>Beim nächsten Refresh</b> im Kiosk-UI fragt der Kiosk-Client <code>GET /api/v1/packages</code> ab.</li>
-  <li><b>Der Proxy zieht</b> Tactical's aktuellen Software-Inventar für diesen Agent (<code>GET /software/&lt;agent_id&gt;/</code>).</li>
-  <li><b>Substring-Match:</b> für jedes custom-Paket wird der gespeicherte <code>detection_name</code> bidirektional gegen die Windows-Anzeigenamen aus Tactical's Inventar verglichen.</li>
-  <li><b>Bei Treffer:</b> Paket wird im Kiosk-UI als „Installiert" angezeigt mit der von Tactical gemeldeten Version.</li>
-</ol>
-
-<h2>Sicherheits-Eigenschaften der Download-URL</h2>
-
-<p>Die Download-URL für custom-Dateien sieht so aus:</p>
-
-<pre class="doc-code-block">https://proxy.intern:8765/api/v1/file/821415899fda40063b...?token=eyJhbGciOiJIUzI1NiI...</pre>
-
-<p>Sie ist <b>kein</b> öffentlicher Link. Folgende Schutzmechanismen greifen:</p>
-
-<ul>
-  <li><b>HMAC-Signatur:</b> der Token ist mit dem Proxy-<code>SECRET_KEY</code> signiert. Niemand kann einen gültigen Token fälschen ohne den Schlüssel zu kennen.</li>
-  <li><b>Hash-Bindung:</b> der Token enthält den SHA-256 der Datei. Der Proxy prüft beim Download dass URL-Pfad und Token-Hash übereinstimmen — der Token kann nicht für andere Dateien wiederverwendet werden.</li>
-  <li><b>Agent-Bindung:</b> der Token enthält die <code>agent_id</code> des anfragenden PCs. Wenn ein Angreifer die URL aus dem Tactical-Audit-Log zieht, ist sie immer noch nur für diesen einen Agent-Kontext semantisch sinnvoll (keine Generalisierung möglich).</li>
-  <li><b>Kurzes Ablauf-Fenster:</b> 5 Minuten zwischen Generierung und Ablauf. Lang genug für den Download (auch bei großen MSIs auf langsamen Verbindungen), kurz genug um Replay-Attacks praktisch unmöglich zu machen.</li>
-  <li><b>Nicht-bruteforce-bar:</b> der Token-Pfad enthält 256 Bit Entropie aus dem JWT — niemand rät den richtigen Token in 5 Minuten.</li>
-  <li><b>Audit-Log:</b> jeder Aufruf wird im Audit-Log protokolliert (Method, Path, Client-IP, Status, Dauer). Du siehst im Tab <b>Audit-Log</b> alle Download-Requests.</li>
-</ul>
-
-<div class="doc-callout warning">
-  <b>Aktuell ist HTTPS noch nicht aktiviert</b> — die URL fliegt im Klartext durch das interne Netz.
-  Ein Angreifer im selben LAN könnte sie binnen der 5 Minuten Ablauffrist mitschneiden und die
-  Datei einmal abrufen (Inhalt ist eh schon im LAN auf dem Ziel-PC). Sobald TLS via Reverse-Proxy
-  davor gesetzt ist, ist auch dieser Vektor zu.
-</div>
-
-<h2>Was passiert beim Löschen eines custom-Pakets?</h2>
-
-<ol>
-  <li>Du klickst auf das × auf der Karte und bestätigst den Confirm-Dialog.</li>
-  <li>Der Proxy ruft <code>DELETE /admin/api/enable/&lt;name&gt;</code>.</li>
-  <li>Der Proxy lädt das Paket aus der DB, merkt sich den <code>sha256</code>-Hash.</li>
-  <li>Der DB-Eintrag wird gelöscht.</li>
-  <li><b>Safety-Check:</b> der Proxy fragt <code>SELECT COUNT(*) FROM packages WHERE sha256 = ?</code> — gibt es noch <i>andere</i> Pakete die dieselbe Datei referenzieren?</li>
-  <li>Wenn <code>COUNT = 0</code>: die Datei wird physisch von <code>/app/data/uploads/</code> gelöscht.</li>
-  <li>Wenn <code>COUNT &gt; 0</code>: die Datei bleibt liegen — ein anderes Paket nutzt sie noch.</li>
-</ol>
-
-<div class="doc-callout info">
-  Bereits installierte Software auf Client-PCs wird vom Delete-Vorgang <b>nicht</b> berührt.
-  Der Delete entfernt nur den Eintrag aus der Self-Service-Whitelist und ggf. die Quelldatei
-  vom Proxy-Speicher. Wenn du die Software auch von den PCs runter haben willst, müssen die
-  End-User vorher im Kiosk auf "Deinstallieren" klicken (oder du machst es via Tactical direkt).
-</div>
-</section>
-
-<section id="paket-workflows">
-<h1>Paket-Workflows</h1>
-
-<h2 id="wf-choco">Chocolatey-Paket freigeben</h2>
-
-<ol class="doc-steps">
-  <li>Tab <b>Pakete</b> öffnen</li>
-  <li>Oben rechts <code>+ Paket hinzufügen</code> klicken</li>
-  <li>Im Slide-in-Panel sicherstellen dass der Reiter <b>Aus Chocolatey</b> aktiv ist</li>
-  <li>Im Suchfeld den Paketnamen eintippen (z. B. <code>firefox</code>, <code>vscode</code>, <code>7zip</code>). Die Suche ist debounced — Treffer erscheinen nach ca. 300 ms. Gesucht wird in Tactical's lokal gecachter Chocolatey-Liste.</li>
-  <li>In der Trefferliste auf das <code>+</code>-Icon klicken, um das Paket freizugeben. Es erscheint sofort in der Whitelist mit Default-Kategorie <code>Allgemein</code>.</li>
-  <li>Bei Bedarf:
-    <ul>
-      <li>Anzeigename über das Input-Feld auf der Karte anpassen</li>
-      <li>Kategorie über die Kategorie-Pille ändern</li>
-    </ul>
-  </li>
-</ol>
-
-<div class="doc-callout info">
-  Der <code>+</code>-Button wird grau &amp; ein grüner Haken erscheint wenn das Paket
-  bereits freigegeben ist. So vermeidest du Dubletten.
-</div>
-
-<h2 id="wf-winget">Winget-Paket freigeben</h2>
-
-<p>Für Software aus dem offiziellen Microsoft-winget-Catalog. Im Vergleich zu
-  Chocolatey ein deutlich grösserer Katalog (Browser, Entwickler-Tools,
-  Microsoft-Apps, Vendor-Tools wie Zoom oder Dropbox), und die Detection
-  läuft strukturiert über die winget-PackageIdentifier statt per Substring-
-  Heuristik. Updates erkennt das System automatisch via <code>winget upgrade</code>.</p>
-
-<ol class="doc-steps">
-  <li>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code></li>
-  <li>Im Slide-in-Panel auf den Reiter <b>Aus Winget</b> wechseln</li>
-  <li>Im Suchfeld den Paketnamen oder den Hersteller eintippen (z. B. <code>firefox</code>, <code>vscode</code>, <code>vlc</code>, <code>mozilla</code>). Die Suche läuft gegen einen lokalen SQLite-Mirror der Microsoft-Catalog-Datei (<code>cdn.winget.microsoft.com/cache/source.msix</code>) — kein Tactical-Round-Trip, kein Internet-Call beim Suchen, Treffer in unter 100 ms. Der Mirror wird täglich um 01:30 UTC frisch gezogen.</li>
-  <li>Trefferliste zeigt pro Eintrag: Anzeige-Name, Publisher, neueste Version (semver-aware), winget-PackageIdentifier. Sortiert nach Match-Qualität (Last-Segment-Match &gt; Substring-Match).</li>
-  <li>Auf das <code>+</code>-Icon klicken um das Paket freizugeben. Es wandert sofort in die Whitelist als <code>type='winget'</code> mit der PackageIdentifier als <code>name</code>.</li>
-  <li>Bei Bedarf: Anzeigename und Kategorie wie bei choco anpassen.</li>
-</ol>
-
-<div class="doc-callout info">
-  <b>winget-Pakete brauchen <code>winget</code> auf dem Endgerät.</b> Auf Windows 11
-  ist der „App Installer" mit winget standardmäßig installiert. Auf älteren Windows-10-
-  Builds und auf LTSC fehlt er und muss separat ausgerollt werden. Der nightly Scan
-  erkennt fehlendes winget und markiert den Agent in <code>agent_scan_meta</code> mit
-  <code>last_status='no_winget'</code> — sichtbar in der Agent-Detail-Page als roter
-  Hinweis.
-</div>
-
-<div class="doc-callout warn">
-  <b>Per-User-Apps und Microsoft-Store-Apps:</b> winget unter SYSTEM-Kontext kann
-  Pakete die per-user installiert wurden meist nicht entfernen oder upgraden. Symptom
-  beim Uninstall: ExitCode <code>-1978335162</code> (NO_UNINSTALL_INFO_FOUND). Beim
-  Upgrade: <code>No available upgrade found</code> obwohl winget upgrade ohne
-  <code>--id</code> die Update-Verfügbarkeit anzeigt. Workaround: das Paket
-  manuell als logged-in User upgraden, oder einen anderen Installer nutzen.
-</div>
-
-<h2 id="wf-msi">Eigene MSI hochladen</h2>
-
-<p>Für Software die nicht im Chocolatey-Repo ist (z. B. interne Tools, proprietäre
-  Vendor-Installer, Softshelf-Eigenentwicklungen).</p>
-
-<ol class="doc-steps">
-  <li>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code></li>
-  <li>Im Panel auf den Reiter <b>Eigenes Paket</b> wechseln</li>
-  <li>Datei auswählen oder in die gestrichelte Dropzone ziehen. Maximale Größe: <b>500 MB</b> (änderbar in den Einstellungen).</li>
-  <li>Der Anzeigename wird automatisch aus dem Dateinamen abgeleitet — <i>ggf. anpassen</i></li>
-  <li>Kategorie eintragen (frei wählbar, z. B. "Softshelf-Tools")</li>
-  <li>Die nachfolgenden Felder können bei MSIs leer bleiben — der Proxy extrahiert beim Upload automatisch:
-    <ul>
-      <li><b>Detection-Name</b> aus <code>ProductName</code> der MSI</li>
-      <li><b>Uninstall-Command</b> aus <code>ProductCode</code> der MSI: <code>msiexec /x "{GUID}" /qn /norestart</code></li>
-      <li><b>Install-Args</b> default auf <code>/qn /norestart</code></li>
-    </ul>
-  </li>
-  <li><code>Hochladen</code> klicken. Ein Progress-Bar zeigt den Upload-Fortschritt.</li>
-  <li>Nach erfolgreichem Upload erscheint das Paket in der Whitelist mit dem Tag <b>Eigenes Paket</b>.</li>
-</ol>
-
-<div class="doc-callout info">
-  Die MSI-Metadaten-Extraktion läuft server-seitig via <code>msiinfo</code> (aus dem
-  <code>msitools</code>-Paket). Funktioniert mit allen Standard-MSI-Installern von
-  Microsoft, NullSoft, InstallShield, Advanced Installer etc.
-</div>
-
-<h2 id="wf-exe">Eigene EXE hochladen</h2>
-
-<p>Gleicher Ablauf wie bei MSI, <b>mit einem Unterschied:</b> die Metadaten-Extraktion
-  funktioniert nicht. Silent-Install-Flags und Detection-Name musst du manuell eintragen
-  oder nachträglich ermitteln.</p>
-
-<ol class="doc-steps">
-  <li>Datei hochladen (Ablauf wie oben)</li>
-  <li><b>Install-Args</b> auf den Silent-Flag des Installers setzen:
-    <ul>
-      <li>NSIS-Installer: <code>/S</code> (großes S)</li>
-      <li>InnoSetup: <code>/VERYSILENT /SUPPRESSMSGBOXES /NORESTART</code></li>
-      <li>Squirrel: <code>--silent</code></li>
-      <li>Selbst-gewrapped MSI-Setup: oft <code>/quiet</code> oder <code>-q</code></li>
-      <li>Unbekannt? Im Zweifel die Herstellerdoku oder <code>--help</code> auf der Kommandozeile versuchen</li>
-    </ul>
-  </li>
-  <li><b>Detection-Name</b>: das ist <b>exakt</b> der Name wie das Programm nach Installation
-    in Windows „Apps &amp; Features" auftaucht. Tipp: Paket erst einmal testhalber auf einer
-    Test-Maschine installieren, in „Apps &amp; Features" den Namen kopieren, dann im Edit-Panel
-    eintragen.</li>
-  <li><b>Uninstall-Command</b>: kann manuell eingetragen werden <i>oder</i> nachträglich aus
-    Tactical gezogen werden (siehe <a href="#wf-detect">Uninstall aus Tactical übernehmen</a>).</li>
-</ol>
-
-<div class="doc-callout warning">
-  Wenn der Silent-Flag nicht stimmt, öffnet der Installer einen GUI-Dialog auf dem
-  Ziel-PC, der dort niemand sieht — die Installation hängt, und der Agent bekommt
-  einen Timeout. Teste Silent-Flags <b>einmal manuell</b> auf deiner Test-Maschine
-  bevor du sie einem custom-Paket hinterlegst.
-</div>
-
-<h2 id="wf-folder">Programm-Ordner hochladen</h2>
-
-<p>Für Software, die mehr braucht als eine einzelne MSI/EXE — z.B. InstallShield mit
-  externen <code>.cab</code>-Dateien, Programme mit Konfig-Files daneben, oder Custom-
-  Installer mit DLLs/Skripten im selben Verzeichnis. Der ganze Ordner wird hochgeladen,
-  serverseitig zu einem ZIP gepackt und zentral abgelegt — beim Install lädt der Client
-  das ZIP, entpackt es und startet eine <b>Entry-Point-Datei</b> im Ordner.</p>
-
-<ol class="doc-steps">
-  <li>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → <i>Eigenes Paket</i></li>
-  <li>Im Sub-Toggle auf <b>Programm-Ordner</b> wechseln</li>
-  <li><b>Ordner wählen</b> klicken → Browser-Dialog: kompletten Ordner auswählen
-    (alle Unterverzeichnisse werden mit aufgenommen)</li>
-  <li>Der <b>Entry-Point-Dropdown</b> wird automatisch befüllt: alle <code>.exe</code>,
-    <code>.msi</code>, <code>.bat</code> und <code>.cmd</code> aus dem Ordner sind wählbar.
-    Vorausgewählt wird die wahrscheinlichste Installer-Datei (Priorität:
-    <code>setup.exe</code> → <code>installer.exe</code> → <code>install.*</code> →
-    flachster <code>.exe</code>-Pfad).</li>
-  <li><b>Anzeigename</b> eingeben (wird im Kiosk gezeigt). Wird aus dem Ordnernamen vorgefüllt.</li>
-  <li><b>Argumente für den Installer</b> bei Bedarf — die werden 1:1 an die Entry-Point-EXE
-    weitergereicht (z.B. <code>/silent</code> oder <code>/qn /norestart</code>).</li>
-  <li><b>Detection-Name</b> (optional) — bei Programm-Ordnern muss das manuell gesetzt werden,
-    da kein MSI-ProductName auto-extrahiert werden kann.</li>
-  <li><b>Uninstall-Command</b> (optional) — z.B. <code>"C:\Programme\Toolkit\unins000.exe" /VERYSILENT</code></li>
-  <li><code>Hochladen</code> klicken</li>
-</ol>
-
-<div class="doc-callout info">
-  <b>Was auf dem Client passiert:</b>
-  <ol>
-    <li>Tactical-Agent lädt das ZIP über die signierte Download-URL (5 min TTL, agent-gebunden)</li>
-    <li>PowerShell entpackt es nach <code>$env:TEMP\kiosk_install_&lt;random&gt;\</code></li>
-    <li>Die Entry-Point-EXE wird mit dem Ordner als Arbeitsverzeichnis gestartet
-      (<code>WorkingDirectory</code>) — damit findet der Installer relative Dateien</li>
-    <li>Nach Abschluss werden ZIP und entpacktes Verzeichnis komplett gelöscht</li>
-  </ol>
-</div>
-
-<div class="doc-callout warning">
-  <b>Größenlimit:</b> Default 500 MB pro Upload. Anpassbar in Einstellungen →
-  <code>max_upload_mb</code>. Der freie Speicherplatz auf der Server-Platte wird im
-  Upload-Panel und im Verteilung-Tab angezeigt.
-</div>
-
-<p>Den Entry-Point kannst du nachträglich im Edit-Panel ändern (Dropdown mit allen
-  Dateien aus der current-Version). Eine neue Version eines Programm-Ordner-Pakets
-  lädst du ebenfalls im Edit-Panel hoch — der Versions-Upload-Widget passt sich
-  automatisch an Programm-Ordner-Pakete an (Ordnerwahl statt Datei).</p>
-
-<h2 id="wf-edit">Paket nachträglich bearbeiten</h2>
-
-<p>Choco-Pakete: <b>Anzeigename</b> direkt auf der Karte editieren (in das Feld klicken,
-  neuen Text eingeben, Feld verlassen → Auto-Save). <b>Kategorie</b> via Klick auf die
-  Kategorie-Pille unter dem Namen.</p>
-
-<p>Custom-Pakete bekommen einen <b>Stift-Button</b> neben dem ×. Klick darauf öffnet das
-  Edit-Panel mit allen Feldern:</p>
-
-<ul>
-  <li>Anzeigename</li>
-  <li>Kategorie</li>
-  <li>Silent-Install Argumente</li>
-  <li>Detection-Name (inkl. "Aus Tactical holen"-Option siehe unten)</li>
-  <li>Uninstall-Command</li>
-  <li><b>Versionen</b> — Liste aller Versionen, neue hochladen, andere als aktiv setzen
-    (siehe nächster Abschnitt)</li>
-  <li><b>Installiert auf</b> — Liste aller Geräte die das Paket über das Self-Service-Center
-    installiert haben, mit der jeweils installierten Version</li>
-</ul>
-
-<p>Der <b>Dateiname</b>, die <b>Dateigröße</b> und der <b>Hash</b> der aktuellen Version sind
-  nicht editierbar — die sind an die physisch hochgeladene Datei gebunden. Für eine neue
-  Version eines custom-Pakets siehe Abschnitt <a href="#wf-versions">Versionierung &amp; Updates
-  pushen</a>.</p>
-
-<h2 id="wf-versions">Versionierung &amp; Updates pushen</h2>
-
-<p>Jedes custom-Paket kann <b>mehrere Versionen</b> haben. Genau eine ist die <b>aktive
-  Version</b> — neue Installs greifen immer darauf zu. Alte Versionen bleiben im Storage
-  liegen, damit du auf eine ältere Version zurückrollen kannst.</p>
-
-<p>Zusätzlich trackt der Proxy <b>welcher Client welche Version installiert hat</b>. Wenn
-  eine neue Version aktiv gesetzt wird, sehen alle Clients die noch auf der älteren Version
-  hängen als „veraltet" markiert — und du kannst mit einem Klick ein <b>Update auf alle
-  veralteten Geräte pushen</b>.</p>
-
-<h3>Wie das Tracking funktioniert</h3>
-
-<ul>
-  <li>Beim erfolgreichen Install (sowohl normaler Install als auch gepushtes Update) trägt
-    der Proxy in die Tabelle <code>agent_installations</code> ein: <code>(agent_id,
-    package_name, version_id)</code>.</li>
-  <li>Beim Uninstall wird der Eintrag entfernt.</li>
-  <li>Tracking läuft <b>nur für custom-Pakete</b>, nicht für Chocolatey (Chocolatey hat
-    seinen eigenen Update-Mechanismus).</li>
-  <li>Wenn ein Install fehlschlägt (z. B. Tactical-Cmd timeout), wird <i>nicht</i> getrackt —
-    der Eintrag landet erst bei tatsächlichem Erfolg.</li>
-</ul>
-
-<h3>Neue Version hochladen</h3>
-
-<ol class="doc-steps">
-  <li>Edit-Panel des custom-Pakets öffnen (Stift-Icon auf der Karte).</li>
-  <li>Im Abschnitt <b>Versionen</b> auf <code>+ Neue Version hochladen</code> klicken.</li>
-  <li>Datei wählen (.msi oder .exe). Der Versions-Label wird automatisch als <code>v2</code>,
-    <code>v3</code> etc. vorgeschlagen — du kannst aber auch z. B. <code>1.2.3</code> oder
-    <code>2026-Q2</code> setzen, solange das Label innerhalb des Pakets eindeutig ist.</li>
-  <li>Optional: <b>Notizen</b> eingeben (z. B. Changelog, Bugfix-Beschreibung).</li>
-  <li>Checkbox <b>Sofort aktiv setzen</b>:
-    <ul>
-      <li><b>Aktiviert</b> (Default): die neue Version wird sofort die aktive Version. Alle
-        zukünftigen Installs nutzen sie. Bestehende Installationen werden als „veraltet"
-        markiert.</li>
-      <li><b>Deaktiviert</b>: die Version wird nur hochgeladen und gespeichert. Aktiv bleibt
-        die alte. Praktisch zum Vorbereiten / Testen einer neuen Version, bevor man sie
-        ausrollt.</li>
-    </ul>
-  </li>
-  <li><code>Hochladen</code> klicken. Datei wird hochgeladen, gehasht, in der Versionsliste
-    angezeigt.</li>
-</ol>
-
-<div class="doc-callout info">
-  Die <b>Install-Argumente</b> und das <b>Uninstall-Command</b> werden für die neue Version
-  vom bestehenden Paket übernommen — du musst sie nicht erneut eingeben. Falls du sie für die
-  neue Version anders haben willst, erst hochladen, dann im Edit-Panel anpassen und speichern.
-</div>
-
-<h3>Versions-Übersicht</h3>
-
-<p>Die Versions-Liste zeigt für jede Version:</p>
-
-<ul>
-  <li><b>Label</b> als Badge (die aktive Version ist dunkel hervorgehoben)</li>
-  <li><b>Dateiname</b> und Größe</li>
-  <li><b>Upload-Datum</b> und Notizen</li>
-  <li>Buttons:
-    <ul>
-      <li><code>Aktiv setzen</code> — macht diese Version zur neuen current. Synchronisiert
-        die flachen Felder im <code>packages</code>-Eintrag (filename, sha256, install_args,
-        uninstall_cmd) mit dieser Version.</li>
-      <li><code>Löschen</code> — entfernt die Version permanent. <b>Nicht möglich für die
-        aktive Version</b> — vorher eine andere als aktiv setzen. Beim Löschen wird die
-        physische Datei nur dann gelöscht, wenn keine andere Version oder kein anderes Paket
-        denselben SHA-256-Hash referenziert (Shared-File-Schutz).</li>
-    </ul>
-  </li>
-</ul>
-
-<h3>Update auf veraltete Geräte pushen</h3>
-
-<ol class="doc-steps">
-  <li>Im Edit-Panel zeigt die <b>Versions-Übersicht</b> oberhalb der Liste eine Statistik:
-    <code>X installiert · Y aktuell · Z veraltet</code>. Auf den Paket-Karten siehst du
-    zusätzlich ein <b>orangefarbenes Badge</b> wenn das Paket veraltete Installationen hat.</li>
-  <li>Im Abschnitt <b>Installiert auf</b> siehst du jede einzelne Maschine mit ihrer
-    installierten Version. Veraltete Versionen sind gelb markiert.</li>
-  <li>Wenn es mindestens 1 veraltetes Gerät gibt, wird der Button <b>Update pushen</b>
-    unten im Panel aktiv. Klick darauf zeigt die Anzahl betroffener Geräte.</li>
-  <li>Bestätigen mit <code>Pushen</code>. Der Proxy:
-    <ul>
-      <li>baut für jeden veralteten Agent das Install-Command der aktuellen Version,</li>
-      <li>schickt das via Tactical-Run-Command an den Agent,</li>
-      <li>läuft fire-and-forget im Hintergrund (du brauchst nicht zu warten).</li>
-    </ul>
-  </li>
-  <li>Sobald die Installation auf einem Agent erfolgreich durchläuft, wird sein
-    <code>agent_installations</code>-Eintrag auf die neue Version aktualisiert. Veraltet-
-    Status verschwindet.</li>
-</ol>
-
-<div class="doc-callout warning">
-  <b>Push ist ein Reinstall, kein Update-im-engeren-Sinn.</b> Was tatsächlich passiert, hängt
-  vom Installer ab:
-  <ul>
-    <li>MSI mit gleichem ProductCode → MSI führt ein „Major Upgrade" oder „Minor Upgrade" durch
-      (je nach ProductVersion). Funktioniert sauber.</li>
-    <li>MSI mit anderem ProductCode → MSI versucht side-by-side zu installieren. Du brauchst
-      vorher einen Uninstall der alten Version oder das neue MSI muss über die UpgradeCode-
-      Logik korrekt vorgehen.</li>
-    <li>EXE/NSIS/InnoSetup → der Installer entscheidet selbst. Die meisten erkennen die alte
-      Version und überschreiben sie.</li>
-  </ul>
-  Im Zweifel: vorher <i>einen</i> Test-Agent updaten und prüfen, bevor du den großen Push fährst.
-</div>
-
-<div class="doc-callout info">
-  <b>Was passiert mit Geräten ohne Tracking-Eintrag?</b><br>
-  Geräte die das Paket vor der Tracking-Einführung installiert haben oder bei denen der
-  Install nie über das Self-Service-Center lief, haben keinen <code>agent_installations</code>-
-  Eintrag. Sie tauchen weder als „aktuell" noch als „veraltet" auf — das Paket weiß nichts
-  von ihnen. Push-Update ignoriert sie. Sobald sie das Paket einmal über den Kiosk
-  (de)installieren, sind sie im Tracking.
-</div>
-
-<h2 id="wf-distribution">Verteilung-Tab</h2>
-
-<p>Der Tab <b>Verteilung</b> ist die zentrale Übersicht aller custom-Pakete und ihrer
-  Verteilung über alle Kiosk-Clients. Im Gegensatz zur Edit-Panel-Versions-Sektion
-  (paket-zentriert) ist das hier eine flache Liste, optimiert für den Workflow „auf
-  welchem Gerät ist welche Version, und was muss ich aktualisieren oder entfernen".</p>
-
-<h3>Was du dort siehst</h3>
-
-<p>Pro custom-Paket eine Karte mit Header und Tabelle:</p>
-
-<ul>
-  <li><b>Header:</b> Anzeigename, Datei, Größe, current-Version-Label, Statistik
-    (<code>X Geräte · Y aktuell · Z veraltet</code>) und Buttons.</li>
-  <li><b>Push-Button:</b> erscheint nur wenn es veraltete Geräte gibt — pusht die current
-    Version auf alle veralteten Geräte (gleicher Effekt wie der Push-Button im Edit-Panel).</li>
-  <li><b>Bearbeiten-Button:</b> wechselt zum Pakete-Tab und öffnet das Edit-Panel des Pakets.</li>
-  <li><b>Tabelle pro Gerät:</b> Hostname, installierte Version (gelb wenn veraltet, grün wenn
-    aktuell), Install-Datum und zwei Aktionen:
-    <ul>
-      <li><code>Updaten</code> — nur sichtbar wenn das Gerät auf einer veralteten Version ist.
-        Triggert einen einzelnen Reinstall der current-Version auf <i>nur diesem</i> Gerät.</li>
-      <li><code>Entfernen</code> — triggert ein Uninstall über das im Paket hinterlegte
-        Uninstall-Command. Disabled wenn kein Uninstall-Command gesetzt ist.</li>
-    </ul>
-  </li>
-</ul>
-
-<h3>Filter</h3>
-
-<p>Die Suchleiste oben filtert sowohl nach <b>Paketname</b> als auch nach <b>Hostname/Agent-ID</b>.
-  Beispiel: Tippst du <code>pc-01</code> ein, werden alle Karten angezeigt in denen mindestens
-  ein Gerät passt — und in der Tabelle siehst du nur die passenden Geräte. So findest du
-  schnell „was hat dieser Rechner alles über das Self-Service-Center bekommen".</p>
-
-<h3>Tracking-Hinweis</h3>
-
-<div class="doc-callout info">
-  Im Verteilung-Tab tauchen <b>nur Geräte auf, die das Paket über das Self-Service-Center
-  installiert haben</b> (Tracking via <code>agent_installations</code>). Geräte, auf denen
-  die Software auf anderem Weg installiert wurde, sind unbekannt — sie werden weder als
-  „aktuell" noch als „veraltet" angezeigt und ignorieren den Push-Update-Button. Die
-  Erfassung beginnt erst nachdem ein Install/Uninstall einmal über den Kiosk gelaufen ist.
-</div>
-
-<h2 id="wf-discovery">Fleet-Discovery (Winget)</h2>
-
-<p>Das Discovery-Feature erkennt automatisch welche winget-Pakete auf deinen
-  Endgeräten installiert sind aber noch nicht in der Softshelf-Whitelist
-  stehen, und bietet ein-Klick-Aktivierung an. So kannst du eine bestehende
-  Flotte sukzessive in Softshelf reinholen ohne jedes Paket einzeln im Catalog
-  zu suchen.</p>
-
-<h3>Wo es auftaucht</h3>
-
-<ol class="doc-steps">
-  <li>Im Header rechts neben Version und User-Menu erscheint ein <b>Discovery-Banner</b> sobald die Flotte mindestens ein unverwaltetes winget-Paket hat. Beispiel: <i>„12 Pakete in der Flotte unverwaltet"</i>.</li>
-  <li>Klick auf den Banner öffnet das Aktivieren-Panel direkt mit dem Winget-Tab und expandiertem Discovery-Block.</li>
-  <li>Alternativ: Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → Reiter <b>Aus Winget</b> → unten den Block <i>„In der Flotte gefunden"</i> ausklappen.</li>
-</ol>
-
-<h3>Was angezeigt wird</h3>
-
-<p>Pro Discovery-Eintrag siehst du:</p>
-
-<ul>
-  <li><b>Display-Name</b> (z. B. „Mozilla Firefox") — wie es in „Apps &amp; Features" auf den Endgeräten heisst</li>
-  <li><b>Source-Tag</b>: <code>winget</code> wenn der Eintrag aus dem nightly winget-Scan kommt (kanonisch, sicher matchbar), oder <code>software-scan</code> wenn er aus dem Tactical-Software-Scan stammt und per Confidence-Heuristik gegen den winget-Catalog gemappt wurde</li>
-  <li><b>Confidence-Badge</b>: <code>sicher</code> / <code>wahrscheinlich</code> / <code>unsicher</code> / <code>kein Match</code>. Bei Source <code>winget</code> ist die Confidence immer <code>sicher</code>, weil die ID direkt aus winget kommt</li>
-  <li><b>Install-Count</b>: auf wie vielen Geräten der Flotte das Paket installiert ist</li>
-  <li><b>winget-PackageIdentifier</b>: die ID die beim Aktivieren in die Whitelist landet</li>
-  <li><b>Aktion</b>: <code>+</code>-Button bei Confidence ≥ <code>unsicher</code>, oder <i>„manuell"</i>-Hinweis bei <code>kein Match</code></li>
-</ul>
-
-<h3>Wie die zwei Quellen kombiniert werden</h3>
-
-<p>Discovery hat zwei parallele Quellen die zusammen gemerged werden:</p>
-
-<ol>
-  <li><b>Primary: agent_winget_state.</b> Aus dem nightly winget-Scan (siehe Abschnitt
-    <a href="#konzepte">Grundkonzepte</a>) sind die installierten Pakete pro Agent
-    bereits mit kanonischer winget-PackageIdentifier in der DB. Eine simple SQL-Query
-    findet alle <code>winget_id</code>-Werte die in keinem <code>packages</code>-Eintrag
-    auftauchen — das sind die Discovery-Kandidaten mit Confidence <code>sicher</code>.</li>
-  <li><b>Bonus: discovery_enrichment.</b> Ein zweiter Background-Job (<i>Enrichment</i>,
-    läuft täglich um 02:30 UTC) holt von Tactical pro online Agent die installierte
-    Software-Liste (das ist die ARP-basierte Sicht, also auch Software die NICHT via
-    winget installiert wurde) und versucht jeden distinct Display-Namen gegen den
-    lokalen winget-Catalog zu matchen. Token-basierte Score-Heuristik mit Generic-
-    Filter (Wörter wie <code>64bit</code>, <code>x64</code>, <code>pro</code>,
-    <code>enterprise</code>, <code>de</code> werden ignoriert um false-positive Matches
-    zu vermeiden). Ergebnis: <code>discovery_enrichment</code>-Tabelle mit
-    Display-Name, gefundener winget-ID, Confidence und Install-Count.</li>
-</ol>
-
-<div class="doc-callout info">
-  Der Enrichment-Job läuft asynchron einmal täglich. Wenn du gerade einen neuen
-  Agent ausgerollt hast, wird seine installierte Software erst beim nächsten
-  Enrichment-Run in der Discovery sichtbar. Manueller Trigger via
-  <code>POST /admin/api/winget/run-enrichment</code>.
-</div>
-
-<h2 id="wf-detect">Uninstall aus Tactical übernehmen</h2>
-
-<p>Das macht es einfach, den korrekten Uninstall-Command eines custom-EXE-Installers
-  zu finden: statt mühsam die Registry durchwühlen, hat Tactical den Wert bereits in
-  seinem Software-Inventar.</p>
-
-<ol class="doc-steps">
-  <li>Paket testweise auf mindestens einem Kiosk-Client installieren (via Install-Klick im Kiosk-UI).</li>
-  <li>Warten bis Tactical's nächster Software-Scan durchgelaufen ist (einige Minuten bis Stunden).</li>
-  <li>Im Admin-UI: Edit-Panel des custom-Pakets öffnen (Stift-Button auf der Karte).</li>
-  <li>Neben dem Feld <b>Uninstall-Command</b> auf <code>Aus Tactical holen</code> klicken.</li>
-  <li>Der Proxy scannt die letzten 30 aktiven Agents, sucht nach dem <code>detection_name</code>,
-    und übernimmt bei Treffer die <code>UninstallString</code> aus der Windows-Registry.</li>
-  <li>Der gefundene Wert wird ins Feld geschrieben, der Toast zeigt welcher Agent getroffen wurde.</li>
-  <li>Meist musst du noch <b>Silent-Flags ergänzen</b> (der Registry-Wert ist oft nicht silent):
-    <ul>
-      <li>MSI-Apps: <code>/X{GUID}</code> → <code>/X{GUID} /qn /norestart</code></li>
-      <li>NSIS-Apps: <code>"...\uninstall.exe"</code> → <code>"...\uninstall.exe" /S</code></li>
-      <li>InnoSetup: <code>"...\unins000.exe"</code> → <code>"...\unins000.exe" /VERYSILENT /NORESTART</code></li>
-    </ul>
-  </li>
-  <li><code>Speichern</code> klicken.</li>
-</ol>
-
-<div class="doc-callout info">
-  Der Scan läuft sequentiell durch die 30 zuletzt aktiven Agents und bricht beim
-  ersten Treffer ab. Dauer: wenige Sekunden bis max ~30 Sekunden, abhängig von
-  der Tactical-API-Latenz und der Position deines Test-Agents in der Liste.
-</div>
-
-<h2 id="wf-delete">Paket löschen</h2>
-
-<ol class="doc-steps">
-  <li>Auf der Karte das <b>×</b>-Icon klicken</li>
-  <li>Im Confirm-Modal bestätigen</li>
-</ol>
-
-<p><b>Was dabei passiert:</b></p>
-
-<ul>
-  <li><b>Choco-Paket:</b> Entfernung aus der Whitelist. Bereits auf Clients installierte Software bleibt dort installiert — der Delete-Button entfernt nur den Eintrag bei uns, nicht die Software auf den Maschinen.</li>
-  <li><b>Custom-Paket:</b> Whitelist-Eintrag <i>plus alle Versionen</i>, das komplette
-    Installations-Tracking, und für jede Version die physische Datei aus dem Upload-Storage —
-    sofern kein anderes Paket oder keine andere Version denselben SHA-256-Hash referenziert
-    (Shared-File-Schutz). Bereits auf Clients installierte Software bleibt ebenfalls dort.</li>
-</ul>
-
-<div class="doc-callout warning">
-  Der Delete entfernt <b>nicht</b> die Software vom Client-PC! Dafür müsste der
-  End-User im Kiosk-UI vor dem Löschen auf "Deinstallieren" klicken, oder ein
-  Admin muss das via Tactical direkt ausführen.
-</div>
-
-<div class="doc-callout info">
-  <b>Neue Version eines bestehenden Pakets:</b> nicht löschen + neu anlegen — sondern im
-  Edit-Panel im Abschnitt <i>Versionen</i> die neue Datei hochladen. Siehe
-  <a href="#wf-versions">Versionierung &amp; Updates pushen</a>.
-</div>
-</section>
-
-<!-- ═════════════════════════════════════════════════════════════════════ -->
-
-<section id="agent-detail">
-<h1>Agent-Detail-Page: Software pro Client</h1>
-
-<p>Im Tab <b>Kiosk-Clients</b> öffnet ein Klick auf eine Zeile die <b>Agent-
-  Detail-Page</b> als Vollbild-Sicht (ersetzt das frühere Slide-in-Panel).
-  Sie ist die zentrale Stelle für „was ist eigentlich auf diesem PC und was
-  kann ich damit machen".</p>
-
-<h2>Header-Toolbar</h2>
-
-<p>Oben über dem Detail-Bereich:</p>
-
-<ul>
-  <li><b>← Zurück</b> — schließt die Detail-Sicht und zeigt wieder die Agent-Liste.</li>
-  <li><b>Hostname</b> + <b>Agent-ID</b> — bei gesperrten Agents mit Suffix <code>· GESPERRT</code>.</li>
-  <li><b>Neu scannen</b> — triggert sofort einen winget-Re-Scan auf diesem Agent. Setzt zusätzlich <code>consecutive_failures</code> in <code>agent_scan_meta</code> auf 0, falls der Agent durch frühere Fehler temporär aus dem nightly Batch ausgeschlossen war.</li>
-  <li><b>Token widerrufen</b> / <b>Sperren</b> / <b>Löschen</b> — siehe <a href="#agent-lifecycle">Agent-Lifecycle</a> für die Wirkung jeder Aktion.</li>
-</ul>
-
-<h2>Installierte Software</h2>
-
-<p>Die Hauptliste zeigt die <b>vereinte Sicht</b> aus zwei Datenquellen:</p>
-
-<ol>
-  <li><b>Tactical software-scan</b> (ARP-basiert, alle installierten Programme aus der Windows-Registry)</li>
-  <li><b>agent_winget_state</b> (kanonische winget-Inventur aus dem nightly Scan: PackageIdentifier + installed_version + available_version)</li>
-</ol>
-
-<p>Die beiden Quellen werden serverseitig zusammen gemerged und dedupt. Wenn Tactical
-  „Mozilla Firefox" sieht UND der winget-Scan <code>Mozilla.Firefox</code> sieht,
-  taucht das in der Liste als EINE Zeile mit beiden Datensätzen auf. Das Matching
-  läuft über eine Token-Score-Heuristik gegen die winget-PackageIdentifier-
-  Segmente, mit Filter für generische Tokens (<code>64bit</code>, <code>x64</code>,
-  <code>pro</code>, …) damit z. B. „Adobe Acrobat (64-bit)" nicht versehentlich
-  „SAP GUI 64bit" matcht.</p>
-
-<p>Pro Software-Zeile siehst du:</p>
-
-<ul>
-  <li><b>Display-Name</b> (groß)</li>
-  <li><b>Status-Badges</b>: <code>verwaltet · winget</code> / <code>verwaltet · choco</code> / <code>verwaltet · eigen</code> wenn das Paket in der Softshelf-Whitelist ist; <code>winget · unverwaltet</code> für winget-Pakete ohne Whitelist-Eintrag; <code>unverwaltet</code> für tactical-only Software</li>
-  <li><b>Update-Badge</b>: <code>Update X.Y.Z</code> wenn der nightly winget-Scan eine neuere Version gefunden hat</li>
-  <li><b>Sub-Zeile</b>: winget-PackageIdentifier (falls vorhanden), installierte Version, Publisher</li>
-</ul>
-
-<h3>Aktionen pro Zeile</h3>
-
-<table class="doc-table">
-  <thead><tr><th>Status</th><th>Verfügbare Buttons</th><th>Was passiert</th></tr></thead>
-  <tbody>
-    <tr>
-      <td>verwaltet + Update verfügbar</td>
-      <td><b>Updaten</b> + <b>Deinstallieren</b></td>
-      <td>Updaten startet <code>winget upgrade --id …</code> als SYSTEM. Deinstallieren startet den passenden Uninstall-Pfad je nach Typ.</td>
-    </tr>
-    <tr>
-      <td>verwaltet + aktuell</td>
-      <td><b>Deinstallieren</b></td>
-      <td>Type-Dispatch: Choco-Uninstall, Custom-Uninstall, oder <code>winget uninstall --force</code></td>
-    </tr>
-    <tr>
-      <td>unverwaltet, mit winget-ID</td>
-      <td><b>Aktivieren</b> + <b>Entfernen</b></td>
-      <td><i>Aktivieren</i> nimmt das Paket nur in die Softshelf-Whitelist auf, ändert nichts auf dem Agent. <i>Entfernen</i> ruft <code>winget uninstall --id … --force</code> auf, OHNE das Paket in die Whitelist zu nehmen — für „diese unerwünschte Software einfach runterhauen".</td>
-    </tr>
-    <tr>
-      <td>unverwaltet, ohne winget-ID</td>
+      <td><span class="role-badge role-admin">admin</span></td>
+      <td>Alles: Whitelist, Benutzer, Einstellungen, Build, Dispatch, Paket-Flags, Agent-Ringe</td>
       <td>—</td>
-      <td>Keine Aktion verfügbar (winget kann's nicht entfernen, choco/custom-Uninstall braucht eine Whitelist).</td>
+    </tr>
+    <tr>
+      <td><span class="role-badge role-operator">operator</span></td>
+      <td>
+        Dispatch (Install/Uninstall/Update-All), Push-Update, Bulk-Aktionen, Rollouts starten &amp; weiterschalten, Profile anwenden, Fehler bestätigen
+      </td>
+      <td>Whitelist-Edit, Users anlegen, Settings ändern, Build triggern, Required/Staged-Flags setzen, Ring umkonfigurieren</td>
+    </tr>
+    <tr>
+      <td><span class="role-badge role-viewer">viewer</span></td>
+      <td>Alle GETs (lesen, durchklicken, CSV-Export)</td>
+      <td>Jegliche state-changing Action → 403</td>
     </tr>
   </tbody>
 </table>
 
-<h3>Wie der Status nach einer Aktion frisch wird</h3>
-
 <div class="doc-callout info">
-  Sobald du auf <b>Updaten</b>, <b>Deinstallieren</b>, <b>Aktivieren</b> oder
-  <b>Entfernen</b> klickst, wird die Zeile mit einem Spinner gesperrt. Das UI
-  pollt im Hintergrund alle 5 Sekunden den Status-Endpoint und vergleicht
-  <code>scan_meta.last_scan_at</code> gegen einen Snapshot vom Klick-Zeitpunkt.
-  Sobald der targeted Re-Scan auf dem Agent durch ist und der Timestamp sich
-  bewegt, refresht die Sicht automatisch — du musst nicht F5 drücken. Hartstop
-  bei 6 Minuten.
+  <b>Durchsetzung:</b> Der Server ist Source of Truth. Die UI versteckt
+  oder disabled Admin-Only Controls für andere Rollen kosmetisch, aber
+  jeder API-Call wird backend-seitig in <code>_require_admin</code>
+  gegen method+path geprüft.
 </div>
-
-<div class="doc-callout warn">
-  <b>Wichtig zur winget-Performance:</b> Eine Update- oder Install-Aktion via winget
-  kann je nach Paket-Größe zwischen wenigen Sekunden und mehreren Minuten dauern
-  (Download + Installer-Run). Während dieser Zeit zeigt der Spinner „läuft …" und
-  die Zeile bleibt gesperrt. Container-Restart in genau diesem Zeitfenster killt
-  den Background-Task und verhindert den nachgelagerten Re-Scan — der Agent läuft
-  zwar fertig durch, aber die DB-Sicht bleibt stale bis du <i>Neu scannen</i>
-  drückst.
-</div>
-
-<h2>Installations-Verlauf</h2>
-
-<p>Unter der Software-Liste folgt der bisherige <b>Installations-Verlauf</b> aus
-  <code>install_log</code> für diesen Agent: jede Install/Uninstall-Aktion (von
-  End-User über Kiosk-Client oder von Admin über Detail-Page) ist da als Audit-
-  Eintrag mit Zeitstempel sichtbar.</p>
 </section>
 
-<!-- ═════════════════════════════════════════════════════════════════════ -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
 
-<section id="agent-lifecycle">
-<h1>Agent-Lifecycle: Revoke / Löschen / Sperren</h1>
+<section id="paket-typen">
+<h1>Paket-Typen</h1>
 
-<p>In der <a href="#agent-detail">Agent-Detail-Page</a> sind oben in der Header-
-  Toolbar drei Aktionen, die unterschiedlich harte Konsequenzen haben. Wichtig:
-  alle drei sind <i>kombinierbar</i> — die typische Reihenfolge bei einem
-  kompromittierten Gerät ist <b>Sperren → Löschen</b>.</p>
+<p>Softshelf kennt drei Paket-Quellen. Type-Pills in der UI zeigen den Typ mit farbigem Dot:</p>
 
 <table class="doc-table">
-  <thead><tr><th>Aktion</th><th>Was passiert</th><th>Re-Register?</th></tr></thead>
+  <thead><tr><th>Typ</th><th>Quelle</th><th>Dispatch</th><th>Besonderheit</th></tr></thead>
   <tbody>
     <tr>
-      <td><b>Token widerrufen</b></td>
-      <td>Bumpt <code>token_version</code> in der DB. Der laufende Machine-Token
-        wird beim nächsten Request mit 401 abgelehnt. Der Agent bleibt sonst
-        unverändert in der DB (Tracking, Install-Log).</td>
-      <td>Ja — Setup-Script mit gültigem Registration-Secret macht den Client
-        wieder funktionstüchtig.</td>
+      <td><span class="pkg-type-pill winget">winget</span></td>
+      <td>Microsoft-winget-Catalog, lokal gemirrowt</td>
+      <td><code>winget install/upgrade/uninstall</code> via Tactical run_command</td>
+      <td><b>Scope</b> (auto/machine/user) pro Paket — Layer-2-Fallback für per-user-only-Installer wie LastPass, Bitwarden.</td>
     </tr>
     <tr>
-      <td><b>Löschen</b></td>
-      <td>Entfernt den Agent komplett aus dem Self-Service Center:
-        <code>agent_installations</code>, <code>install_log</code> und
-        <code>agents</code>-Row. Tokens werden dadurch automatisch ungültig.
-        Die installierte Software auf dem Gerät bleibt erhalten.</td>
-      <td>Ja — solange das Gerät noch existiert und das Setup-Script ausgeführt
-        wird, taucht der Agent wieder auf.</td>
+      <td><span class="pkg-type-pill choco">choco</span></td>
+      <td>Chocolatey Community</td>
+      <td><code>choco install/uninstall -y</code> via run_command mit Output-Capture</td>
+      <td>Auto-Ghost-Repair: <code>--force</code> + <code>--skip-autouninstaller</code> bei unsauberen Uninstalls.</td>
     </tr>
     <tr>
-      <td><b>Sperren</b></td>
-      <td>Setzt den Agent auf die <code>agent_blocklist</code>. Bumpt zusätzlich
-        <code>token_version</code> für sofortige Wirkung. Der Eintrag überlebt
-        ein Löschen des Agents.</td>
-      <td><b>Nein</b> — <code>/api/v1/register</code> weist den
-        <code>agent_id</code> mit 403 ab, auch wenn das Setup-Script korrekt
-        läuft. Bis zum <i>Entsperren</i> kommt der Client nicht mehr ans
-        Self-Service Center.</td>
+      <td><span class="pkg-type-pill custom">custom</span></td>
+      <td>Manueller MSI/EXE/Ordner-Upload</td>
+      <td>Download via signed-URL → msiexec/Start-Process</td>
+      <td>Version-Tracking, Push-Updates.</td>
     </tr>
   </tbody>
 </table>
 
-<h2>Wann was?</h2>
+<!-- — winget — -->
 
-<ul>
-  <li><b>Token widerrufen:</b> wenn du nur den Token rotieren willst (z.B.
-    weil du nach einem Audit den Verdacht hast, dass die Registry leakt). Der
-    PC bleibt grundsätzlich vertrauenswürdig — er muss nur einmal neu
-    registriert werden.</li>
-  <li><b>Löschen:</b> wenn der PC physisch nicht mehr existiert oder neu
-    aufgesetzt wird. Saubert die DB auf, der Eintrag taucht in der Liste nicht
-    mehr auf.</li>
-  <li><b>Sperren:</b> wenn der PC kompromittiert ist oder aus anderen Gründen
-    NIE mehr ans Self-Service Center darf — auch nicht nach einem manuellen
-    Re-Deployment. Klassisches Szenario: gestohlenes Notebook, Mitarbeiter
-    verlässt die Firma und das Gerät bleibt im Feld, etc.</li>
-</ul>
+<section id="wf-winget">
+<h2>Winget-Paket freigeben</h2>
 
-<h2>Sperre aufheben (Unban)</h2>
-
-<p>Im Detail-Panel eines bereits gesperrten Agents steht statt <b>Sperren</b>
-  ein <b>Entsperren</b>-Button. Klick → der Eintrag aus
-  <code>agent_blocklist</code> wird entfernt und der Client darf sich beim
-  nächsten Re-Register wieder anmelden. Token-Version wird dabei NICHT
-  zurückgesetzt — der Client braucht trotzdem ein frisches Setup-Script-Run.</p>
-
-<div class="doc-callout warning">
-  <b>Sperren überlebt Re-Register:</b> die Blocklist arbeitet auf der
-  <code>agent_id</code> (vergeben von Tactical RMM für jede physische Maschine).
-  Wenn Tactical das Gerät neu registriert, bekommt es eine neue
-  <code>agent_id</code> — und die alte Sperre greift nicht mehr für das frische
-  Tactical-Asset. Wer also wirklich verhindern will dass ein Gerät zurückkommt,
-  muss das auch in Tactical RMM vom Inventar nehmen.
-</div>
+<ol class="doc-steps">
+  <li>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code>.</li>
+  <li>Reiter <i>Winget</i>. Tippen → Live-Suche im lokalen Catalog-Mirror.</li>
+  <li>Plus-Button bei Treffer → aktiviert das Paket in der Whitelist.</li>
+  <li>Optional: <b>Scope</b> inline einstellen:
+    <ul>
+      <li><code>auto</code> (Default): erst SYSTEM + <code>--scope machine</code>, bei „No applicable installer" auto-retry im User-Kontext.</li>
+      <li><code>machine</code>: nur SYSTEM, kein Fallback.</li>
+      <li><code>user</code>: direkt User-Kontext — für LastPass, Bitwarden, Firefox-per-user.</li>
+    </ul>
+  </li>
+</ol>
 
 <div class="doc-callout info">
-  <b>Audit-Trail:</b> Die Blocklist speichert <code>banned_by</code> (Username
-  des Admins) und <code>banned_at</code> (Zeitstempel). Damit ist nachvollziehbar
-  wer wann wen gesperrt hat. Plus optional eine freie <code>reason</code>-
-  Begründung die der Admin beim Sperren eintippen kann.
+  <b>Discovery:</b> Das Panel zeigt außerdem „In der Flotte gefunden" — winget-Pakete die auf euren Clients bereits installiert sind aber noch nicht in der Whitelist. One-click-Aktivieren möglich.
 </div>
+</section>
+
+<!-- — choco — -->
+
+<section id="wf-choco">
+<h2>Choco-Paket freigeben</h2>
+
+<ol class="doc-steps">
+  <li>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → Reiter <i>Aus Chocolatey</i>.</li>
+  <li>Name tippen, Plus drücken.</li>
+</ol>
+
+<div class="doc-callout warn">
+  <b>FOSS-Hinweis:</b> Manche choco-Pakete (die mit <code>.install</code>-Suffix) laden Installer vom Hersteller-CDN, nicht von Chocolatey selbst. Bei 404 oder „Likely broken for FOSS users" steht die Fehlermeldung mit Link zum Paket-Log im <b>Fehler</b>-Tab.
+</div>
+</section>
+
+<!-- — custom — -->
+
+<section id="wf-custom">
+<h2>Eigenes MSI/EXE/Ordner hochladen</h2>
+
+<ol class="doc-steps">
+  <li>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → <i>Eigene Datei</i> / <i>Programm-Ordner</i>.</li>
+  <li>Datei oder Ordner wählen. MSI-Metadaten werden automatisch extrahiert.</li>
+  <li>Optional: Silent-Install-Args anpassen. Default für MSI: <code>/qn /norestart</code>.</li>
+  <li>Uninstall-Command: via <code>Detect</code>-Button aus Tactical übernehmen oder manuell hinterlegen.</li>
+  <li><code>Hochladen</code>.</li>
+</ol>
+
+<p>Nachträgliches Bearbeiten: Stift-Icon in der Paket-Zeile → Panel mit allen Feldern, inklusive Versions-History und „Inhalt verwalten" bei Ordner-Paketen.</p>
+</section>
+
+<!-- — bulk import — -->
+
+<section id="wf-import">
+<h2>Bulk-Import winget-IDs</h2>
+
+<p>Wenn du 50 Pakete auf einmal aktivieren willst:</p>
+
+<ol class="doc-steps">
+  <li>Tab <b>Pakete</b> → <code>Bulk-Import</code>.</li>
+  <li>Textarea: eine winget-ID pro Zeile (oder komma-getrennt).</li>
+  <li>Kategorie setzen.</li>
+  <li><code>Importieren</code>. Metadaten (Name, Publisher) werden automatisch aus dem Catalog geholt. Bereits aktive Pakete werden übersprungen, ungültige IDs landen in der Fehler-Liste.</li>
+</ol>
+</section>
 
 </section>
 
-<!-- ═════════════════════════════════════════════════════════════════════ -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="profile">
+<h1>Profile</h1>
+
+<p>Profile sind Bundles aus mehreren Paketen, zuweisbar auf beliebige Clients.</p>
+
+<ol class="doc-steps">
+  <li>Tab <b>Profile</b> → <code>+ Neues Profil</code> → Name, Beschreibung, Farbe.</li>
+  <li>Paket-Picker: welche Pakete enthält das Profil. Optional: Version-Pin pro Paket.</li>
+  <li>Speichern → Profil erscheint in der Liste links.</li>
+  <li>Client zuweisen: Profil auswählen → <code>Clients zuweisen</code> → Agent-Picker.</li>
+  <li><b>Apply</b> löst sofort Install für alle nicht-vorhandenen Pakete aus.</li>
+</ol>
+
+<div class="doc-callout info">
+  <b>Auto-Update:</b> Option im Profil-Editor. Wenn gesetzt, pusht der nightly Job (03:00 UTC) Updates für alle Pakete im Profil an die zugewiesenen Agents. Smart-Skip: bereits aktuelle Installs werden übersprungen.
+</div>
+
+<div class="doc-callout info">
+  <b>Propagation:</b> Fügst du ein Paket zu einem Profil hinzu, wird es sofort auf allen zugewiesenen Clients installiert (außer sie haben's schon). Entfernen ohne Uninstall — der Admin muss explizit „Unassign mit Uninstall" wählen um zu deinstallieren.
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="rollouts">
+<h1>Phased Rollouts</h1>
+
+<section id="rollout-konzept">
+<h2>Konzept: Ringe, Phasen und Zuordnung</h2>
+
+<h3>Zwei Dinge klar trennen</h3>
+
+<p>Ein Staged Rollout beantwortet nur eine Frage: <b>wann</b> bekommt ein Client das Update? <b>Ob</b> ein Paket überhaupt zu einem Client gehört, entscheidet eine andere Mechanik — die Zuordnung.</p>
+
+<table class="doc-table">
+  <thead><tr><th>Mechanik</th><th>Antwortet auf</th><th>Wird gesteuert durch</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>Zuordnung</b></td>
+      <td>Ist dieses Paket auf diesem Client installiert (oder sollte es sein)?</td>
+      <td>Profil-Zuweisung · Required-Flag · direkter Admin-Push · User-Install im Kiosk</td>
+    </tr>
+    <tr>
+      <td><b>Rollout-Phase</b></td>
+      <td>Wann geht das Update zu welchem Ring?</td>
+      <td>Staged-Flag + Ring pro Agent + aktive Rollout-Phase</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="doc-callout warning">
+  <b>Häufiger Irrtum:</b> Staged-Flag aktivieren reicht <i>nicht</i> aus damit ein Paket auf neue Clients installiert wird. Staged steuert nur den Rollout bestehender Zuweisungen. Ein Client der das Paket gar nicht hat, bekommt es auch bei erreichter Phase nicht — egal wie weit der Rollout ist.
+</div>
+
+<h3>Konkrete Beispiele</h3>
+
+<table class="doc-table">
+  <thead><tr><th>Ausgangslage</th><th>Admin-Aktion</th><th>Ergebnis auf dem Client</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Firefox installiert auf Client A (Ring 1). Staged aktiv, Rollout Phase 1</td>
+      <td>Neue Version 128 verfügbar</td>
+      <td>✓ Client A bekommt Update (Ring 1 ≤ Phase 1)</td>
+    </tr>
+    <tr>
+      <td>Firefox installiert auf Client B (Ring 3). Rollout Phase 1</td>
+      <td>—</td>
+      <td>✗ Kein Update-Button im Kiosk (Ring 3 &gt; Phase 1). Wartet auf Phase 3</td>
+    </tr>
+    <tr>
+      <td>Firefox <b>nicht</b> auf Client C installiert. Staged + Phase 3</td>
+      <td>—</td>
+      <td>✗ Firefox erscheint nicht auf Client C — fehlende Zuordnung. Rollout ignoriert ihn komplett</td>
+    </tr>
+    <tr>
+      <td>Firefox in Profil „Devs" enthalten, Client C hat das Profil. Staged + Phase 1</td>
+      <td>Profil-Apply bei Zuweisung</td>
+      <td>Firefox wird auf Client C installiert (Profil-Apply). Updates respektieren dann Ring/Phase</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Ringe konfigurieren</h3>
+
+<p>Jeder Agent hat genau einen Ring: Ring 1 (Canary), Ring 2 (Pilot), oder Ring 3 (Produktion = Default für neu registrierte Agents). Setzbar im Agent-Detail-Header (admin-only). Labels pro Umgebung umbenennbar unter Rollouts → Einstellungen.</p>
+
+<h3>Phasen-Mapping</h3>
+
+<p>Eine Rollout-Phase löst an einen Ring aus:</p>
+<ul>
+  <li><b>Phase 1</b> → alle Agents mit Ring 1</li>
+  <li><b>Phase 2</b> → alle Agents mit Ring 2</li>
+  <li><b>Phase 3</b> → alle Agents mit Ring 3 (Produktion)</li>
+</ul>
+
+<p>Durch Kiosk-Gate sehen Agents in späteren Ringen das Update erst wenn ihre Phase erreicht ist — auch bei User-initiierten Update-Checks im Kiosk.</p>
+
+<p>Pakete mit <code>staged_rollout=1</code> (Haken-Icon in Pakete-Row) müssen diese Phasen durchlaufen:</p>
+
+<div class="doc-flow">
+  <div class="doc-flow-step"><b>Phase 1</b><br>Ring 1 (Canary)<br><span class="doc-flow-hint">kleinste Testgruppe</span></div>
+  <div class="doc-flow-arrow">→</div>
+  <div class="doc-flow-step"><b>Phase 2</b><br>Ring 2 (Pilot)<br><span class="doc-flow-hint">größere Testgruppe</span></div>
+  <div class="doc-flow-arrow">→</div>
+  <div class="doc-flow-step"><b>Phase 3</b><br>Produktion<br><span class="doc-flow-hint">alle Nicht-Test-Agents</span></div>
+</div>
+
+<p>Zwischen den Phasen prüft der Admin (oder der Auto-Modus) ob Fehler auftraten. Bei Problemen: Rollout abbrechen oder pausieren.</p>
+</section>
+
+<section id="rollout-workflow">
+<h2>Workflow: Paket staged ausrollen</h2>
+
+<ol class="doc-steps">
+  <li>Paket als phased markieren: Tab <b>Pakete</b> → ✓-Icon pro Zeile klicken (aktiv = amber).</li>
+  <li>Agent-Ringe zuweisen: Tab <b>Clients</b> → Agent öffnen → <b>Ring</b>-Dropdown im Header → 1 für Test-Gerät setzen.</li>
+  <li>Rollout starten: Tab <b>Pakete</b> → ▶-Icon bei phased Paket mit Updates. Bestätigen → Phase 1 wird sofort ausgelöst.</li>
+  <li>Status prüfen: Tab <b>Rollouts</b> zeigt aktive Rollouts. Oder auf <b>Übersicht</b>.</li>
+  <li>Fehler checken: Tab <b>Fehler</b> nach Problemen durchsehen.</li>
+  <li>Weiter: <code>Weiter</code>-Button im Rollouts-Tab → Phase 2 (Ring 2).</li>
+  <li>Nochmal prüfen, dann <code>Weiter</code> → Phase 3 (Produktion).</li>
+  <li>Nach Phase 3 ist Rollout automatisch <code>done</code>.</li>
+</ol>
+
+<div class="doc-callout warning">
+  <b>Abbruch:</b> <code>Abbrechen</code>-Button stoppt den Rollout. Bereits dispatcht Phasen bleiben auf den Agents — Rollback ist ein separater Uninstall (Profil-Unassign mit Uninstall oder manuelles choco/winget uninstall).
+</div>
+</section>
+
+<section id="rollout-auto">
+<h2>Auto-Advance-Einstellungen</h2>
+
+<p>Tab <b>Rollouts</b> → Abschnitt „Einstellungen":</p>
+
+<table class="doc-table">
+  <tbody>
+    <tr><td><b>Ring-Labels</b></td><td>Anzeigenamen für Ring 1-3 (z.B. „QA-Team", „Pilot-Gruppe").</td></tr>
+    <tr><td><b>Neue winget-Pakete automatisch staged</b></td><td>Policy: bei Bulk-Import oder Aktivierung wird <code>staged_rollout=1</code> gesetzt.</td></tr>
+    <tr><td><b>Auto-Advance aktivieren</b></td><td>Scheduler-Tick alle 15 Min: schaltet aktive Rollouts nach Ablauf der Wartezeit in die nächste Phase.</td></tr>
+    <tr><td><b>Wartezeit (Std)</b></td><td>Minimum zwischen Phasen für Auto-Advance. Default 24h.</td></tr>
+    <tr><td><b>Max-Fehler-Rate (%)</b></td><td>Wenn mehr als X% der Agents in der aktuellen Phase Fehler haben: pausieren statt weiterschalten. <code>0</code> = schon ein Fehler blockt.</td></tr>
+  </tbody>
+</table>
+</section>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="compliance">
+<h1>Compliance</h1>
+
+<p>Required-Pakete sind Software die auf allen Clients installiert sein <b>muss</b>. Typisch: AV-Agent, Backup-Tool, interne Office-Suite.</p>
+
+<ol class="doc-steps">
+  <li>Paket als required markieren: Tab <b>Pakete</b> → ⚑-Icon klicken (aktiv = amber).</li>
+  <li>Tab <b>Compliance</b> zeigt:
+    <ul>
+      <li>Wieviele Required-Pakete insgesamt</li>
+      <li>Wieviele Clients voll-konform (alle Required-Pakete vorhanden)</li>
+      <li>Pro Paket: Abdeckung (X/Y) und auf welchen Hostnames es fehlt</li>
+    </ul>
+  </li>
+  <li><code>Alles nachinstallieren</code>: löst Install für jedes fehlende Required-Paket auf jedem noch-nicht-compliant Client aus.</li>
+</ol>
+
+<div class="doc-callout info">
+  <b>Staged Required:</b> Pakete die sowohl <code>required</code> als auch <code>staged_rollout</code> sind werden vom „Alles nachinstallieren" <b>übersprungen</b> (mit <code>stage=all</code>) — diese müssen manuell über den Rollouts-Tab ausgerollt werden.
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="verteilung">
+<h1>Verteilung & Updates</h1>
+
+<p>Tab <b>Verteilung</b> zeigt pro Paket: wer hat's, wer ist outdated.</p>
+
+<ul>
+  <li><b>Suche</b>: Paketnamen filtern.</li>
+  <li><b>Type-Pills</b>: nur winget / choco / custom.</li>
+  <li><b>Nur mit Updates</b>: Checkbox blendet aktuelle Pakete aus.</li>
+  <li><b>Spalten-Header</b> sortierbar (Veraltet desc = Default).</li>
+  <li><b>Zeilen-Klick</b>: Slide-Over rechts mit Agent-Liste für das Paket.</li>
+  <li><b>Checkbox-Spalte</b>: Multi-Select → Aktions-Leiste oben („Updates verteilen" / „Überall deinstallieren").</li>
+  <li><b>Update-Button</b> pro Zeile: Flotten-Update nur für dieses Paket (mit Ring-Auswahl).</li>
+</ul>
+
+<div class="doc-callout info">
+  <b>Stage-Picker:</b> Bei jedem Dispatch erscheint ein Modal mit Radio-Buttons für Ring 1 / Ring 2 / Ring 3 / Alle Test-Ringe / Nur Produktion / Alle Agents. Bei staged_rollout-Paketen ist „Alle Agents" deaktiviert.
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="fehler">
+<h1>Fehler & Acknowledgement</h1>
+
+<p>Tab <b>Fehler</b> ist die Single-Source-of-Truth für alle offenen Install-Fehler flottenweit.</p>
+
+<h3>Spalten</h3>
+<table class="doc-table">
+  <tbody>
+    <tr><td><b>Client</b></td><td>Hostname (klickbar → Agent-Detail)</td></tr>
+    <tr><td><b>Paket</b></td><td>Name</td></tr>
+    <tr><td><b>Aktion</b></td><td>install/upgrade/uninstall</td></tr>
+    <tr><td><b>Fehler</b></td><td>Deutsche Fehlermeldung (Soft-Error-Translation oder Exit-Code)</td></tr>
+    <tr><td><b>Zeit</b></td><td>Wann</td></tr>
+    <tr><td><b>Aktion</b></td><td><code>✓</code> (bestätigen) · <code>Erneut</code> · Info-Icon (voller stdout)</td></tr>
+  </tbody>
+</table>
+
+<h3>Bestätigen vs. Erneut</h3>
+<ul>
+  <li><code>Erneut</code> startet den letzten Versuch neu — sinnvoll bei transienten Fehlern (Netzwerk, Tactical kurz weg).</li>
+  <li><code>✓</code> markiert als bestätigt. Fehler verschwindet aus der Liste, aber Fehler-Text und voller Output bleiben in der DB. „Bestätigte anzeigen"-Toggle zeigt sie wieder.</li>
+  <li><code>Alle bestätigen</code> als Bulk-Aktion.</li>
+  <li>Wenn ein neuer Fehler zu demselben Agent kommt, wird das Ack automatisch resetet.</li>
+</ul>
+
+<div class="doc-callout info">
+  <b>Agent-Detail-Banner:</b> Solange ein Fehler nicht acked ist, erscheint er als rotes Banner oben im Agent-Detail mit <code>Voller Output</code> und <code>Bestätigen</code> Buttons.
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="scheduled">
+<h1>Wartungsfensters (Geplant)</h1>
+
+<p>Admin legt zeitgesteuerte Dispatches an. APScheduler-Tick alle Minute prüft Pending-Jobs.</p>
+
+<ol class="doc-steps">
+  <li>Tab <b>Geplant</b> → <code>+ Neuer Job</code>.</li>
+  <li>Beschreibung (optional).</li>
+  <li>Zeitpunkt (deine lokale Zeitzone, datetime-local-Input).</li>
+  <li>Aktion wählen:
+    <ul>
+      <li><b>Updates pushen für ein Paket</b> — einzeln</li>
+      <li><b>Bulk: Updates für mehrere Pakete verteilen</b> — Multi-Select</li>
+      <li><b>Required-Pakete nachinstallieren</b> — Compliance-Fix</li>
+    </ul>
+  </li>
+  <li>Stage wählen (Ring 1 / Ring 2 / Prod / Alle).</li>
+  <li><code>Einplanen</code>.</li>
+</ol>
+
+<p>Der Tick führt den Job zur ersten vollen Minute ≥ <code>run_at</code> aus und markiert ihn als <code>done</code> oder <code>failed</code> mit Ergebnis.</p>
+
+<div class="doc-callout warn">
+  <b>Genauigkeit:</b> Tick ist minuten-basiert, also ±1 Min. Für echte Sekunden-Genauigkeit müsste der Scheduler anders gebaut sein. Für Wartungsfensters ist das ausreichend.
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="clients">
+<h1>Clients & Agent-Detail</h1>
+
+<p>Tab <b>Clients</b> listet alle registrierten Kiosk-Clients mit Status, Ring und Last-Seen.</p>
+
+<h3>Spalten</h3>
+<ul>
+  <li><b>Status</b>: Online (<5 Min) / Heute aktiv (<24h) / Offline / Gesperrt</li>
+  <li><b>Hostname</b></li>
+  <li><b>Ring</b>: prod / Ring 1 / Ring 2 / Ring 3 als Badge</li>
+  <li><b>Registriert</b> / <b>Letzter Kontakt</b></li>
+  <li><b>Agent-ID</b> (klickbar-to-copy)</li>
+</ul>
+
+<h3>Agent-Detail-Seite (Zeilen-Klick)</h3>
+<p>Vollbild-Sicht mit:</p>
+<ul>
+  <li><b>Header-Actions</b>: Ring setzen (nur admin), Neu scannen, Token widerrufen, Sperren, Löschen.</li>
+  <li><b>Fehler-Banner</b> wenn ungeackte Fehler-Action da ist.</li>
+  <li><b>Profile-Pills</b>: welchen Profilen ist der Agent zugewiesen.</li>
+  <li><b>Update-Banner</b> mit Liste der outdated Pakete + „Alle updaten".</li>
+  <li><b>Software-Liste</b>: Tactical-Scan + winget_state zusammengeführt (token-score-dedup), Status-Badges (verwaltet/unverwaltet/Update verfügbar), Filter-Chips, Aktionen pro Zeile.</li>
+  <li><b>Installations-Verlauf</b>: Log aller Install/Uninstall-Events von diesem Agent.</li>
+</ul>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="deployment">
+<h1>Deployment & Updates</h1>
 
 <section id="client-deploy">
-<h1>Kiosk-Client auf PCs ausrollen</h1>
+<h2>Kiosk-Client auf PCs ausrollen</h2>
 
-<p>Damit ein Windows-PC das Self-Service Center nutzen kann, muss <code>softshelf.exe</code>
-  installiert und beim Proxy registriert sein. Das kann auf drei Arten passieren:</p>
+<p>Drei Wege:</p>
 
-<h2>Variante A: Automatisch via Tactical RMM (empfohlen)</h2>
+<h3>1. Tactical RMM Deploy-Script (empfohlen)</h3>
+<p>Tab <b>Einstellungen</b> → Abschnitt „Tactical-Deploy" → Snippet ist vorausgefüllt mit aktuellem Registration-Secret. In Tactical → Scripts → „PowerShell" → ins Script-Feld einfügen → auf Agent ausführen.</p>
 
-<ol class="doc-steps">
-  <li>Sicherstellen dass auf dem Proxy unter Einstellungen <b>Proxy Public URL</b> gesetzt ist.</li>
-  <li><code>EXEs bauen</code> klicken (falls die EXEs noch nicht existieren oder die Proxy-URL sich geändert hat).</li>
-  <li>In Tactical <b>Settings → Script Manager → New Script</b> anlegen:
-    <ul>
-      <li><b>Name</b>: <code>Deploy Self-Service Center</code></li>
-      <li><b>Shell</b>: <code>Powershell</code></li>
-      <li><b>Category</b>: Deployment (o.ä.)</li>
-      <li><b>Script Body</b>: den Code aus dem nächsten Block einfügen</li>
-      <li><b>Script Arguments</b>: kopier die vorausgefuellte Zeile aus dem
-        <i>Script Arguments</i>-Block weiter unten in das Tactical-Feld unter
-        dem Script-Body. Die Werte stammen direkt aus deinen aktuellen
-        Admin-Einstellungen — wenn du das Registration-Secret rotierst,
-        einfach den Hilfe-Tab neu laden.</li>
-    </ul>
-  </li>
-  <li>Script auf die gewünschten Agents ausführen (Agents-Übersicht → Auswahl → <b>Run Script</b>). Der Rest läuft ohne User-Interaction:
-    <ul>
-      <li>Tactical lädt die <code>softshelf-setup.exe</code> vom Proxy</li>
-      <li>Installer läuft silent als SYSTEM</li>
-      <li>Registriert beim Proxy, bekommt Machine-Token</li>
-      <li>Schreibt Registry-Keys nach HKLM</li>
-      <li>Setzt Autostart für alle User</li>
-      <li>Startet <code>softshelf.exe</code> direkt (wenn ein User eingeloggt ist)</li>
-    </ul>
-  </li>
-</ol>
+<h3>2. Manuelle Installation</h3>
+<p><code>softshelf-setup.exe</code> vom Proxy herunterladen (<code>http://proxy:8765/download/softshelf-setup.exe</code>) und als Admin ausführen. Der Installer registriert den Agent mit dem im EXE einkompilierten <code>PROXY_URL</code> und verwendet das in der Setup-GUI eingegebene Registration-Secret.</p>
 
-<h3>Script Arguments (in Tactical eintragen)</h3>
-
-<p>Diese Zeile in das <b>Script Arguments</b>-Feld unter dem Script-Body
-  eintragen. Die Werte sind aus den aktuellen Admin-Einstellungen
-  vorausgefuellt — Hilfe neu laden falls du gerade etwas geaendert hast:</p>
-
-<pre class="doc-code-block">-ProxyUrl "{{SF_PROXY_URL}}" -RegistrationSecret "{{SF_REG_SECRET}}" -SetupExeUrl "{{SF_SETUP_EXE_URL}}"</pre>
-
-<div class="doc-callout warn">
-  Das <code>RegistrationSecret</code> ist ein Shared-Secret. Trag es nur
-  in das Tactical-Argumentfeld ein, niemals in den Script-Body kopieren —
-  dann taucht es in der Tactical Run-History nicht im Klartext auf.
-</div>
-
-<h3>PowerShell-Script (copy-paste in Script Body)</h3>
-
-<p>Script 1:1 in den Tactical Script-Body packen. Es ist identisch zu
-  <code>installer/deploy_via_trmm.ps1</code> im Proxy-Repo. <code>--agent-id</code>
-  wird nicht uebergeben — der Installer liest die Tactical-Agent-ID selbst aus
-  <code>HKLM\SOFTWARE\TacticalRMM\agentid</code>.</p>
-
-<pre class="doc-code-block">&lt;#
-.SYNOPSIS
-    Softshelf - Deployment Script
-    Laedt den Installer herunter und fuehrt ihn still aus.
-#&gt;
-param(
-    [Parameter(Mandatory=$true)] [string]$ProxyUrl,
-    [Parameter(Mandatory=$true)] [string]$RegistrationSecret,
-    [Parameter(Mandatory=$true)] [string]$SetupExeUrl
-)
-
-$ErrorActionPreference = "Stop"
-$ProgressPreference    = "SilentlyContinue"
-
-# TLS 1.2 erzwingen — sonst schlaegt Invoke-WebRequest auf aelteren Windows-
-# Builds bei modernen Reverse-Proxies fehl.
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-# Temp-Pfade. Der Error-Log-Name muss zum slug passen den setup.py schreibt
-# (sonst sieht man bei einem Fehler nur "Unbekannter Fehler").
-$SetupFile = [System.IO.Path]::GetFileName(([Uri]$SetupExeUrl).AbsolutePath)
-if ([string]::IsNullOrWhiteSpace($SetupFile)) { $SetupFile = "setup.exe" }
-$TempSetup = Join-Path $env:TEMP $SetupFile
-$Slug      = [System.IO.Path]::GetFileNameWithoutExtension($SetupFile) -replace '-setup$',''
-$ErrorLog  = Join-Path $env:TEMP ("{0}_setup_error.txt" -f $Slug.ToLower())
-
-Write-Host "=== Deployment ===" -ForegroundColor Cyan
-Write-Host "Proxy: $ProxyUrl"
-Write-Host "Setup: $SetupFile"
-Write-Host ""
-
-# Installer herunterladen
-Write-Host "Lade $SetupFile herunter..."
-try {
-    Invoke-WebRequest -Uri $SetupExeUrl -OutFile $TempSetup -UseBasicParsing
-} catch {
-    Write-Host "Download fehlgeschlagen: $($_.Exception.Message)" -ForegroundColor Red
-    exit 2
-}
-Write-Host "Download abgeschlossen." -ForegroundColor Green
-
-# Installation starten. -NoNewWindow ist Pflicht unter SYSTEM/Session 0.
-# Args werden als ARRAY uebergeben, damit PowerShell nichts re-quoten muss.
-Write-Host "Starte Installation..."
-$proc = Start-Process `
-    -FilePath $TempSetup `
-    -ArgumentList @("--proxy-url", $ProxyUrl, "--reg-secret", $RegistrationSecret) `
-    -Wait -PassThru -NoNewWindow
-
-if ($proc.ExitCode -ne 0) {
-    $errMsg = if (Test-Path $ErrorLog) { Get-Content $ErrorLog -Raw } else { "Unbekannter Fehler" }
-    Write-Host "Installation fehlgeschlagen (ExitCode $($proc.ExitCode)):" -ForegroundColor Red
-    Write-Host $errMsg -ForegroundColor Red
-    exit 1
-}
-
-# Aufraeumen
-Remove-Item $TempSetup -Force -ErrorAction SilentlyContinue
-Remove-Item $ErrorLog  -Force -ErrorAction SilentlyContinue
-$RegistrationSecret = $null
-[System.GC]::Collect()
-
-Write-Host "=== Deployment abgeschlossen ===" -ForegroundColor Cyan
-Write-Host "Der Tray-Client startet beim naechsten Benutzer-Login automatisch." -ForegroundColor Green</pre>
+<h3>3. Per GPO / SCCM</h3>
+<p>Gleiche EXE mit <code>/S /RegSecret="xxx"</code> Silent-Flags.</p>
 
 <div class="doc-callout info">
-  <b>Was am alten Script kaputt war:</b> kein <code>-NoNewWindow</code> (deadlocked
-  unter SYSTEM/Session 0), kein TLS 1.2 (HTTPS-Reverse-Proxies haben Downloads
-  abgewiesen), und der Error-Log wurde unter dem falschen Pfad gesucht — jeder
-  Fehler erschien als "Unbekannter Fehler" statt mit echter Ursache.
+  Nach Installation registriert sich der Agent automatisch beim Proxy und erscheint im <b>Clients</b>-Tab.
 </div>
-
-<h2>Variante B: Manuell auf einzelnen PCs</h2>
-
-<ol class="doc-steps">
-  <li><code>&lt;slug&gt;-setup.exe</code> vom Proxy herunterladen: <code>http://&lt;proxy&gt;:8765/download/&lt;slug&gt;-setup.exe</code> (Slug wird im Admin-UI unter Einstellungen als <code>product_slug</code> konfiguriert, Default: <code>Softshelf</code>)</li>
-  <li>Auf dem Ziel-PC mit Admin-Rechten ausführen (Rechtsklick → als Administrator)</li>
-  <li>Im GUI-Wizard:
-    <ul>
-      <li><b>Proxy-URL</b> ist vorausgefüllt (aus dem Build eingebacken)</li>
-      <li><b>Registration Secret</b> eintragen (aus den Admin-Einstellungen kopieren)</li>
-      <li><b>Agent-ID</b> wird automatisch aus der Tactical-Registry gelesen, ansonsten manuell</li>
-    </ul>
-  </li>
-  <li><code>Installieren</code> klicken</li>
-</ol>
-
-<h2>Variante C: Silent CLI (für Scripts)</h2>
-
-<pre class="doc-code-block">&lt;slug&gt;-setup.exe ^
-  --proxy-url  "http://proxy.intern:8765" ^
-  --reg-secret "&lt;REGISTRATION_SECRET&gt;" ^
-  --agent-id   "&lt;TACTICAL_AGENT_ID&gt;"</pre>
-
-<p>Wenn die Proxy-URL im Build eingebacken ist, kann <code>--proxy-url</code>
-  weggelassen werden. Wenn der Tactical-Agent schon auf dem PC ist, kann
-  auch <code>--agent-id</code> weggelassen werden (Auto-Detection aus
-  <code>HKLM\SOFTWARE\TacticalRMM\agentid</code>).</p>
-
-<h2>Deinstallation auf einem PC</h2>
-
-<pre class="doc-code-block">softshelf-setup.exe --uninstall</pre>
-
-<p>Oder über den tkinter-GUI-Wizard: Doppelklick auf <code>softshelf-setup.exe</code>,
-  dann rechts der Button <b>Deinstallieren</b>. Entfernt Autostart, Token, Registry-
-  Config, Environment-Variable und das Installations-Verzeichnis.</p>
-
-<h2>Client-Updates ausrollen</h2>
-
-<p>Wenn du den Kiosk-Client aktualisierst (z. B. Feature-Fix im UI, neue Version des
-  Backend-Service), gibt es zwei Wege:</p>
-
-<ol>
-  <li><b>Re-Deploy über Tactical:</b> Das <code>deploy_via_trmm.ps1</code> Script
-    erneut auf die Agents ausführen. Der Installer überschreibt die alte Installation
-    und registriert sich neu (bumpt dabei die Token-Version, was den alten Token
-    sofort ungültig macht).</li>
-  <li><b>Nur softshelf.exe austauschen:</b> Auf jedem PC das alte <code>softshelf.exe</code>
-    überschreiben mit der neuen Version (z. B. via GPO oder manuellem Copy).
-    Funktioniert solange sich das Protokoll nicht geändert hat.</li>
-</ol>
 </section>
-
-<!-- ═════════════════════════════════════════════════════════════════════ -->
 
 <section id="exe-build">
-<h1>Client-EXEs neu bauen</h1>
+<h2>Client-EXEs bauen</h2>
 
-<p>Der Builder-Container erzeugt <code>softshelf.exe</code> und <code>softshelf-setup.exe</code>
-  aus der im Container gespeicherten Client-Source — mit der aktuellen <b>Proxy Public URL</b>
-  aus den Einstellungen als Default eingebacken.</p>
-
-<h2>Wann musst du neu bauen?</h2>
-
-<ul>
-  <li><b>Einmalig nach dem ersten Deploy</b> eines neuen Hosts, damit Clients überhaupt eine softshelf-setup.exe zum Download haben</li>
-  <li><b>Nach einer Proxy-URL-Änderung</b> — sonst kompiliert der alte Installer mit alter URL weiter</li>
-  <li><b>Nach Code-Änderungen</b> am Client (UI-Fixes, neue Features, Bugfixes)</li>
-  <li><b>Nicht nötig</b> bei Config-Änderungen (Tactical-URL, API-Key, Registration-Secret) — die sind Runtime und landen nie im Binary</li>
-</ul>
-
-<h2>Build triggern</h2>
+<p>Wenn du Proxy-URL, Branding oder Icon geändert hast:</p>
 
 <ol class="doc-steps">
-  <li>Tab <b>Einstellungen</b> öffnen</li>
-  <li>Sicherstellen dass <b>Proxy Public URL</b> gesetzt ist (sonst wird der Build abgelehnt)</li>
-  <li>Unten auf <code>EXEs bauen</code> klicken</li>
-  <li>Der Button zeigt einen Spinner und pollt den Status. Build dauert ~4 Minuten.</li>
-  <li>Wenn fertig: im Block <b>Client-EXEs bauen</b> erscheinen beide Artefakte mit Download-Buttons</li>
+  <li>Tab <b>Einstellungen</b> → Abschnitt „Client-EXEs" → <code>EXEs bauen</code>.</li>
+  <li>Build-Progress wird live angezeigt. Dauert ~3-4 Minuten (Wine + PyInstaller).</li>
+  <li>Nach Abschluss sind die neuen EXEs unter <code>/download/</code> verfügbar.</li>
 </ol>
-
-<h2>Build-Historie</h2>
-
-<p>Jeder Build wird in der DB protokolliert. Im Block <b>Build-Historie</b> siehst du:</p>
-
-<ul>
-  <li>Zeitstempel</li>
-  <li>Status (running / success / failed)</li>
-  <li>Welche Proxy-URL eingebacken wurde</li>
-  <li>Link <code>Log</code> → kompletter PyInstaller-Output für Debug</li>
-</ul>
-
-<h2>Was das eingebackene <code>_build_config.py</code> enthält</h2>
-
-<pre class="doc-code-block">DEFAULT_PROXY_URL = "http://softshelf.example.com:8765"
-BUILD_VERSION = "1.6.0"</pre>
-
-<p><code>DEFAULT_PROXY_URL</code> wird vom Installer als Default für den
-  <code>--proxy-url</code>-Parameter benutzt. Wenn der Installer ohne Args
-  gestartet wird, füllt er das Feld im GUI-Wizard automatisch damit.</p>
-
-<div class="doc-callout info">
-  Secrets (Registration-Secret, Tactical-API-Key, Admin-Passwort) werden <b>nicht</b>
-  in die EXE gebacken. Die bleiben ausschließlich auf dem Proxy in der DB.
-</div>
 </section>
-
-<!-- ═════════════════════════════════════════════════════════════════════ -->
 
 <section id="settings">
-<h1>Einstellungen ändern</h1>
+<h2>Einstellungen</h2>
 
-<p>Tab <b>Einstellungen</b> zeigt alle Runtime-Settings. Änderungen greifen <b>sofort</b>
-  — kein Container-Restart nötig.</p>
+<p>Tab <b>Einstellungen</b> enthält alle Runtime-Config (greift sofort, kein Restart):</p>
 
-<h2>Secrets anzeigen</h2>
-
-<p>Für jeden Secret-Wert (API-Key, Registration-Secret, Admin-Passwort-Override) gibt es
-  einen <code>Anzeigen</code>-Button rechts neben dem Input-Feld. Klick holt den echten
-  Wert via separatem <code>/reveal</code>-Endpoint (Admin-auth-geschützt), danach kann
-  er ins Input editiert werden.</p>
-
-<h2>Registration-Secret rotieren</h2>
-
-<p>Neben dem Registration-Secret gibt es einen <code>↻</code>-Button. Klick generiert ein
-  frisches 64-Hex-Secret und speichert es direkt.</p>
-
-<div class="doc-callout warning">
-  <b>Achtung:</b> das alte Registration-Secret wird <i>sofort ungültig</i>. Jedes
-  Tactical-Script oder jedes Deployment-Artefakt, das das alte Secret als CLI-Parameter
-  nutzt, muss angepasst werden. <b>Bestehende Machine-Tokens von bereits registrierten
-  Clients bleiben gültig</b> — die brauchen das Registration-Secret nicht mehr.
-</div>
-
-<h2>Tactical-URL oder API-Key ändern</h2>
-
-<p>Feld ausfüllen, <code>Speichern</code> klicken. Ab dem nächsten Request nutzt der
-  Proxy die neuen Werte. Bestehende Clients sind nicht betroffen.</p>
-
-<p>Falls das neue API-Key andere Permissions hat: der Tactical-User muss <b>mindestens</b>
-  folgende Permissions haben:</p>
-
-<ul>
-  <li><code>can_list_software</code> — für Paketlisten und Installations-Detection</li>
-  <li><code>can_manage_software</code> — für Chocolatey-Installs</li>
-  <li><code>can_send_cmd</code> — für custom MSI/EXE Installs und Choco-Uninstalls (die als Shell-Command laufen)</li>
-</ul>
-
-<h2>Proxy Public URL ändern</h2>
-
-<p>Das ist die URL, die <b>Tactical-Agents und End-User-Clients</b> benutzen um den Proxy
-  zu erreichen. Änderungsfall:</p>
-
-<ol class="doc-steps">
-  <li>Neue URL in den Einstellungen eintragen &amp; speichern</li>
-  <li><code>EXEs bauen</code> — damit frisch gebaute Installer die neue URL als Default benutzen</li>
-  <li>Bestehende Clients auf den alten PCs:
-    <ul>
-      <li>Funktionieren <b>weiterhin</b> mit der alten URL, solange die noch DNS-auflösbar und erreichbar ist</li>
-      <li>Müssen aktiv erneut ausgerollt werden wenn die alte URL abgeschaltet wird</li>
-    </ul>
-  </li>
-</ol>
-
-<h2>Token-TTL (Ablauf der Machine-Tokens)</h2>
-
-<p>Default <code>365</code>. Optionen:</p>
-
-<ul>
-  <li><code>0</code> — unbegrenzt. Empfohlen wenn ihr Clients selten re-deployt und keine Compliance-Vorgabe zur Token-Rotation habt.</li>
-  <li><code>365</code> — einmal pro Jahr müssen Clients neu registriert werden, sonst liefert der Kiosk „Token abgelaufen".</li>
-  <li><code>30</code> oder weniger — aggressive Rotation, nur sinnvoll wenn du einen Auto-Refresh-Mechanismus gebaut hast (aktuell nicht implementiert).</li>
-</ul>
-
-<h2>Log-Aufbewahrung</h2>
-
-<p><code>log_retention_days</code> steuert wie lange <b>audit_log</b> und <b>install_log</b>
-  aufgehoben werden. Beim Start des Proxy-Containers werden ältere Einträge gelöscht.
-  Default 90.</p>
-
-<h2>Admin-Passwort ändern</h2>
-
-<p>Feld <b>Admin-Passwort</b> ausfüllen (das ist <code>admin_password_override</code>).
-  Dieser Wert überschreibt das in der <code>.env</code> gesetzte Bootstrap-Passwort,
-  sobald er vorhanden ist. Beim nächsten Login gilt der neue Wert.</p>
-
-<p>Zum Reset auf das .env-Passwort: Feld auf <b>leer</b> setzen &amp; speichern.</p>
+<table class="doc-table">
+  <thead><tr><th>Gruppe</th><th>Felder</th></tr></thead>
+  <tbody>
+    <tr><td><b>Tactical</b></td><td>URL, API-Key</td></tr>
+    <tr><td><b>Registrierung</b></td><td>Registration-Secret + Rotate-Button</td></tr>
+    <tr><td><b>Proxy</b></td><td>Public-URL (für Downloads durch Tactical-Agent)</td></tr>
+    <tr><td><b>Tokens</b></td><td>TTL für Machine-Tokens</td></tr>
+    <tr><td><b>Logs</b></td><td>Aufbewahrungs-Tage</td></tr>
+    <tr><td><b>Uploads</b></td><td>Max-MB für Custom-Files</td></tr>
+    <tr><td><b>Branding</b></td><td>Portal-Titel, Client-Name, Publisher, Produkt-Slug, Icon</td></tr>
+    <tr><td><b>SSO</b></td><td>Microsoft-Entra-Config (Tenant-ID, Client-ID, Secret)</td></tr>
+  </tbody>
+</table>
 </section>
 
-<!-- ═════════════════════════════════════════════════════════════════════ -->
+<section id="migration">
+<h2>Auf neuen Host migrieren</h2>
+
+<ol class="doc-steps">
+  <li>Backup: SQLite-DB + Uploads. Siehe <a href="#backup">Backup &amp; Restore</a>.</li>
+  <li>Auf neuem Host: <code>git clone</code> + <code>docker-compose up -d</code>.</li>
+  <li>Backup in <code>/app/data/</code> einspielen, Container neu starten.</li>
+  <li>Wenn sich die Proxy-URL ändert: <b>Einstellungen</b> → Proxy Public URL aktualisieren → <code>EXEs bauen</code>.</li>
+  <li>Alte Clients müssen neu deployed werden (Registration-Secret + evtl. neue Proxy-URL).</li>
+</ol>
+</section>
+
+<section id="backup">
+<h2>Backup & Restore</h2>
+
+<p>Minimal-Backup:</p>
+<pre class="doc-code-block">rsync -av /opt/softshelf/data/softshelf.db backup:/backups/
+rsync -av /opt/softshelf/data/uploads/ backup:/backups/</pre>
+
+<p>Was <b>nicht</b> gesichert werden muss:</p>
+<ul>
+  <li><code>winget_index.db</code> — wird nightly aus Microsoft-CDN regeneriert</li>
+  <li><code>downloads/*.exe</code> — via „EXEs bauen" regenerierbar</li>
+  <li>Docker-Container-State — alles in der DB</li>
+</ul>
+
+<p>Restore: DB zurückkopieren, Container restart. Secrets in <code>.env</code> müssen identisch sein (sonst Machine-Tokens invalid).</p>
+</section>
+
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
 
 <section id="security">
 <h1>Sicherheit</h1>
 
-<p>Dieser Abschnitt erklärt die Schutzmechanismen die der Proxy einsetzt, was sie
-  abdecken und was nicht. Wer das System produktiv betreibt sollte ihn einmal
-  durchlesen — danach ist klar, wo die Grenzen liegen und welche operativen Schritte
-  zusätzlich nötig sind.</p>
-
-<h2 id="sec-auth">Admin-Authentifizierung &amp; Sessions</h2>
-
-<p>Der Admin-Bereich (<code>/admin/*</code>) ist <b>kein</b> HTTP-Basic-Auth mehr.
-  Alles läuft über Session-Cookies.</p>
-
-<h3>Lokale Logins</h3>
-
-<ul>
-  <li><b>Passwort-Speicherung:</b> Hash via <code>hashlib.scrypt</code>
-    (N=16384, r=8, p=1, 16-Byte-Salt) — RFC 7914 „interactive". Klartext-Passwörter
-    landen nirgends in der DB.</li>
-  <li><b>Vergleich:</b> <code>secrets.compare_digest</code> — timing-safe gegen
-    Timing-Side-Channels.</li>
-  <li><b>Bootstrap:</b> Beim ersten Start des Containers wird der in der
-    <code>.env</code> gesetzte Admin (<code>ADMIN_USERNAME</code> /
-    <code>ADMIN_PASSWORD</code>) automatisch in die <code>admin_users</code>-Tabelle
-    übernommen. Der scrypt-Hash wird einmalig berechnet und gespeichert. Danach ist
-    die <code>.env</code> nur noch ein Notnagel: wenn alle Admin-Accounts gelöscht
-    oder deaktiviert sind, kann sich der bootstrap-Admin <i>einmalig</i> wieder
-    einloggen, und der Account wird neu provisioniert.</li>
-  <li><b>Self-Service Passwort-Änderung:</b> Über das User-Menü oben rechts. Beim
-    Erfolg werden <i>alle anderen Sessions</i> dieses Users sofort gelöscht
-    (gestohlene Cookies sollen die Rotation nicht überleben), und ein frischer
-    Session-Cookie wird ausgestellt.</li>
-</ul>
-
-<h3>Microsoft Entra ID SSO (optional)</h3>
-
-<p>Aktivierbar in den Einstellungen (siehe Abschnitt <a href="#settings">Einstellungen</a>).
-  Login läuft über OpenID Connect Authorization Code Flow:</p>
-
-<ul>
-  <li><b>ID-Token-Validierung:</b> JWKS wird von Microsoft pro Tenant geholt
-    (<code>https://login.microsoftonline.com/&lt;tenant&gt;/discovery/v2.0/keys</code>),
-    Signatur per RS256, Issuer und Audience werden geprüft. Pflichtfelder:
-    <code>exp</code>, <code>iat</code>, <code>iss</code>, <code>sub</code>, <code>aud</code>.</li>
-  <li><b>State-Token:</b> CSRF-Schutz für den OAuth-Callback. In-Memory, single-use,
-    600 s TTL.</li>
-  <li><b>E-Mail-Linking:</b> Wenn ein Microsoft-Account die <i>gleiche E-Mail</i>
-    hat wie ein bestehender lokaler Admin-User, wird verlinkt — aber NUR wenn:
-    <ul>
-      <li>der Entra-Claim <code>email_verified=true</code> ist (sonst Spoofing möglich),</li>
-      <li>der lokale User noch <i>keine</i> SSO-Bindung hat (verhindert Hijack via
-        nachträgliche E-Mail-Änderung).</li>
-    </ul>
-  </li>
-  <li><b>preferred_username</b> wird bewusst ignoriert — der Wert ist in Entra ID
-    nicht als verifiziert markiert und kann von einem Tenant-Admin auf jeden
-    beliebigen Wert gesetzt werden.</li>
-  <li><b>Auto-Create:</b> Wenn aktiviert, wird beim ersten SSO-Login eines
-    unbekannten Users automatisch ein lokaler Admin-Account angelegt. Wenn nicht:
-    Login wird abgelehnt mit Hinweis, dass der User vorher manuell mit derselben
-    E-Mail angelegt sein muss. Empfehlung für strenge Umgebungen: <b>Auto-Create
-    aus</b> + manuelle User-Verwaltung.</li>
-</ul>
-
-<h3>Sessions</h3>
-
-<ul>
-  <li><b>TTL:</b> 12 Stunden, sliding window — jeder Request aktualisiert
-    <code>last_active</code>. Inaktive Sessions laufen also nach 12 h ab, aktive
-    bleiben gültig.</li>
-  <li><b>Speicherung:</b> Random 32-Byte-Token in <code>admin_sessions</code> mit
-    User-Agent + IP zur forensischen Nachverfolgung.</li>
-  <li><b>Cleanup:</b> Beim Container-Start wird <code>cleanup_expired_sessions</code>
-    aufgerufen, das alle abgelaufenen Einträge wegwirft.</li>
-  <li><b>Last-Active-Admin-Schutz:</b> Der letzte aktive Admin kann weder gelöscht
-    noch deaktiviert werden — du kannst dich nicht selbst aussperren. Beim
-    Deaktivieren eines Users werden zusätzlich <i>alle</i> seine Sessions sofort
-    weggeworfen.</li>
-</ul>
-
-<h2 id="sec-cookies">Cookie-Härtung &amp; CSRF</h2>
-
-<h3>Session-Cookie Flags</h3>
-
+<h3>Auth-Pfade</h3>
 <table class="doc-table">
-  <thead><tr><th>Flag</th><th>Wert</th><th>Warum</th></tr></thead>
   <tbody>
-    <tr><td><code>HttpOnly</code></td><td>true</td>
-      <td>JS auf der Seite kann den Cookie nicht lesen → XSS kann ihn nicht stehlen.</td></tr>
-    <tr><td><code>SameSite</code></td><td>Strict</td>
-      <td>Browser sendet den Cookie nur bei navigation auf der eigenen Domain — keine
-        Cross-Origin-Requests, keine GET-Bilder von fremden Sites.</td></tr>
-    <tr><td><code>Secure</code></td><td>bei HTTPS</td>
-      <td>Wird automatisch gesetzt wenn der Request über HTTPS kam (direkt oder via
-        <code>X-Forwarded-Proto: https</code> hinter einem Reverse-Proxy). Bei plain
-        HTTP wird der Flag weggelassen, damit der Cookie überhaupt funktioniert.</td></tr>
-    <tr><td><code>Path</code></td><td>/admin</td>
-      <td>Nur an Admin-Endpoints gesendet. Andere Pfade kriegen den Cookie nicht.</td></tr>
+    <tr><td><b>Kiosk-Client</b></td><td>JWT (HS256) mit <code>agent_id</code>, <code>hostname</code>, <code>token_version</code>. Secret aus <code>.env</code>. Revoke via token_version-Bump oder Sperre.</td></tr>
+    <tr><td><b>Admin-Session</b></td><td>HttpOnly-Cookie, <code>SameSite=Lax</code>, <code>Secure</code> wenn Reverse-Proxy TLS liefert. Passwort-Hash: scrypt.</td></tr>
+    <tr><td><b>SSO</b></td><td>Microsoft-Entra-OIDC mit <code>email_verified</code>-Check.</td></tr>
   </tbody>
 </table>
 
-<h3>CSRF-Schutz</h3>
+<h3>CSRF</h3>
+<p>Middleware akzeptiert POST/PATCH/DELETE nur mit matched <code>Origin</code>-Header oder <code>X-Requested-With: XMLHttpRequest</code>. GET ist frei (state-nondestructive).</p>
 
-<p>State-changing Methoden (POST/PUT/PATCH/DELETE) auf <code>/admin/api/*</code>
-  müssen <i>eine</i> der folgenden Bedingungen erfüllen:</p>
+<h3>Rate-Limiting</h3>
+<p>Per-IP Sliding-Window. <code>X-Forwarded-For</code> vom Loopback-Proxy vertraut.</p>
 
+<h3>Input-Validierung</h3>
 <ul>
-  <li>Der <code>Origin</code>- oder <code>Referer</code>-Header passt zum eigenen
-    Host (klassischer same-origin-Check).</li>
-  <li>ODER der Header <code>X-Requested-With: XMLHttpRequest</code> ist gesetzt.
-    Browser senden den Header NIE automatisch cross-origin — das Setzen erfordert
-    explizit einen XHR-Aufruf mit gleich-origin oder einen erlaubten CORS-Preflight,
-    den wir nirgends erlauben.</li>
+  <li>Paketnamen per Regex (Typ-abhängig).</li>
+  <li>SQL immer parameterized — keine f-string-Interpolation.</li>
+  <li>Pydantic-Bodies mit Field-Validators (Max-Length, Regex, Whitelist-Sets).</li>
+  <li>Frontend: <code>esc()</code> + <code>jsStr()</code> gegen XSS.</li>
 </ul>
 
-<p>Die Admin-UI (<code>api()</code>-JS-Helper) setzt beides automatisch. Cross-Origin-
-  Aufrufe von einer fremden Webseite scheitern an der CSRF-Middleware mit 403,
-  selbst wenn ein gestohlener Cookie mitgeschickt würde.</p>
-
-<h2 id="sec-rate">Rate-Limiting &amp; Reverse-Proxy</h2>
-
-<p>In-Memory Per-IP-Bucket, ohne externe Dependency:</p>
-
+<h3>Upload-Härtung</h3>
 <ul>
-  <li><code>/api/v1/register</code>: <b>5 Requests / 60 s</b> — Brute-Force-Schutz
-    auf das Registration-Secret. Bei erfolglosen Versuchen kommt nach dem 5. ein
-    HTTP 429 für 60 s.</li>
-  <li><code>/admin/*</code>: <b>60 Requests / 60 s</b> — Schutz gegen
-    Login-Brute-Force plus normaler UI-Verkehr.</li>
+  <li>SHA256-Verifizierung.</li>
+  <li>Path-Traversal-Check bei ZIP-Extraktion.</li>
+  <li>MSI-Metadata via <code>msiinfo</code> (kein Python-Parser).</li>
+  <li>Icon-Upload: Pillow mit <code>DecompressionBombError</code>-Schutz.</li>
 </ul>
 
-<h3>X-Forwarded-For</h3>
-
-<p>Wenn der Proxy hinter einem Reverse-Proxy auf <i>demselben Host</i>
-  (<code>127.0.0.1</code> / <code>::1</code>) läuft, respektiert das Rate-Limit
-  den ersten Eintrag aus dem <code>X-Forwarded-For</code>-Header. Damit zählt
-  jeder echte Client einzeln und nicht alle als „der eine Reverse-Proxy".
-  X-Forwarded-For von <i>externen</i> IPs wird ignoriert (sonst trivial spoofbar).</p>
-
-<div class="doc-callout warning">
-  <b>Wichtig bei TLS-Termination:</b> wenn du eine Reverse-Proxy-Lösung wie Caddy
-  oder Traefik vor den softshelf-proxy stellst, muss diese den Original-Host-Header
-  durchreichen (für CSRF) UND den <code>X-Forwarded-For</code>-Header (für
-  Rate-Limit + Audit-Log). Caddy macht das per Default, nginx braucht
-  <code>proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;</code> und
-  <code>proxy_set_header Host $host;</code>.
-</div>
-
-<h3>Memory-Leak-Schutz</h3>
-
-<p>Der Bucket-Store wird alle 500 Requests gesweept: alle IPs deren Buckets seit
-  &gt;60 s leer sind, werden entfernt. Damit wächst der Speicher nicht
-  unbegrenzt, auch bei vielen unterschiedlichen Client-IPs.</p>
-
-<h2 id="sec-tokens">Machine-Tokens &amp; Download-URLs</h2>
-
-<h3>Machine-Token (JWT, HS256)</h3>
-
-<p>Jeder Kiosk-Client bekommt bei der Registrierung ein signiertes JWT, das in
-  der Windows-Registry (<code>HKLM\SOFTWARE\Softshelf</code>) gespeichert wird:</p>
-
+<h3>Build-Pipeline</h3>
 <ul>
-  <li><b>Signaturkey:</b> <code>SECRET_KEY</code> aus der <code>.env</code>. NIE
-    rotieren nach Deploy — sonst werden alle Tokens ungültig und alle Kiosk-Clients
-    müssen neu registriert werden.</li>
-  <li><b>Payload:</b> <code>agent_id</code> (an Tactical-Agent gebunden),
-    <code>hostname</code> (für Logging), <code>exp</code> (Ablauf, default 365 Tage,
-    in den Settings änderbar; 0 = unbegrenzt), <code>tv</code> (Token-Version).</li>
-  <li><b>Token-Version:</b> Wird in <code>agents.token_version</code> gespeichert
-    und bei jedem Re-Register hochgezählt. Damit ist <i>Revocation</i> möglich:
-    sobald die Version in der DB hochgezählt wird, werden alle bisherigen Tokens
-    für diesen Agent ungültig — der Client muss neu registriert werden.</li>
-  <li><b>Rate-Limit:</b> <code>/api/v1/register</code> ist auf 5 Versuche pro
-    Minute limitiert.</li>
+  <li><code>build.sh</code> nimmt Parameter nur per Env-Vars (keine Shell-Injection).</li>
+  <li>PyInstaller läuft in Wine-Sandbox im separaten Container.</li>
 </ul>
 
-<h3>Download-Token (signed URL)</h3>
-
-<p>Wenn ein Custom-Paket installiert wird, baut der Proxy eine signierte URL die
-  den Tactical-Agent berechtigt, das File einmal herunterzuladen:</p>
-
+<h3>Operative Checkliste</h3>
 <ul>
-  <li><b>Bindung:</b> Token enthält den SHA-256 der Datei, die <code>agent_id</code>,
-    und eine Ablaufzeit von 5 Minuten.</li>
-  <li><b>Verifikation:</b> Der Download-Endpoint
-    (<code>GET /api/v1/file/{sha256}?token=...</code>) prüft Signatur, sha-Match
-    und Ablauf. Andere Agents können denselben Token nicht benutzen, andere Files
-    auch nicht.</li>
-  <li><b>Kein Auth-Header nötig:</b> Tactical-Agent macht den Download als
-    <code>Invoke-WebRequest</code> ohne Auth-Header — die Sicherheit liegt
-    komplett im Token in der URL.</li>
+  <li>Regelmäßig Registration-Secret rotieren (Einstellungen → Rotate-Button).</li>
+  <li>Token-TTL setzen (Default 365 Tage).</li>
+  <li>Log-Retention setzen (Default 90 Tage).</li>
+  <li>Inaktive Admin-Accounts deaktivieren (cascadet automatisch alle Sessions).</li>
+  <li>Reverse-Proxy mit TLS und X-Forwarded-* Headern (Caddy/Traefik).</li>
 </ul>
-
-<h2 id="sec-uploads">Upload- und Archiv-Härtung</h2>
-
-<h3>File-Speicherung mit SHA-256-Dedup</h3>
-
-<ul>
-  <li>Alle Uploads landen in <code>/app/data/uploads/</code> mit dem SHA-256 als
-    Dateinamen (<code>&lt;sha&gt;.msi</code>, <code>&lt;sha&gt;.exe</code>,
-    <code>&lt;sha&gt;.zip</code>). Identische Uploads werden automatisch
-    dedupliziert.</li>
-  <li>Beim Löschen eines Pakets/einer Version wird die physische Datei nur dann
-    entfernt, wenn <i>kein anderes Paket und keine andere Version</i> denselben
-    Hash referenziert (<code>sha256_usage_count</code> +
-    <code>count_versions_with_sha</code>).</li>
-</ul>
-
-<h3>Path-Traversal-Schutz beim Folder-Upload</h3>
-
-<p>Beim Upload eines Programm-Ordners zippt der Server die Dateien serverseitig in
-  ein einziges Archiv. Pro Datei wird der Relativpfad validiert:</p>
-
-<ul>
-  <li>Backslashes werden zu Forward-Slashes normalisiert.</li>
-  <li><code>..</code>-Segmente werden abgewiesen.</li>
-  <li>Leere Pfad-Segmente werden abgewiesen.</li>
-  <li>Absolute Pfade (<code>/foo</code>) werden abgewiesen.</li>
-  <li>Drive-Letter-Präfixe (<code>C:</code>) werden abgewiesen.</li>
-</ul>
-
-<p>Beim Bearbeiten eines bestehenden Ordner-Pakets werden die Pfade aus dem
-  Source-ZIP nochmal mit derselben Logik validiert (Defense-in-Depth, falls jemand
-  per direktem Filesystem-Schreiben einen unsauberen Pfad ins Storage gebracht hat).</p>
-
-<h3>ZIP-Bomb-Defense</h3>
-
-<p>Bei jeder ZIP-Operation wird die <i>dekomprimierte</i> Größe gegen
-  <code>max_upload_mb</code> (Default 500 MB) geprüft, nicht die komprimierte. Ein
-  10 KB ZIP, das auf 10 GB entpackt wird, schlägt also schon während des Lesens fehl.</p>
-
-<h3>Entry-Point-Validierung</h3>
-
-<p>Bei Programm-Ordner-Paketen wird der vom Admin gewählte Entry-Point gegen die
-  tatsächlich im Archiv enthaltenen Dateien validiert (<code>archive_entries</code>-
-  Cache). Damit kann der Admin keinen Pfad eintragen, der zur Laufzeit auf eine
-  Datei außerhalb des entpackten Verzeichnisses zeigt.</p>
-
-<h2 id="sec-build">Build-Pipeline-Härtung</h2>
-
-<p>Die <code>softshelf.exe</code> wird vom Builder-Container per PyInstaller unter Wine
-  cross-kompiliert. Beim Build wird die <code>proxy_public_url</code> in eine
-  <code>_build_config.py</code> geschrieben, die in die EXE eingebacken wird.</p>
-
-<div class="doc-callout warning">
-  <b>Vorher-Schwachstelle (gefixt):</b> die URL wurde direkt in ein Bash-Heredoc
-  geschrieben. Ein Admin (oder ein XSS-Opfer) hätte mit einer URL wie
-  <code>http://x"; import os; os.system('…')</code> beliebigen Python-Code in jede
-  EXE einbacken können → backdoor auf jedem Endgerät. <b>Fix:</b>
-  <code>build.sh</code> übergibt URL+Version per ENV an Python, und Python schreibt
-  die Werte mit <code>repr()</code> aus. Plus die URL wird in den Settings
-  serverseitig auf Steuerzeichen, Quotes und Backslashes geprüft.
-</div>
-
-<h2 id="sec-validation">Input-Validierung</h2>
-
-<p>Pro Eingabefeld gilt eine strikte Whitelist:</p>
-
-<table class="doc-table">
-  <thead><tr><th>Feld</th><th>Regex</th><th>Wo verwendet</th></tr></thead>
-  <tbody>
-    <tr><td><b>Paketname</b></td><td><code>^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,99}$</code></td>
-      <td>Slug-DB-Key, in PowerShell-Commands, in URLs</td></tr>
-    <tr><td><b>Agent-ID</b></td><td><code>^[a-zA-Z0-9\-]{8,64}$</code></td>
-      <td>Tactical-API, Tracking</td></tr>
-    <tr><td><b>Hostname</b></td><td><code>^[a-zA-Z0-9._\-]{1,253}$</code></td>
-      <td>Logs, Anzeige</td></tr>
-    <tr><td><b>Username</b></td><td><code>^[a-zA-Z0-9._\-@]{2,80}$</code></td>
-      <td>Admin-Login</td></tr>
-    <tr><td><b>Display-Name / Kategorie</b></td>
-      <td><code>^[^\x00-\x1f\x7f]{1,80}$</code></td>
-      <td>UI-Anzeige, keine Steuerzeichen</td></tr>
-    <tr><td><b>Version-Label</b></td><td><code>^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,49}$</code></td>
-      <td>UI-Anzeige, in URLs, keine Quotes</td></tr>
-    <tr><td><b>Install-Args / Uninstall-Cmd / Entry-Point</b></td>
-      <td>Keine Steuerzeichen / Newlines</td>
-      <td>Werden in PowerShell-Commands eingebettet</td></tr>
-    <tr><td><b>Upload-Extension</b></td><td>Nur <code>.msi</code> und <code>.exe</code></td>
-      <td>Single-File-Upload</td></tr>
-    <tr><td><b>Upload-Größe</b></td><td>Per <code>max_upload_mb</code> (Default 500 MB)</td>
-      <td>Pro Upload</td></tr>
-  </tbody>
-</table>
-
-<h3>XSS-Hardening im Admin-UI</h3>
-
-<p>Die Admin-UI rendert vieles über JS-Templates mit innerHTML. Für Werte die in
-  einem JS-String-Literal innerhalb eines HTML-Attributs landen
-  (z.B. <code>onclick="foo('${...}')"</code>) reicht <i>nicht</i>, das Wert nur
-  HTML-zu-escapen — der HTML-Parser dekodiert <code>&amp;#39;</code> zurück zu
-  <code>'</code>, was dann den JS-String terminieren würde.</p>
-
-<p>Die UI nutzt deshalb für solche Stellen <code>jsStr(value)</code>, das
-  <code>JSON.stringify</code> + HTML-Attribut-Encoding kombiniert. Damit sind
-  alle Sonderzeichen in admin-controlled Daten (Display-Name, Version-Label,
-  Hostname, etc.) sicher in inline-Handlern verwendbar.</p>
-
-<h3>HTML-Härtung im Kiosk-Client</h3>
-
-<p>Der Kiosk-Client zeigt unter dem Paketnamen Metadaten an, die teilweise von
-  Tactical's Software-Scan kommen (Version, Publisher). Diese Daten kommen aus
-  der Windows-Registry und sind nicht vertrauenswürdig — eine bösartige
-  Drittanbieter-Installation könnte sie als HTML formulieren. Daher:</p>
-
-<ul>
-  <li>Alle interpolierten Strings werden mit <code>html.escape()</code> behandelt.</li>
-  <li>Der Display-Name läuft über <code>QLabel.setTextFormat(Qt.PlainText)</code>.</li>
-  <li><code>setOpenExternalLinks(True)</code> ist nur für Chocolatey-Pakete aktiv —
-    bei Custom-Paketen werden Links nicht klickbar gemacht (verhindert
-    <code>file://</code>-Schlepperei aus Tactical-Daten).</li>
-</ul>
-
-<h2 id="sec-db">Datenbank-Integrität</h2>
-
-<ul>
-  <li><b>Parametrisierte Queries:</b> Alle SQL-Statements verwenden <code>?</code>-
-    Platzhalter. User-Input landet nie verbatim im SQL. Dynamische Query-Builder
-    (z.B. <code>update_admin_user</code>) verwenden ein Whitelist-Mapping für
-    Spaltennamen.</li>
-  <li><b>Foreign Keys:</b> Jede aiosqlite-Connection wird über den
-    <code>_db()</code>-Helper geöffnet, der <code>PRAGMA foreign_keys = ON</code>
-    pro Connection setzt. Damit greifen die <code>ON DELETE CASCADE</code>-Klauseln
-    im Schema (SQLite enforced FKs nicht automatisch).</li>
-  <li><b>Migrations:</b> <code>init_db()</code> nutzt idempotente
-    <code>PRAGMA table_info</code>-Checks plus <code>ALTER TABLE ADD COLUMN</code>
-    — bestehende DBs bekommen neue Spalten ohne Datenverlust.</li>
-  <li><b>Audit-Log + Install-Log Pruning:</b> Bei jedem Container-Start werden
-    Einträge älter als <code>log_retention_days</code> (Default 90 Tage) gelöscht.</li>
-</ul>
-
-<h2 id="sec-checklist">Operative Checkliste</h2>
-
-<p>Punkte die du <i>operativ</i> sicherstellen solltest, weil der Code sie nicht
-  alleine erzwingen kann:</p>
-
-<ol class="doc-steps">
-  <li><b>SECRET_KEY ist lang &amp; zufällig.</b> 32 Bytes hex (<code>openssl rand
-    -hex 32</code>). Ändert sich nach Deploy NIE — sonst werden alle Machine-Tokens
-    ungültig und alle Kiosks müssen neu registriert werden.</li>
-  <li><b>Bootstrap-Admin-Passwort sofort ändern.</b> Das in der <code>.env</code>
-    gesetzte Passwort wird beim ersten Start in die DB übernommen. Sobald es einen
-    zweiten Admin gibt, kannst du den Bootstrap deaktivieren oder das Passwort im
-    UI rotieren.</li>
-  <li><b>Registration-Secret regelmäßig rotieren.</b> Im Settings-Tab. Bestehende
-    Kiosk-Clients sind davon NICHT betroffen — sie nutzen ihr Machine-Token. Nur
-    neue Deployments brauchen das aktuelle Secret.</li>
-  <li><b>TLS-Reverse-Proxy.</b> Der Proxy selbst kann kein TLS — produktiv läuft
-    er hinter Caddy/Traefik/nginx. Dann <code>proxy_public_url</code> auf
-    <code>https://...</code> setzen, damit auch der Cookie-Secure-Flag und die
-    Download-URLs HTTPS verwenden.</li>
-  <li><b>Max-Upload-Größe prüfen.</b> Default 500 MB. Wenn du große Programm-
-    Ordner verteilst, hochsetzen. Aber sehr großzügig sein heißt auch: ein
-    boshafter Admin könnte Speicher voll-uploaden.</li>
-  <li><b>Admin-Accounts minimal halten.</b> Jeder Admin kann beliebige PowerShell-
-    Commands an alle Kiosk-Clients schicken (über uninstall_cmd /
-    install_args / Custom-Pakete). Das ist ein <i>SYSTEM-RCE auf jedem Endgerät</i>.
-    Die Admin-Rolle ist effektiv Domain-Admin-Niveau.</li>
-  <li><b>SSO Auto-Create nur in vertrauenswürdigen Tenants.</b> Wenn aktiviert,
-    wird jeder Tenant-User mit Login-Pfad zum Self-Service Center automatisch zum
-    Admin. In Multi-Tenant-Szenarien NIE aktivieren — manuell User anlegen.</li>
-  <li><b>Backup der DB.</b> <code>/opt/softshelf/data/softshelf.db</code>. Da
-    drin sind Admin-Hashes, Sessions, Tracking, alles. Ein DB-Verlust = alle
-    Kiosks verlieren ihren Auth-Status nicht (das Token ist client-side), aber
-    der Admin-Zugang muss neu provisioniert werden.</li>
-  <li><b>Logs anschauen.</b> <code>docker logs softshelf-proxy</code> zeigt alle
-    Auth-Versuche, Build-Fehler und Background-Task-Crashes. Audit-Log im UI
-    zeigt alle HTTP-Requests der letzten 200 Treffer.</li>
-</ol>
-
-<h3>Was wir bewusst <i>nicht</i> tun</h3>
-
-<ul>
-  <li><b>Keine Multi-Faktor-Authentifizierung im lokalen Login.</b> Wer MFA will,
-    aktiviert SSO mit Microsoft Entra ID — dort gibt es MFA, Conditional Access,
-    Geo-Filter etc.</li>
-  <li><b>Keine Per-Action-Approval.</b> Ein Admin allein kann jedes Custom-Paket
-    auf jeden Client pushen. Wer 4-Augen-Prinzip braucht, muss einen separaten
-    Approval-Schritt einführen (gibt's heute nicht).</li>
-  <li><b>Keine Crypto-signierten Pakete.</b> Wir vertrauen darauf dass der Admin
-    saubere MSI/EXE hochlädt. Tactical-Agent installiert was auch immer, ohne
-    Code-Signing-Verifikation.</li>
-  <li><b>Keine API-Keys / Service-Accounts.</b> Es gibt nur Admin-User mit
-    interaktiven Sessions. Wer Automatisierung braucht, muss das Session-Cookie
-    aus einem Login-Call extrahieren und für die Folge-Calls verwenden — nicht
-    schön, aber funktioniert.</li>
-</ul>
-
 </section>
 
-<!-- ═════════════════════════════════════════════════════════════════════ -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
 
-<section id="migration">
-<h1>Auf neuen Host migrieren</h1>
+<section id="tricks">
+<h1>Tricks & Shortcuts</h1>
 
-<p>Ziel: das Self-Service Center auf eine neue Linux-Maschine umziehen, ohne Datenverlust
-  und mit möglichst wenig Client-seitigen Anpassungen.</p>
+<h3>Keyboard</h3>
+<ul>
+  <li><kbd>⌘K</kbd> / <kbd>Strg+K</kbd>: Quick-Jump (Tab, Paket, Agent, Profil)</li>
+  <li><kbd>ESC</kbd>: Modal schließen</li>
+  <li><kbd>↑</kbd><kbd>↓</kbd> + <kbd>Enter</kbd> in Quick-Jump</li>
+</ul>
 
-<h2>Variante A: Komplett frisch (ohne Daten-Übernahme)</h2>
+<h3>Dark Mode</h3>
+<p>Toggle im Header (Sonne/Mond-Icon). Wahl wird in localStorage gespeichert, bei fehlender Wahl zählt <code>prefers-color-scheme</code>.</p>
 
-<ol class="doc-steps">
-  <li>Repo auf neuem Host klonen: <code>git clone … /opt/softshelf</code></li>
-  <li><code>cp .env.example .env</code> → neues <b>SECRET_KEY</b> generieren (<code>openssl rand -hex 32</code>), ADMIN_USERNAME und ADMIN_PASSWORD setzen</li>
-  <li><code>docker-compose up -d --build</code> (erster Build ~5-8 min)</li>
-  <li>Im Admin-UI Einstellungen ausfüllen (Tactical-URL, API-Key, Registration-Secret, Proxy-URL für den neuen Host)</li>
-  <li><code>EXEs bauen</code></li>
-  <li>Neue <code>softshelf-setup.exe</code> an alle Clients ausrollen (Tactical-Script oder manuell)</li>
-</ol>
+<h3>CSV-Export</h3>
+<p>Jeder Tabellen-Tab hat <code>↓ CSV</code>-Button oben rechts. Export ist Excel-kompatibel (UTF-8 mit BOM, Semicolon-Separator).</p>
 
-<div class="doc-callout warning">
-  Da <code>SECRET_KEY</code> neu generiert wird, sind alle alten Machine-Tokens ungültig.
-  Alle Clients <b>müssen</b> neu registriert werden.
-</div>
-
-<h2>Variante B: Mit Daten-Übernahme (alten Zustand behalten)</h2>
-
-<ol class="doc-steps">
-  <li>Auf dem alten Host stoppen: <code>docker-compose down</code></li>
-  <li>Die <b>data/</b>-Verzeichnis und die <b>.env</b> sichern:
-    <pre class="doc-code-block">tar czf softshelf-backup.tgz data .env</pre>
-  </li>
-  <li>Archiv auf den neuen Host transferieren (scp, USB, etc.)</li>
-  <li>Auf dem neuen Host das Repo klonen: <code>git clone … /opt/softshelf</code></li>
-  <li>Backup extrahieren: <code>tar xzf softshelf-backup.tgz -C /opt/softshelf/</code></li>
-  <li><code>docker-compose up -d --build</code></li>
-  <li>Im Admin-UI Einstellungen prüfen — die migrieren sich aus der SQLite. <b>Proxy Public URL</b> wahrscheinlich aktualisieren auf den neuen Host.</li>
-  <li><code>EXEs bauen</code> (damit die eingebackene URL stimmt)</li>
-  <li>Clients neu ausrollen (siehe oben)</li>
-</ol>
-
-<p>Vorteil Variante B: Whitelist, Audit-Log, Install-Log, custom-Pakete und alle
-  Einstellungen sind direkt da. Nur die Clients müssen erneut deployt werden,
-  wenn sich die Proxy-URL ändert.</p>
-
-<div class="doc-callout info">
-  <b>Tipp:</b> Wenn du auf dem neuen Host denselben DNS-Namen wie auf dem alten nutzt
-  (z. B. <code>softshelf.intern</code> als CNAME auf die neue IP), dann brauchen die
-  Clients <i>überhaupt kein</i> Re-Deployment — sie erreichen den neuen Proxy unter
-  derselben URL und benutzen ihre bestehenden Machine-Tokens (vorausgesetzt du hast
-  <code>SECRET_KEY</code> und <code>data/</code> übernommen).
-</div>
+<h3>URL-Hash für Direkt-Links</h3>
+<p>Share-Links wie <code>http://proxy:8765/admin#rollouts</code> landen direkt im Rollouts-Tab.</p>
 </section>
 
-<!-- ═════════════════════════════════════════════════════════════════════ -->
-
-<section id="backup">
-<h1>Backup &amp; Restore</h1>
-
-<h2>Was gesichert werden sollte</h2>
-
-<table class="doc-table">
-  <thead><tr><th>Pfad</th><th>Inhalt</th><th>Wichtigkeit</th></tr></thead>
-  <tbody>
-    <tr><td><code>./data/softshelf.db</code></td><td>Whitelist, Agents, Logs, Settings, Builds</td><td>kritisch</td></tr>
-    <tr><td><code>./data/uploads/</code></td><td>Custom MSI/EXE-Dateien</td><td>kritisch</td></tr>
-    <tr><td><code>./.env</code></td><td>SECRET_KEY, Admin-Credentials</td><td>kritisch — Verlust = alle Tokens invalidiert</td></tr>
-    <tr><td><code>./downloads/</code></td><td>Gebaute softshelf.exe / softshelf-setup.exe</td><td>optional — auf Knopfdruck neu baubar</td></tr>
-    <tr><td><code>docker-compose.yml</code>, <code>proxy/</code>, <code>builder/</code>, <code>client/</code></td><td>Code</td><td>optional — aus Git wiederherstellbar</td></tr>
-  </tbody>
-</table>
-
-<h2>Backup-Script (manuell)</h2>
-
-<pre class="doc-code-block">cd /opt/softshelf
-STAMP=$(date +%Y%m%d-%H%M%S)
-tar czf /var/backups/softshelf-$STAMP.tgz \
-    data .env
-ls -lh /var/backups/softshelf-$STAMP.tgz</pre>
-
-<p>Dauer: wenige Sekunden bei kleiner DB, ggf. länger wenn viel custom-Dateien im Upload-Volume liegen.</p>
-
-<h2>Restore</h2>
-
-<pre class="doc-code-block">cd /opt/softshelf
-docker-compose down
-tar xzf /var/backups/softshelf-20260410-143000.tgz
-docker-compose up -d</pre>
-
-<div class="doc-callout info">
-  <b>Hot Backup via Docker:</b> SQLite-WAL erlaubt Online-Backups. Für ein
-  konsistentes DB-Snapshot ohne Stoppen kann man <code>sqlite3 data/softshelf.db
-  ".backup data/softshelf-backup.db"</code> nutzen.
-</div>
-</section>
-
-<!-- ═════════════════════════════════════════════════════════════════════ -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
 
 <section id="troubleshooting">
 <h1>Troubleshooting</h1>
 
-<h2>Kiosk zeigt "Verbindungsfehler: Token wurde widerrufen"</h2>
-
-<p><b>Ursache:</b> Die <code>token_version</code> im JWT stimmt nicht mehr mit der in
-  der DB überein. Das passiert wenn:</p>
-
-<ul>
-  <li>Das Gerät zwischenzeitlich über Tactical-Script re-deployt wurde (bumpt token_version)</li>
-  <li>Ein Admin manuell per SQL die token_version hochgezählt hat</li>
-  <li>Nach einem Proxy-SECRET_KEY-Wechsel (der seltene Fall)</li>
-</ul>
-
-<p><b>Lösung:</b> Client erneut deployen (Tactical-Script oder manueller Install).
-  Dabei wird ein neues Token erzeugt mit aktueller <code>tv</code>.</p>
-
-<h2>Kiosk zeigt "Token abgelaufen"</h2>
-
-<p><b>Ursache:</b> Der <code>exp</code>-Claim des JWT ist vorbei. Standard ist 365 Tage
-  nach Registrierung.</p>
-
-<p><b>Lösungen:</b></p>
-
-<ul>
-  <li>Client erneut deployen (selber Vorgang wie Erstinstall, überschreibt das Token)</li>
-  <li>In den Einstellungen <code>token_ttl_days=0</code> setzen — damit laufen zukünftige Tokens nie ab. Bestehende Tokens mit <code>exp</code> sind trotzdem weiterhin abgelaufen, für die brauchst du einen Re-Deploy.</li>
-</ul>
-
-<h2>Paket wurde installiert, aber Kiosk zeigt "Nicht installiert"</h2>
-
-<p><b>Ursache 1:</b> Tactical's Software-Scan ist noch nicht durchgelaufen. Die Detection
-  basiert auf Tactical's Liste der installierten Programme — die wird periodisch aktualisiert,
-  nicht in Echtzeit.</p>
-
-<p><b>Lösung:</b> Warten (Minuten bis zur nächsten Software-Scan-Runde) oder in Tactical
-  manuell "Scan Installed Software" auf dem Agent triggern.</p>
-
-<p><b>Ursache 2:</b> Der <code>detection_name</code> des Pakets stimmt nicht mit dem
-  Windows-Anzeigenamen überein.</p>
-
-<p><b>Lösung:</b></p>
-
-<ol class="doc-steps">
-  <li>Im Kiosk-Client-Admin: Edit-Panel des Pakets öffnen</li>
-  <li>In Tactical unter „Software" des Agents nachschauen wie das Programm genau heißt</li>
-  <li>Detection-Name entsprechend anpassen (Substring reicht — z. B. nur "OpenVPN" statt "OpenVPN 2.7.1-I001 amd64")</li>
-  <li>Speichern</li>
-</ol>
-
-<h2>Upload schlägt fehl</h2>
-
-<p><b>Symptom:</b> Upload-Button zeigt Fehlermeldung, Paket erscheint nicht in der Liste.</p>
-
-<p><b>Mögliche Ursachen:</b></p>
-
-<ul>
-  <li><b>Datei zu groß:</b> default 500 MB. Ändern via Einstellung <code>max_upload_mb</code>.</li>
-  <li><b>Ungültige Extension:</b> nur <code>.msi</code> und <code>.exe</code> erlaubt.</li>
-  <li><b>Ungültiger Anzeigename:</b> nur druckbare Zeichen, max 80 Zeichen.</li>
-  <li><b>Paketname (Slug) bereits vergeben:</b> der Slug wird aus dem Dateinamen abgeleitet; bei Konflikt wird automatisch ein Suffix angehängt. Sollte nicht fehlschlagen.</li>
-</ul>
-
-<p>Genaue Ursache im Admin-UI Tab <b>Audit-Log</b>, Zeile des POST /admin/api/upload mit
-  Status-Code checken. Bei 500: im Proxy-Container-Log schauen.</p>
-
-<h2>"EXEs bauen" schlägt fehl</h2>
-
-<p>Tab <b>Einstellungen</b> → unter <b>Build-Historie</b> den letzten Build mit
-  Status <code>failed</code> finden → <code>Log</code> klicken → vollständiger
-  PyInstaller-Output.</p>
-
-<p><b>Typische Fehler:</b></p>
-
-<ul>
-  <li><b>Proxy Public URL nicht gesetzt:</b> der Build wird sofort abgelehnt. Einstellung ausfüllen.</li>
-  <li><b>Wine-Crash in Python:</b> passiert sporadisch mit bestimmten Python-Imports unter Wine. Meist hilft ein zweiter Build-Versuch.</li>
-  <li><b>Client-Code-Syntax-Fehler:</b> wenn kürzlich Änderungen am <code>client/</code>-Verzeichnis gemacht wurden, kann ein Syntax-Fehler im PyInstaller-Analyze-Step auftauchen. Fehlermeldung im Log enthält den exakten Fehler + Datei/Zeile.</li>
-</ul>
-
-<h2>Tactical-API 502 (Proxy-seitiger Fehler)</h2>
-
-<p><b>Symptom:</b> Kiosk-Client zeigt "Fehler: HTTP 502" beim Laden der Paketliste oder
-  beim Install.</p>
-
-<p><b>Ursachen &amp; Lösungen:</b></p>
-
-<ul>
-  <li><b>Tactical nicht erreichbar:</b> Netzwerkproblem oder Tactical-Service down. Per <code>curl</code> vom Proxy-Host aus die Tactical-URL anpingen.</li>
-  <li><b>Falscher API-Key:</b> Tab <b>Einstellungen</b> → <code>tactical_api_key</code> → Reveal + prüfen.</li>
-  <li><b>API-Key hat nicht genügend Permissions:</b> In Tactical unter User-Management dem API-Key-User die Permissions <code>can_manage_software</code> und <code>can_send_cmd</code> geben (siehe Referenz unten).</li>
-  <li><b>Agent gelöscht:</b> Wenn ein Agent in Tactical gelöscht wurde, aber der Kiosk-Client seinen Token noch hat → 404 von Tactical → 502 im Kiosk. Lösung: Agent wieder in Tactical registrieren oder Kiosk-Client deinstallieren.</li>
-</ul>
-
-<h2>Admin-Login geht nicht mehr</h2>
-
-<ul>
-  <li>Prüfen ob das Passwort via Runtime-Setting <code>admin_password_override</code> geändert wurde. Falls ja: falls vergessen → direkt in der SQLite-DB löschen:
-    <pre class="doc-code-block">docker exec softshelf-proxy sqlite3 /app/data/softshelf.db \
-  "DELETE FROM settings WHERE key='admin_password_override'"</pre>
-    Danach greift wieder das Bootstrap-Passwort aus der <code>.env</code>.</li>
-  <li>Wenn auch das .env-Passwort nicht mehr bekannt ist: .env editieren, <code>docker-compose restart softshelf-proxy</code>.</li>
-</ul>
-
-<h2>Rate-Limit (429 Too Many Requests)</h2>
-
-<p>Passiert bei &gt;5 Registration-Versuchen pro Minute oder &gt;60 Admin-Calls pro Minute
-  von derselben IP. Einfach einen Moment warten. Bei absichtlichen Load-Tests das Rate-Limit
-  in <code>proxy/middleware/rate_limit.py</code> anpassen (Code-Change + Restart).</p>
+<table class="doc-table">
+  <thead><tr><th>Symptom</th><th>Ursache / Fix</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Kiosk-Client erscheint nach Deploy nicht im Tray</td>
+      <td>Tactical läuft als SYSTEM (Session 0). Der Installer erzeugt einen Task-Scheduler-Task mit Principal=active user — check mit <code>schtasks /Query /TN Softshelf</code> im User-Context.</td>
+    </tr>
+    <tr>
+      <td>winget-Install scheitert mit „No applicable installer found"</td>
+      <td>Exit-Code <code>-1978335216</code>. Bei scope=auto: Layer-2-Fallback tried automatically. Sonst: Scope auf <code>user</code> setzen.</td>
+    </tr>
+    <tr>
+      <td>choco-Install sagt „0/1 packages"</td>
+      <td>Paket ist FOSS-broken oder 404. Im <b>Fehler</b>-Tab ist Details + Link zum Choco-Log auf dem Agent.</td>
+    </tr>
+    <tr>
+      <td>Rollout bleibt in Phase 1 stehen</td>
+      <td>(1) Nicht „Weiter" geklickt. (2) Auto-Advance aus. (3) Auto-Advance pausiert wegen offener Fehler — Fehler-Tab prüfen + bestätigen.</td>
+    </tr>
+    <tr>
+      <td>Operator sieht disabled Buttons</td>
+      <td>Kein Bug — RBAC. Admin-Rolle nötig für Whitelist-Edit, Ring-Mutation, Required-/Staged-Flags.</td>
+    </tr>
+    <tr>
+      <td>Viewer bekommt 403 bei jedem Klick</td>
+      <td>Viewer-Rolle hat nur GETs. Keine Aktionen möglich.</td>
+    </tr>
+    <tr>
+      <td>Scheduled Job lief nicht zur eingestellten Zeit</td>
+      <td>Tick läuft minuten-basiert, ±1 Min Toleranz. Bei Container-Restart innerhalb des Fensters werden Jobs beim nächsten Tick abgearbeitet.</td>
+    </tr>
+  </tbody>
+</table>
 </section>
-
-<!-- ═════════════════════════════════════════════════════════════════════ -->
-
-<section id="referenz">
-<h1>Referenz</h1>
-
-<h2>Runtime-Settings (Übersicht)</h2>
-
-<table class="doc-table">
-  <thead><tr><th>Key</th><th>Typ</th><th>Default</th><th>Zweck</th></tr></thead>
-  <tbody>
-    <tr><td><code>tactical_url</code></td><td>URL</td><td>—</td><td>Basis-URL der Tactical-RMM-API</td></tr>
-    <tr><td><code>tactical_api_key</code></td><td>Secret</td><td>—</td><td>API-Key mit can_manage_software + can_send_cmd</td></tr>
-    <tr><td><code>registration_secret</code></td><td>Secret</td><td>—</td><td>Shared Secret für Client-Deployment</td></tr>
-    <tr><td><code>proxy_public_url</code></td><td>URL</td><td>—</td><td>Externe Proxy-URL, wird in softshelf-setup.exe eingebacken</td></tr>
-    <tr><td><code>token_ttl_days</code></td><td>int</td><td>365</td><td>Machine-Token-Ablauf (0 = unbegrenzt)</td></tr>
-    <tr><td><code>log_retention_days</code></td><td>int</td><td>90</td><td>Audit + Install-Log Aufbewahrung</td></tr>
-    <tr><td><code>max_upload_mb</code></td><td>int</td><td>500</td><td>Größenlimit für custom-Uploads</td></tr>
-    <tr><td><code>admin_password_override</code></td><td>Secret</td><td>—</td><td>Überschreibt Bootstrap-Admin-Passwort</td></tr>
-    <tr><td><code>client_app_name</code></td><td>String</td><td>Softshelf</td><td>UI-Titel im Kiosk-Client</td></tr>
-  </tbody>
-</table>
-
-<h2>Tactical-User-Permissions</h2>
-
-<p>Der Tactical-API-Key, der in <code>tactical_api_key</code> hinterlegt ist, muss
-  einem Tactical-User gehören, der <b>mindestens</b> folgende Permissions hat:</p>
-
-<ul>
-  <li><code>can_list_software</code> — GET auf Software-Endpoints für die Installations-Detection</li>
-  <li><code>can_manage_software</code> — POST /software/{id}/ (Chocolatey-Install) und POST /software/{id}/uninstall/</li>
-  <li><code>can_send_cmd</code> — POST /agents/{id}/cmd/ (für Custom-MSI/EXE-Install, Choco-Uninstall mit explizitem Command)</li>
-  <li><b>Agent-Zugriff</b> auf die Clients, die das Self-Service Center nutzen sollen (über Role-assigned Clients/Sites)</li>
-</ul>
-
-<p>Permission fehlt → Tactical antwortet mit HTTP 403 → Proxy gibt HTTP 502 an den Client zurück.</p>
-
-<h2>Windows Registry auf dem Kiosk-Client</h2>
-
-<table class="doc-table">
-  <thead><tr><th>Key</th><th>Wert</th></tr></thead>
-  <tbody>
-    <tr><td><code>HKLM\SOFTWARE\Softshelf\ProxyUrl</code></td><td>z. B. <code>http://softshelf.intern:8765</code></td></tr>
-    <tr><td><code>HKLM\SOFTWARE\Softshelf\MachineToken</code></td><td>JWT-String</td></tr>
-    <tr><td><code>HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment\SOFTSHELF_PROXY_URL</code></td><td>System-Umgebungsvariable (Fallback)</td></tr>
-    <tr><td><code>HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Softshelf</code></td><td>Autostart-Path zu softshelf.exe</td></tr>
-  </tbody>
-</table>
-
-<h2>Dateipfade auf dem Proxy-Host</h2>
-
-<table class="doc-table">
-  <thead><tr><th>Pfad</th><th>Inhalt</th></tr></thead>
-  <tbody>
-    <tr><td><code>./data/softshelf.db</code></td><td>SQLite (alle Tabellen)</td></tr>
-    <tr><td><code>./data/uploads/&lt;sha256&gt;.&lt;ext&gt;</code></td><td>Hochgeladene custom-Dateien</td></tr>
-    <tr><td><code>./downloads/softshelf.exe</code></td><td>Gebaute Kiosk-App</td></tr>
-    <tr><td><code>./downloads/softshelf-setup.exe</code></td><td>Gebauter Installer</td></tr>
-    <tr><td><code>./.env</code></td><td>Bootstrap-Konfiguration</td></tr>
-  </tbody>
-</table>
-
-<h2>Wichtige URLs</h2>
-
-<table class="doc-table">
-  <thead><tr><th>Pfad</th><th>Auth</th><th>Zweck</th></tr></thead>
-  <tbody>
-    <tr><td><code>/admin</code></td><td>Basic</td><td>Dieses Admin-UI</td></tr>
-    <tr><td><code>/download/softshelf-setup.exe</code></td><td>—</td><td>Installer-Download für Clients</td></tr>
-    <tr><td><code>/api/v1/health</code></td><td>—</td><td>Health-Check (Monitoring)</td></tr>
-  </tbody>
-</table>
-
-<h2>Nützliche Docker-Kommandos</h2>
-
-<pre class="doc-code-block"># Status aller Services
-docker-compose ps
-
-# Logs vom Proxy (folgen)
-docker-compose logs -f softshelf-proxy
-
-# Logs vom Builder
-docker-compose logs -f softshelf-builder
-
-# Einzelnen Service neu starten (nach .env-Änderung)
-docker-compose restart softshelf-proxy
-
-# Alles neu bauen + starten (nach Code-Änderungen)
-docker-compose up -d --build
-
-# In den Proxy-Container schauen
-docker exec -it softshelf-proxy sh
-
-# SQLite direkt abfragen
-docker exec softshelf-proxy sqlite3 /app/data/softshelf.db \
-  "SELECT name, type, category FROM packages"
-
-# Den Builder stoppen wenn er nicht gebraucht wird (spart RAM)
-docker-compose stop softshelf-builder
-# Wieder starten vor dem nächsten Build:
-docker-compose start softshelf-builder</pre>
-</section>
-
-<div class="doc-footer">
-  Softshelf · v1.6.0 · Vollständige Architektur-Dokumentation in
-  <code>ARCHITEKTUR.md</code> im Repo
-</div>
 
 </div>

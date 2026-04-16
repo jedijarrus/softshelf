@@ -59,22 +59,35 @@ async def _run_custom_command_bg(
     bei winget und choco).
     """
     error_msg: str | None = None
+    raw_output = ""
     try:
-        await TacticalClient().run_command(agent_id, cmd, timeout=600)
+        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=600)
+        if raw_output and raw_output.startswith('"'):
+            try:
+                import json as _json
+                raw_output = _json.loads(raw_output)
+            except Exception:
+                pass
         logger.info("custom %s ok: %s auf %s", action, display_name, hostname)
         if action == "install":
             await database.set_agent_installation(agent_id, package_name, version_id)
         elif action == "uninstall":
             await database.delete_agent_installation(agent_id, package_name)
     except Exception as e:
-        # run_command schmeisst bei Non-200 von Tactical bzw. Non-Zero-Exit
-        # vom Agent-Script. Letztes Stück Output landet meist in str(e).
         error_msg = str(e)[:300] or "unbekannter Fehler"
+        raw_output = raw_output or error_msg
         logger.warning("custom %s fehlgeschlagen: %s auf %s — %s",
                        action, display_name, hostname, error_msg)
 
     try:
-        await database.upsert_action_result(agent_id, package_name, error_msg)
+        full_out = (
+            f"=== custom {action} {package_name} ===\n\n"
+            f"{raw_output or '(kein Output)'}"
+        )
+        await database.upsert_action_result(
+            agent_id, package_name, error_msg,
+            full_output=full_out, action=action,
+        )
     except Exception as e:
         logger.warning("upsert_action_result custom failed: %s", e)
 
@@ -234,7 +247,7 @@ Write-Output 'Deinstallation abgeschlossen.'
 
 # winget PackageIdentifier ist konservativ alphanumerisch + Punkt + Bindestrich.
 # Defense-in-depth: keine Quotes, kein Whitespace, keine Shell-Metas
-_WINGET_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,199}$")
+_WINGET_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-+]{0,199}$")
 
 
 def _check_winget_id(wid: str) -> str:
@@ -263,10 +276,22 @@ function Find-WingetExe {
 """
 
 
-def _build_winget_command(action: str, winget_id: str, version: str | None = None) -> str:
+def _build_winget_command(
+    action: str,
+    winget_id: str,
+    version: str | None = None,
+    include_scope_machine: bool = True,
+) -> str:
     """
     Baut den PowerShell-Wrapper für winget install/upgrade/uninstall.
     Akzeptierte action-Werte: 'install', 'upgrade', 'uninstall'.
+
+    `include_scope_machine=True` (Default) haengt `--scope machine` an —
+    passt fuer machine-wide Installer. Bei per-user-only Paketen
+    (LastPass, Bitwarden, Firefox-per-user) fuehrt das zum „No applicable
+    installer found" Fehler. Layer-2 Fallback-Pfad setzt das dann auf
+    False und laesst winget den Installer selbst picken, zusammen mit
+    run_as_user=True damit der User-Kontext greift.
 
     Tactical run_command läuft als SYSTEM, der user-shim winget.exe ist
     nicht im PATH. Wir resolven die Binary aus C:\Program Files\WindowsApps.
@@ -294,8 +319,9 @@ def _build_winget_command(action: str, winget_id: str, version: str | None = Non
             f"--accept-source-agreements --disable-interactivity -h"
         )
     else:
+        scope_arg = "--scope machine " if include_scope_machine else ""
         winget_args = (
-            f"{action} --id '{safe_id}' --scope machine --silent "
+            f"{action} --id '{safe_id}' {scope_arg}--silent "
             f"--accept-package-agreements --accept-source-agreements "
             f"--disable-interactivity -h "
             f"{version_arg}"
@@ -330,6 +356,15 @@ exit 0
 # Re-Scan würde den unveränderten State zeigen, und der Admin sieht keinen
 # Hinweis warum nichts passiert ist. Hier matchen wir bekannte Patterns und
 # heben sie aus dem stdout in agent_scan_meta.last_action_error.
+
+# Patterns die "ist eigentlich Erfolg, kein Fehler-Toast bitte" bedeuten.
+# Werden VOR den Hard-Error-Patterns geprueft.
+_WINGET_SUCCESS_HINTS: list[str] = [
+    "no newer package versions are available",   # 1Password-Case: installiert, nichts zu tun
+    "no installed package found matching input criteria for upgrade",  # gleicher Effekt
+]
+
+# Patterns die als HARD ERROR gewertet werden (auch bei "Erfolgs"-ExitCode).
 _WINGET_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
     (
         "install technology is different",
@@ -338,10 +373,16 @@ _WINGET_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
         "deinstallieren oder ein anderes Update-Verfahren nutzen.",
     ),
     (
-        "no available upgrade found",
-        "winget meldet kein verfügbares Upgrade — das Paket ist vermutlich "
-        "per-user installiert (--scope machine filtert es weg) oder die "
-        "Installer-Manifest-Version stimmt nicht mit der installierten Version überein.",
+        "does not apply to your system or requirements",
+        "Eine neuere Version existiert im winget-Catalog, passt aber nicht "
+        "zu diesem System (Architektur, Windows-Version oder Dependencies). "
+        "Paket aus dem Profil entfernen oder eine andere Version pinnen.",
+    ),
+    (
+        "no applicable installer found",
+        "winget hat keinen passenden Installer fuer dieses System gefunden. "
+        "Bei --scope machine: das Paket ist nur per-user installierbar — "
+        "winget_scope auf 'auto' oder 'user' aendern.",
     ),
     (
         "no installed package found matching input criteria",
@@ -357,11 +398,21 @@ _WINGET_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
 
 
 def _detect_winget_soft_error(output: str) -> str | None:
-    """Sucht im winget-Output nach bekannten 'fake success' Mustern. Returns
-    eine human-readable Fehlermeldung wenn ein Pattern matcht, sonst None."""
+    """Sucht im winget-Output nach bekannten 'fake success' Mustern.
+
+    Reihenfolge:
+      1. Erfolgs-Hints (z.B. "no newer package versions are available") → None
+      2. Hard-Error-Patterns → Fehlermeldung
+      3. Sonst → None
+    """
     if not output:
         return None
     lower = output.lower()
+    # 1. Erst die echten Erfolgs-Hints raussortieren — sonst landen sie in
+    #    den Hard-Error-Patterns die "no installed package found" matchen.
+    for hint in _WINGET_SUCCESS_HINTS:
+        if hint in lower:
+            return None
     for needle, message in _WINGET_SOFT_ERROR_PATTERNS:
         if needle in lower:
             return message
@@ -479,28 +530,45 @@ def _extract_exit_marker(output: str) -> tuple[int | None, str]:
     return code, cleaned.rstrip()
 
 
-def _build_choco_command(action: str, package_name: str) -> str:
+_CHOCO_VERSION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-+]{0,49}$")
+
+
+def _build_choco_command(action: str, package_name: str, version: str | None = None) -> str:
     """
     Baut den PowerShell-Wrapper für `choco install/uninstall <name>`. Wird
     via Tactical run_command als SYSTEM ausgeführt, output kommt zurück
     damit wir Soft-Errors detecten und im UI zeigen können.
+
+    Optional version pin (nur bei install): erzwingt eine bestimmte choco-
+    Paket-Version via `--version=...`.
     """
     if action not in ("install", "uninstall"):
         raise ValueError(f"unsupported choco action: {action}")
     if not _CHOCO_NAME_RE.fullmatch(package_name):
         raise HTTPException(status_code=400, detail=f"Ungültiger choco-Paketname: {package_name!r}")
+    if version is not None and not _CHOCO_VERSION_RE.fullmatch(version):
+        raise HTTPException(status_code=400, detail=f"Ungültige choco-Version: {version!r}")
     safe = package_name  # regex-validiert, keine Escapes nötig
     if action == "install":
-        choco_args = f"install '{safe}' -y --no-progress --limit-output"
+        ver_arg = f" --version='{version}'" if version else ""
+        choco_args = f"install '{safe}' -y --no-progress --limit-output{ver_arg}"
     else:
         # --remove-dependencies (-x) entfernt zusätzlich alle Sub-Pakete die
         # NUR von diesem Paket benötigt wurden. Wichtig für Metapakete wie
         # 'vlc' das eigentlich 'vlc.install' wrappt — ohne diesen Flag
         # bleibt 'vlc.install' nach `choco uninstall vlc` zurück und choco
         # fragt interaktiv nach (Timeout = Sub-Paket wird nicht entfernt).
+        # --force: bricht nicht ab wenn der Uninstaller fehlt oder
+        # Dependencies im Weg sind — räumt auch ghost-packages auf (z.B.
+        # peazip wo der App-Ordner weg ist, aber C:\ProgramData\chocolatey\
+        # lib\peazip\ noch existiert).
+        # --skip-autouninstaller: vermeidet dass choco nachträglich noch
+        # den MSI/EXE-Uninstaller startet wenn er in der DB gefunden wird,
+        # aber das App-Verzeichnis schon weg ist. Verhindert „uninstaller
+        # not found" Hard-Error bei ghost-installs.
         choco_args = (
-            f"uninstall '{safe}' -y --remove-dependencies "
-            f"--no-progress --limit-output"
+            f"uninstall '{safe}' -y --force --remove-dependencies "
+            f"--skip-autouninstaller --no-progress --limit-output"
         )
 
     # Wichtig: Wir exitieren IMMER mit 0 und kodieren den echten ExitCode
@@ -639,7 +707,17 @@ async def _run_choco_command_bg(
             logger.warning("agent_installations update failed: %s", e)
 
     try:
-        await database.upsert_action_result(agent_id, package_name, error_msg)
+        # Voller Output fuer das Fehler-Detail-Modal mitspeichern. Mit dem
+        # ExitCode-Tag im Header damit der Admin sofort sieht was los war.
+        full_out = (
+            f"=== choco {action} {package_name} ===\n"
+            f"ExitCode: {exit_code}\n\n"
+            f"{raw_output or '(kein Output)'}"
+        )
+        await database.upsert_action_result(
+            agent_id, package_name, error_msg,
+            full_output=full_out, action=action,
+        )
     except Exception as e:
         logger.warning("upsert_action_result choco failed: %s", e)
 
@@ -650,6 +728,34 @@ async def _run_choco_command_bg(
         logger.warning("post-action choco rescan failed for %s: %s", agent_id, e)
 
 
+# winget ExitCode der "kein Installer fuer dieses System / scope" meint.
+# Tritt auf wenn wir --scope machine erzwingen, das Paket aber nur per-user
+# installierbar ist (LastPass, Bitwarden, Firefox-per-user, 1Password-Store).
+_WINGET_NO_APPLICABLE_INSTALLER = -1978335216
+
+
+async def _run_one_winget(
+    agent_id: str, cmd: str, run_as_user: bool
+) -> tuple[int | None, str, str | None]:
+    """Einzelner Tactical run_command-Aufruf fuer eine fertige winget-
+    PowerShell. Returns (exit_code, cleaned_output, exception_msg_or_none).
+    """
+    try:
+        raw_output = await TacticalClient().run_command(
+            agent_id, cmd, timeout=600, run_as_user=run_as_user,
+        )
+        if raw_output and raw_output.startswith('"'):
+            try:
+                import json as _json
+                raw_output = _json.loads(raw_output)
+            except Exception:
+                pass
+    except Exception as e:
+        return None, "", str(e)[:300]
+    code, cleaned = _extract_exit_marker(raw_output or "")
+    return code, cleaned, None
+
+
 async def _run_winget_command_bg(
     agent_id: str,
     hostname: str,
@@ -658,6 +764,8 @@ async def _run_winget_command_bg(
     cmd: str,
     action: str,
     winget_id: str,
+    winget_scope: str = "auto",
+    version: str | None = None,
 ):
     """
     Background-Task für winget install/upgrade/uninstall via Tactical run-cmd.
@@ -667,21 +775,91 @@ async def _run_winget_command_bg(
     (winget exited mit Success-Code aber druckt einen Fehler in stdout)
     wird die Meldung in agent_scan_meta.last_action_error persistiert
     damit das Admin-UI sie als Banner anzeigen kann.
+
+    Layer-2-Fallback:
+      winget_scope == 'auto'    → erst --scope machine (als SYSTEM), bei
+                                   ExitCode -1978335216 retry OHNE --scope
+                                   machine im User-Kontext (run_as_user).
+      winget_scope == 'machine' → nur --scope machine, kein Fallback.
+      winget_scope == 'user'    → direkt ohne --scope machine im User-Kontext.
+
+    Der uebergebene `cmd` ist der initial gebaute Wrapper. Fuer den Fallback-
+    Pfad bauen wir den user-scope-Wrapper selbst hier um Parameter zu behalten.
     """
+    scope = (winget_scope or "auto").lower()
+    if scope not in ("auto", "machine", "user"):
+        scope = "auto"
+
+    # Uninstall ignoriert scope komplett (der Uninstall-Wrapper haengt kein
+    # --scope an; per-user ARP-Eintraege muss der User selber uninstallieren
+    # — wenn das bei uns als SYSTEM nicht geht, liefert winget
+    # NO_UNINSTALL_INFO_FOUND und der Fallback-Retry als User ist hier
+    # ebenfalls sinnvoll.)
+    if action == "uninstall":
+        # SYSTEM-Versuch zuerst, bei per-user-Fehler im User-Kontext retry.
+        first_as_user = False
+    elif scope == "user":
+        first_as_user = True
+        # Command neu bauen ohne --scope machine
+        cmd = _build_winget_command(action, winget_id, version, include_scope_machine=False)
+    else:
+        first_as_user = False
+
     error_msg: str | None = None
     raw_output = ""
-    exit_code: int | None = None
-    try:
-        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=600)
-        # Tactical wrappt stdout als JSON-string — entpacken wenn nötig
-        if raw_output and raw_output.startswith('"'):
-            try:
-                import json as _json
-                raw_output = _json.loads(raw_output)
-            except Exception:
-                pass
-        # Marker-Zeile mit dem echten winget-ExitCode extrahieren
-        exit_code, raw_output = _extract_exit_marker(raw_output or "")
+    exit_code, raw_output, exc = await _run_one_winget(agent_id, cmd, first_as_user)
+    if exc:
+        error_msg = exc
+
+    fallback_used = False
+
+    # Layer-2 Fallback: auto-scope + NO_APPLICABLE_INSTALLER → retry als User
+    should_fallback = (
+        scope == "auto"
+        and action in ("install", "upgrade")
+        and exit_code == _WINGET_NO_APPLICABLE_INSTALLER
+    )
+    # Uninstall-Retry: bei NO_UNINSTALL_INFO_FOUND als User versuchen
+    uninstall_fallback = (
+        action == "uninstall"
+        and exit_code is not None
+        and exit_code not in _WINGET_SUCCESS_CODES
+        and ("no uninstall information found" in (raw_output or "").lower()
+             or exit_code in (-1978335162, _WINGET_NO_APPLICABLE_INSTALLER))
+    )
+
+    if should_fallback or uninstall_fallback:
+        logger.info(
+            "winget %s per-user fallback: %s auf %s (exit=%s)",
+            action, display_name, hostname, exit_code,
+        )
+        user_cmd = (
+            _build_winget_command(action, winget_id, version, include_scope_machine=False)
+            if action != "uninstall"
+            else cmd  # uninstall-cmd ist schon scope-frei
+        )
+        retry_exit, retry_output, retry_exc = await _run_one_winget(
+            agent_id, user_cmd, run_as_user=True,
+        )
+        if retry_exc:
+            # Erster Versuch hatte vermutlich den useful output — den
+            # Retry-Exc-Text nur anhaengen als Zusatzinfo.
+            raw_output = (
+                f"{raw_output}\n"
+                f"--- per-user Retry fehlgeschlagen ---\n"
+                f"{retry_exc}"
+            )
+        else:
+            # Retry hat klare Antwort — das nehmen wir als Wahrheit.
+            fallback_used = True
+            raw_output = (
+                f"=== machine scope Versuch ===\n{raw_output}\n\n"
+                f"=== per-user fallback (run_as_user) ===\n{retry_output}"
+            )
+            exit_code = retry_exit
+
+    # Analyse Phase
+    if error_msg is None:
         soft_err = _detect_winget_soft_error(raw_output)
         if soft_err:
             error_msg = soft_err
@@ -690,27 +868,65 @@ async def _run_winget_command_bg(
                 action, display_name, hostname, exit_code, soft_err,
             )
         elif exit_code is not None and exit_code not in _WINGET_SUCCESS_CODES:
-            # winget hat non-zero exit der NICHT zu den bekannten
-            # „eigentlich erfolgreich"-Codes gehört, und kein Soft-Error-
-            # Pattern im stdout. Trotzdem reporten.
-            error_msg = f"winget {action} beendete mit ExitCode {exit_code}"
+            # Special-Case fuer per-user-uninstall die als SYSTEM gar nicht
+            # sichtbar sind — ueberlappt mit dem uninstall_fallback oben,
+            # aber falls der Fallback auch keinen Erfolg hatte, geben wir
+            # eine hilfreiche Meldung.
+            if (
+                action == "uninstall"
+                and exit_code == -1978335162
+            ):
+                error_msg = (
+                    "winget hat keine Uninstall-Information gefunden. "
+                    "Vermutlich ein per-user Install der fuer SYSTEM nicht "
+                    "sichtbar ist — ein interaktiver User muss eingeloggt "
+                    "sein, oder das Paket ueber die Windows Apps-Liste "
+                    "entfernen."
+                )
+            else:
+                error_msg = f"winget {action} beendete mit ExitCode {exit_code}"
             logger.warning(
                 "winget %s unhandled exit für %s auf %s: %s",
                 action, display_name, hostname, exit_code,
             )
         else:
-            logger.info("winget %s ok: %s auf %s", action, display_name, hostname)
-    except Exception as e:
-        error_msg = str(e)[:300]
-        logger.warning(
-            "winget %s fehlgeschlagen: %s auf %s — %s",
-            action, display_name, hostname, e,
-        )
+            logger.info(
+                "winget %s ok: %s auf %s%s",
+                action, display_name, hostname,
+                " (per-user fallback)" if fallback_used else "",
+            )
+
+    # Erfolg ODER „bereits vorhanden" → in agent_installations tracken.
+    # Hintergrund: winget kennt manche ARP-Pakete nur heuristisch (z.B.
+    # 1Password installiert via .exe vom Hersteller — winget findet's
+    # via DisplayName-Match, aber `winget list --id` und `winget export`
+    # zeigen es nicht). agent_winget_state bleibt dann leer und der
+    # Kiosk-Client sieht das Paket als „nicht installiert" obwohl es da
+    # ist. agent_installations dient als zweite Tracking-Quelle.
+    if not error_msg and action in ("install", "upgrade"):
+        try:
+            await database.set_agent_installation(agent_id, package_name, None)
+        except Exception as e:
+            logger.warning("agent_installations winget update failed: %s", e)
+    elif not error_msg and action == "uninstall":
+        try:
+            await database.delete_agent_installation(agent_id, package_name)
+        except Exception as e:
+            logger.warning("agent_installations winget delete failed: %s", e)
 
     # Action-Result in scan_meta persistieren (auch bei Erfolg, dann mit error=None,
     # damit der vorherige Fehler-Banner weggeht)
     try:
-        await database.upsert_action_result(agent_id, package_name, error_msg)
+        scope_tag = f" scope={scope}" + (" +fallback" if fallback_used else "")
+        full_out = (
+            f"=== winget {action} {winget_id}{scope_tag} ===\n"
+            f"ExitCode: {exit_code}\n\n"
+            f"{raw_output or '(kein Output)'}"
+        )
+        await database.upsert_action_result(
+            agent_id, package_name, error_msg,
+            full_output=full_out, action=action,
+        )
     except Exception as e:
         logger.warning("upsert_action_result failed for %s: %s", agent_id, e)
 
@@ -749,10 +965,17 @@ async def install_package(
             action = "upgrade"
         else:
             action = "install"
-        cmd = _build_winget_command(action, body.package_name, pkg.get("winget_version"))
+        scope = pkg.get("winget_scope") or "auto"
+        ver = pkg.get("winget_version")
+        include_scope_machine = scope != "user"
+        cmd = _build_winget_command(
+            action, body.package_name, ver,
+            include_scope_machine=include_scope_machine,
+        )
         _spawn_bg(_run_winget_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
             cmd, action, body.package_name,
+            winget_scope=scope, version=ver,
         ))
         verb = "Aktualisierung" if action == "upgrade" else "Installation"
         msg = (
@@ -820,9 +1043,11 @@ async def uninstall_package(
     if ptype == "winget":
         _check_winget_id(body.package_name)
         cmd = _build_winget_command("uninstall", body.package_name)
+        scope = pkg.get("winget_scope") or "auto"
         _spawn_bg(_run_winget_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
             cmd, "uninstall", body.package_name,
+            winget_scope=scope,
         ))
         msg = (
             f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
@@ -876,3 +1101,137 @@ async def uninstall_package(
         status="started",
         message=msg or f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet.",
     )
+
+
+# ── Shared dispatch helpers (für admin-driven bulk + profile apply) ───────────
+
+async def dispatch_install_for_agent(
+    agent_id: str,
+    hostname: str,
+    pkg: dict,
+    version_pin: str | None = None,
+) -> dict:
+    """Spawned einen install (oder upgrade fuer winget) für genau ein
+    (Agent, Paket)-Pair und logged in install_log.
+
+    Wird sowohl vom admin per-package-install endpoint als auch vom Profile-
+    Apply und Bulk-Install benutzt — der ganze type-dispatch sitzt hier.
+
+    Returns ein dict mit Metadaten fuer den Caller (action, package_name).
+    """
+    package_name = pkg["name"]
+    ptype = pkg.get("type") or "choco"
+
+    if ptype == "winget":
+        _check_winget_id(package_name)
+        # winget braucht install vs. upgrade entscheidung
+        state = await database.get_agent_winget_state(agent_id)
+        st = state.get(package_name)
+        if st and st.get("installed_version") and st.get("available_version"):
+            action = "upgrade"
+        else:
+            action = "install"
+        ver = version_pin or pkg.get("winget_version")
+        scope = pkg.get("winget_scope") or "auto"
+        include_scope_machine = scope != "user"
+        cmd = _build_winget_command(
+            action, package_name, ver,
+            include_scope_machine=include_scope_machine,
+        )
+        _spawn_bg(_run_winget_command_bg(
+            agent_id, hostname, package_name, pkg["display_name"],
+            cmd, action, package_name,
+            winget_scope=scope, version=ver,
+        ))
+
+    elif ptype == "custom":
+        if not _is_safe_package_name(package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        if not pkg.get("sha256"):
+            raise HTTPException(status_code=400, detail="Custom-Paket ohne aktive Version")
+        cmd = await _build_install_command(pkg, agent_id)
+        _spawn_bg(_run_custom_command_bg(
+            agent_id, hostname, package_name, pkg["display_name"],
+            cmd, "install", pkg.get("current_version_id"),
+        ))
+        action = "install"
+
+    else:
+        if not _is_safe_package_name(package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        cmd = _build_choco_command("install", package_name, version=version_pin)
+        _spawn_bg(_run_choco_command_bg(
+            agent_id, hostname, package_name, pkg["display_name"],
+            cmd, "install",
+        ))
+        action = "install"
+
+    await database.log_install(
+        agent_id, hostname, package_name, pkg["display_name"], "install"
+    )
+    return {"action": action, "package_name": package_name, "type": ptype}
+
+
+async def dispatch_upgrade_for_agent(
+    agent_id: str,
+    hostname: str,
+    pkg: dict,
+) -> dict:
+    """Spawned eine reine Upgrade-Operation. Fuer winget = upgrade-action,
+    fuer choco = install (idempotent, nimmt latest), fuer custom = install
+    mit der aktuellen current_version_id (zaehlt als push-update).
+    """
+    return await dispatch_install_for_agent(agent_id, hostname, pkg, version_pin=None)
+
+
+async def dispatch_uninstall_for_agent(
+    agent_id: str,
+    hostname: str,
+    pkg: dict,
+) -> dict:
+    """Spawned uninstall-Aktion fuer ein (Agent, Paket)-Pair.
+
+    Wird vom Profile-Unassign-mit-Uninstall-Pfad und vom existing per-package
+    Admin-Uninstall-Endpoint genutzt. Type-dispatch identisch zum Install-Pfad.
+    """
+    package_name = pkg["name"]
+    ptype = pkg.get("type") or "choco"
+
+    if ptype == "winget":
+        _check_winget_id(package_name)
+        cmd = _build_winget_command("uninstall", package_name)
+        scope = pkg.get("winget_scope") or "auto"
+        _spawn_bg(_run_winget_command_bg(
+            agent_id, hostname, package_name, pkg["display_name"],
+            cmd, "uninstall", package_name,
+            winget_scope=scope,
+        ))
+
+    elif ptype == "custom":
+        if not _is_safe_package_name(package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        uninstall_cmd = (pkg.get("uninstall_cmd") or "").strip()
+        if not uninstall_cmd:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Paket {package_name!r} hat keinen Uninstall-Command hinterlegt",
+            )
+        ps_cmd = _build_uninstall_command(uninstall_cmd)
+        _spawn_bg(_run_custom_command_bg(
+            agent_id, hostname, package_name, pkg["display_name"],
+            ps_cmd, "uninstall", pkg.get("current_version_id"),
+        ))
+
+    else:
+        if not _is_safe_package_name(package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        cmd = _build_choco_command("uninstall", package_name)
+        _spawn_bg(_run_choco_command_bg(
+            agent_id, hostname, package_name, pkg["display_name"],
+            cmd, "uninstall",
+        ))
+
+    await database.log_install(
+        agent_id, hostname, package_name, pkg["display_name"], "uninstall"
+    )
+    return {"action": "uninstall", "package_name": package_name, "type": ptype}
