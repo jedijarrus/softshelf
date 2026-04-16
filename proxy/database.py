@@ -74,6 +74,14 @@ async def init_db():
                 duration_ms INTEGER
             );
 
+            CREATE TABLE IF NOT EXISTS event_log (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts         TEXT DEFAULT (datetime('now')),
+                event_type TEXT NOT NULL,
+                actor      TEXT,
+                details    TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS settings (
                 key        TEXT PRIMARY KEY,
                 value      TEXT NOT NULL DEFAULT '',
@@ -183,7 +191,43 @@ async def init_db():
                 checked_at    TEXT DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS profiles (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                description     TEXT NOT NULL DEFAULT '',
+                color           TEXT,
+                auto_update     INTEGER NOT NULL DEFAULT 0,
+                auto_update_at  TEXT,
+                created_at      TEXT DEFAULT (datetime('now')),
+                updated_at      TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS profile_packages (
+                profile_id    INTEGER NOT NULL,
+                package_name  TEXT NOT NULL,
+                version_pin   TEXT,
+                sort_order    INTEGER NOT NULL DEFAULT 0,
+                added_at      TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (profile_id, package_name),
+                FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
+                FOREIGN KEY (package_name) REFERENCES packages(name) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS agent_profiles (
+                agent_id     TEXT NOT NULL,
+                profile_id   INTEGER NOT NULL,
+                assigned_at  TEXT DEFAULT (datetime('now')),
+                assigned_by  TEXT,
+                PRIMARY KEY (agent_id, profile_id),
+                FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
+                FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+            );
+
             CREATE INDEX IF NOT EXISTS idx_install_log_agent  ON install_log(agent_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_profile_packages_pkg ON profile_packages(package_name);
+            CREATE INDEX IF NOT EXISTS idx_agent_profiles_profile ON agent_profiles(profile_id);
+            CREATE INDEX IF NOT EXISTS idx_event_log_ts ON event_log(ts DESC);
+            CREATE INDEX IF NOT EXISTS idx_event_log_type ON event_log(event_type, ts DESC);
             CREATE INDEX IF NOT EXISTS idx_agent_winget_id    ON agent_winget_state(winget_id);
             CREATE INDEX IF NOT EXISTS idx_agent_winget_avail ON agent_winget_state(available_version) WHERE available_version IS NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_agent_choco_name   ON agent_choco_state(choco_name);
@@ -198,6 +242,66 @@ async def init_db():
             CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_users_sso ON admin_users(sso_provider, sso_subject)
                 WHERE sso_subject IS NOT NULL;
         """)
+        # Geplante Jobs (Maintenance-Window-Dispatches)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS scheduled_jobs (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_at         TEXT NOT NULL,
+                action_type    TEXT NOT NULL,
+                action_params  TEXT NOT NULL,
+                description    TEXT,
+                status         TEXT NOT NULL DEFAULT 'pending',
+                created_at     TEXT DEFAULT (datetime('now')),
+                created_by     INTEGER,
+                executed_at    TEXT,
+                result         TEXT,
+                FOREIGN KEY (created_by) REFERENCES admin_users(id)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scheduled_status_time "
+            "ON scheduled_jobs(status, run_at)"
+        )
+
+        # Rollout-Tracking (phased rollout state machine)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS rollouts (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                package_name    TEXT NOT NULL,
+                display_name    TEXT,
+                action          TEXT NOT NULL,
+                current_phase   INTEGER NOT NULL DEFAULT 1,
+                status          TEXT NOT NULL DEFAULT 'active',
+                created_at      TEXT DEFAULT (datetime('now')),
+                created_by      INTEGER,
+                last_advanced_at TEXT,
+                phase_history   TEXT,
+                FOREIGN KEY (created_by) REFERENCES admin_users(id)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rollouts_status ON rollouts(status)"
+        )
+
+        # Migration: role-Spalte auf admin_users fuer RBAC
+        async with db.execute("PRAGMA table_info(admin_users)") as cur:
+            au_cols = {row[1] for row in await cur.fetchall()}
+        if "role" not in au_cols:
+            await db.execute(
+                "ALTER TABLE admin_users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'"
+            )
+
+        # Migration: ring-Spalte fuer phased rollout
+        # Semantik v1.7.2: Ring 1 = Canary, Ring 2 = Pilot, Ring 3 = Produktion
+        # (Default). Frueher (experimentell) war ring=0 Default — wir
+        # migrieren alte Werte einmal auf 3.
+        async with db.execute("PRAGMA table_info(agents)") as cur:
+            agent_cols = {row[1] for row in await cur.fetchall()}
+        if "ring" not in agent_cols:
+            await db.execute("ALTER TABLE agents ADD COLUMN ring INTEGER NOT NULL DEFAULT 3")
+        # Einmaliger Legacy-Migrate: ring=0 → 3 (Produktion).
+        await db.execute("UPDATE agents SET ring = 3 WHERE ring = 0")
+
         # Migration: token_version-Spalte für ältere Installationen nachziehen
         async with db.execute("PRAGMA table_info(agents)") as cur:
             cols = {row[1] for row in await cur.fetchall()}
@@ -220,6 +324,12 @@ async def init_db():
             ("entry_point",        "TEXT"),
             ("winget_version",     "TEXT"),
             ("winget_publisher",   "TEXT"),
+            ("winget_scope",       "TEXT NOT NULL DEFAULT 'auto'"),
+            ("required",           "INTEGER NOT NULL DEFAULT 0"),
+            ("notes",              "TEXT"),
+            ("staged_rollout",     "INTEGER NOT NULL DEFAULT 0"),
+            ("hidden_in_kiosk",    "INTEGER NOT NULL DEFAULT 0"),
+            ("auto_advance",       "INTEGER NOT NULL DEFAULT 0"),
         ]:
             if col not in pkg_cols:
                 await db.execute(f"ALTER TABLE packages ADD COLUMN {col} {ddl}")
@@ -258,6 +368,30 @@ async def init_db():
         if "last_action_package" not in sm_cols:
             await db.execute(
                 "ALTER TABLE agent_scan_meta ADD COLUMN last_action_package TEXT"
+            )
+        if "last_action_full_output" not in sm_cols:
+            await db.execute(
+                "ALTER TABLE agent_scan_meta ADD COLUMN last_action_full_output TEXT"
+            )
+        if "last_action_action" not in sm_cols:
+            await db.execute(
+                "ALTER TABLE agent_scan_meta ADD COLUMN last_action_action TEXT"
+            )
+        if "last_action_error_acked_at" not in sm_cols:
+            await db.execute(
+                "ALTER TABLE agent_scan_meta ADD COLUMN last_action_error_acked_at TEXT"
+            )
+
+        # Migration: profile.auto_update + auto_update_at
+        async with db.execute("PRAGMA table_info(profiles)") as cur:
+            prof_cols = {row[1] for row in await cur.fetchall()}
+        if "auto_update" not in prof_cols:
+            await db.execute(
+                "ALTER TABLE profiles ADD COLUMN auto_update INTEGER NOT NULL DEFAULT 0"
+            )
+        if "auto_update_at" not in prof_cols:
+            await db.execute(
+                "ALTER TABLE profiles ADD COLUMN auto_update_at TEXT"
             )
 
         await db.commit()
@@ -384,7 +518,7 @@ async def health_ping():
 
 
 async def cleanup_old_logs(days: int):
-    """Löscht audit_log und install_log Einträge älter als N Tage."""
+    """Löscht audit_log, install_log und event_log Einträge älter als N Tage."""
     if days <= 0:
         return
     async with _db() as db:
@@ -396,6 +530,10 @@ async def cleanup_old_logs(days: int):
             "DELETE FROM install_log WHERE ts < datetime('now', ?)",
             (f"-{days} days",),
         )
+        await db.execute(
+            "DELETE FROM event_log WHERE ts < datetime('now', ?)",
+            (f"-{days} days",),
+        )
         await db.commit()
 
 
@@ -404,7 +542,8 @@ async def cleanup_old_logs(days: int):
 _PKG_COLS = (
     "name, display_name, category, type, filename, sha256, size_bytes, "
     "install_args, uninstall_cmd, detection_name, current_version_id, "
-    "archive_type, entry_point, winget_version, winget_publisher"
+    "archive_type, entry_point, winget_version, winget_publisher, winget_scope, "
+    "required, notes, staged_rollout, hidden_in_kiosk, auto_advance"
 )
 
 
@@ -905,12 +1044,91 @@ async def get_agents() -> list[dict]:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT a.agent_id, a.hostname, a.registered_at, a.last_seen, "
-            "(b.agent_id IS NOT NULL) AS banned "
+            "a.ring, (b.agent_id IS NOT NULL) AS banned "
             "FROM agents a "
             "LEFT JOIN agent_blocklist b ON b.agent_id = a.agent_id "
             "ORDER BY a.hostname"
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
+
+
+async def set_agent_ring(agent_id: str, ring: int):
+    """Setzt Ring-Nummer. Gueltige Werte: 1 (Canary), 2 (Pilot),
+    3 (Produktion, Default). 0 ist Legacy, nicht mehr ueber UI setzbar."""
+    if not isinstance(ring, int) or ring < 0 or ring > 9:
+        raise ValueError(f"Invalid ring: {ring!r} (0..9)")
+    async with _db() as db:
+        await db.execute(
+            "UPDATE agents SET ring = ? WHERE agent_id = ?",
+            (ring, agent_id),
+        )
+        await db.commit()
+
+
+async def get_agents_by_ring(ring: int | str) -> list[dict]:
+    """Agents gefiltert nach Ring.
+
+    Neue Semantik (v1.7.2):
+      'all'   → alle Agents
+      'prod'  → ring = 3 (Produktion, Final)
+      'rings' → ring IN (1, 2) (Test-Ringe, vor Produktion)
+      int N   → exakt ring = N
+    """
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        if ring == "all":
+            where, params = "1=1", ()
+        elif ring == "rings":
+            where, params = "a.ring IN (1, 2)", ()
+        elif ring == "prod":
+            where, params = "a.ring = 3", ()
+        else:
+            where, params = "a.ring = ?", (int(ring),)
+        async with db.execute(
+            f"SELECT a.agent_id, a.hostname, a.last_seen, a.ring "
+            f"FROM agents a WHERE {where} AND a.agent_id NOT IN "
+            f"(SELECT agent_id FROM agent_blocklist) "
+            f"ORDER BY a.hostname",
+            params,
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_ring_counts() -> dict:
+    """Wieviele Agents pro Ring. Returns {ring_1: N, ring_2: N, ring_3: N}."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT ring, COUNT(*) AS n FROM agents "
+            "WHERE agent_id NOT IN (SELECT agent_id FROM agent_blocklist) "
+            "GROUP BY ring ORDER BY ring"
+        ) as cur:
+            return {f"ring_{r['ring']}": r["n"] for r in await cur.fetchall()}
+
+
+async def get_ring_overview() -> list[dict]:
+    """Pro Ring: liste aller Agents drin, sortiert nach Hostname.
+
+    Fuer Rollouts-Tab Ring-Ueberblick:
+      [{ring: 1, agents: [{agent_id, hostname, last_seen}, ...]}, ...]
+    """
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT a.agent_id, a.hostname, a.last_seen, a.ring "
+            "FROM agents a "
+            "WHERE a.agent_id NOT IN (SELECT agent_id FROM agent_blocklist) "
+            "ORDER BY a.ring, a.hostname"
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+    by_ring: dict[int, list[dict]] = {}
+    for r in rows:
+        ring = r["ring"] if r["ring"] in (1, 2, 3) else 3
+        by_ring.setdefault(ring, []).append(r)
+    return [
+        {"ring": n, "agents": by_ring.get(n, [])}
+        for n in (1, 2, 3)
+    ]
 
 
 async def update_agent_seen(agent_id: str, hostname: str):
@@ -950,12 +1168,131 @@ async def get_agent(agent_id: str) -> dict | None:
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT agent_id, hostname, registered_at, last_seen, token_version "
+            "SELECT agent_id, hostname, registered_at, last_seen, token_version, ring "
             "FROM agents WHERE agent_id = ?",
             (agent_id,),
         ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
+
+
+async def get_active_rollout_phases() -> dict[str, int]:
+    """Map package_name → current_phase fuer alle aktiven Rollouts.
+    Fuer Kiosk-Filter: zeigt einen Update nur wenn sein Ring erreicht ist."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT package_name, current_phase FROM rollouts WHERE status = 'active'"
+        ) as cur:
+            return {r["package_name"]: r["current_phase"] for r in await cur.fetchall()}
+
+
+async def get_rollout_latest_per_package() -> dict[str, dict]:
+    """Map package_name → letzter Rollout-Record (egal welcher Status).
+    Fuer Staged-Overview: zeigt 'letzter Rollout vor 3d' bei fertigen
+    Paketen."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM rollouts "
+            "WHERE id IN (SELECT MAX(id) FROM rollouts GROUP BY package_name)"
+        ) as cur:
+            return {r["package_name"]: dict(r) for r in await cur.fetchall()}
+
+
+async def get_package_error_counts() -> dict[str, int]:
+    """Anzahl offener (un-acked) Fehler pro Paket. Fuer Rollout-Badge."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT last_action_package AS pkg, COUNT(*) AS n "
+            "FROM agent_scan_meta "
+            "WHERE last_action_error IS NOT NULL AND last_action_error != '' "
+            "  AND (last_action_error_acked_at IS NULL OR last_action_error_acked_at = '') "
+            "  AND last_action_package IS NOT NULL "
+            "GROUP BY last_action_package"
+        ) as cur:
+            return {r["pkg"]: r["n"] for r in await cur.fetchall()}
+
+
+async def get_package_agents_version_split(
+    pkg_name: str, pkg_type: str, target_version: str | None,
+) -> dict[str, dict]:
+    """Pro Ring: wieviele Agents haben target vs. andere Version vs. missing.
+
+    Gibt {ring:int → {total, on_target, on_old, missing, agents:[{agent_id,
+    hostname, installed_version, ring}]}} zurueck. Ring 1/2/3 immer present.
+    """
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+
+        # Alle nicht-gesperrten Agents mit Ring holen
+        async with db.execute(
+            "SELECT a.agent_id, a.hostname, a.ring, a.last_seen "
+            "FROM agents a "
+            "WHERE a.agent_id NOT IN (SELECT agent_id FROM agent_blocklist) "
+            "ORDER BY a.hostname"
+        ) as cur:
+            all_agents = [dict(r) for r in await cur.fetchall()]
+
+        # Installed-Version pro Agent fuer dieses Paket
+        installed_map: dict[str, str | None] = {}
+        if pkg_type == "winget":
+            async with db.execute(
+                "SELECT agent_id, installed_version FROM agent_winget_state "
+                "WHERE winget_id = ?", (pkg_name,),
+            ) as cur:
+                for r in await cur.fetchall():
+                    installed_map[r["agent_id"]] = r["installed_version"]
+        elif pkg_type == "choco":
+            async with db.execute(
+                "SELECT agent_id, installed_version FROM agent_choco_state "
+                "WHERE choco_name = ?", (pkg_name,),
+            ) as cur:
+                for r in await cur.fetchall():
+                    installed_map[r["agent_id"]] = r["installed_version"]
+        else:  # custom
+            async with db.execute(
+                "SELECT ai.agent_id, pv.version_label "
+                "FROM agent_installations ai "
+                "LEFT JOIN package_versions pv ON pv.id = ai.version_id "
+                "WHERE ai.package_name = ?", (pkg_name,),
+            ) as cur:
+                for r in await cur.fetchall():
+                    installed_map[r["agent_id"]] = r["version_label"]
+
+    out: dict[int, dict] = {1: None, 2: None, 3: None}
+    for ring in (1, 2, 3):
+        agents_in_ring = [a for a in all_agents if (a["ring"] or 3) == ring]
+        on_target = on_old = missing = 0
+        agent_items = []
+        for a in agents_in_ring:
+            iv = installed_map.get(a["agent_id"])
+            if not iv:
+                state = "missing"
+                missing += 1
+            elif target_version and iv == target_version:
+                state = "on_target"
+                on_target += 1
+            else:
+                state = "on_old"
+                on_old += 1
+            agent_items.append({
+                "agent_id":           a["agent_id"],
+                "hostname":           a["hostname"],
+                "ring":               ring,
+                "last_seen":          a["last_seen"],
+                "installed_version":  iv,
+                "state":              state,
+            })
+        out[ring] = {
+            "total":     len(agents_in_ring),
+            "on_target": on_target,
+            "on_old":    on_old,
+            "missing":   missing,
+            "agents":    agent_items,
+        }
+    return out
 
 
 async def delete_agent(agent_id: str):
@@ -1174,7 +1511,7 @@ async def get_latest_successful_build() -> dict | None:
 
 _USER_COLS = (
     "id, username, display_name, email, password_hash, sso_provider, "
-    "sso_subject, is_active, created_at, last_login"
+    "sso_subject, is_active, created_at, last_login, role"
 )
 
 
@@ -1228,13 +1565,16 @@ async def create_admin_user(
     sso_provider: str | None = None,
     sso_subject: str | None = None,
     is_active: bool = True,
+    role: str = "admin",
 ) -> int:
+    if role not in ("admin", "operator", "viewer"):
+        raise ValueError(f"Invalid role: {role!r}")
     async with _db() as db:
         cur = await db.execute(
             "INSERT INTO admin_users (username, display_name, email, password_hash, "
-            "sso_provider, sso_subject, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "sso_provider, sso_subject, is_active, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (username, display_name, email, password_hash, sso_provider, sso_subject,
-             1 if is_active else 0),
+             1 if is_active else 0, role),
         )
         await db.commit()
         return cur.lastrowid
@@ -1247,6 +1587,7 @@ async def update_admin_user(
     email: str | None = None,
     password_hash: str | None = None,
     is_active: bool | None = None,
+    role: str | None = None,
 ):
     fields, values = [], []
     if display_name is not None:
@@ -1261,6 +1602,11 @@ async def update_admin_user(
     if is_active is not None:
         fields.append("is_active = ?")
         values.append(1 if is_active else 0)
+    if role is not None:
+        if role not in ("admin", "operator", "viewer"):
+            raise ValueError(f"Invalid role: {role!r}")
+        fields.append("role = ?")
+        values.append(role)
     if not fields:
         return
     values.append(user_id)
@@ -1315,7 +1661,7 @@ async def get_admin_session(token: str) -> dict | None:
         async with db.execute(
             "SELECT s.token, s.user_id, s.created_at, s.expires_at, s.last_active, "
             "s.ip, s.user_agent, "
-            "u.username, u.display_name, u.email, u.is_active, u.sso_provider "
+            "u.username, u.display_name, u.email, u.is_active, u.sso_provider, u.role "
             "FROM admin_sessions s JOIN admin_users u ON u.id = s.user_id "
             "WHERE s.token = ?",
             (token,),
@@ -1373,26 +1719,172 @@ async def upsert_winget_package(
     category: str,
     publisher: str | None = None,
     winget_version: str | None = None,
+    winget_scope: str = "auto",
 ):
     """Winget-Paket einfügen oder aktualisieren. `name` ist die winget
-    PackageIdentifier (z. B. 'Mozilla.Firefox')."""
+    PackageIdentifier (z. B. 'Mozilla.Firefox'). winget_scope steuert ob
+    wir --scope machine erzwingen (=machine), per-user via run_as_user
+    installieren (=user), oder ersteren versuchen mit run_as_user-Fallback
+    (=auto, Default)."""
     async with _db() as db:
         await db.execute(
             """
             INSERT INTO packages (
                 name, display_name, category, type,
-                winget_publisher, winget_version
+                winget_publisher, winget_version, winget_scope
             )
-            VALUES (?, ?, ?, 'winget', ?, ?)
+            VALUES (?, ?, ?, 'winget', ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
                 display_name     = excluded.display_name,
                 category         = excluded.category,
                 type             = 'winget',
                 winget_publisher = excluded.winget_publisher,
                 winget_version   = excluded.winget_version,
+                winget_scope     = excluded.winget_scope,
                 updated_at       = datetime('now')
             """,
-            (name, display_name, category, publisher, winget_version),
+            (name, display_name, category, publisher, winget_version, winget_scope),
+        )
+        await db.commit()
+
+
+async def update_package_auto_advance(name: str, auto: bool):
+    async with _db() as db:
+        await db.execute(
+            "UPDATE packages SET auto_advance = ?, updated_at = datetime('now') WHERE name = ?",
+            (1 if auto else 0, name),
+        )
+        await db.commit()
+
+
+async def update_package_hidden(name: str, hidden: bool):
+    async with _db() as db:
+        await db.execute(
+            "UPDATE packages SET hidden_in_kiosk = ?, updated_at = datetime('now') WHERE name = ?",
+            (1 if hidden else 0, name),
+        )
+        await db.commit()
+
+
+async def update_package_staged(name: str, staged: bool):
+    async with _db() as db:
+        await db.execute(
+            "UPDATE packages SET staged_rollout = ?, updated_at = datetime('now') WHERE name = ?",
+            (1 if staged else 0, name),
+        )
+        await db.commit()
+
+
+async def update_package_required(name: str, required: bool):
+    async with _db() as db:
+        await db.execute(
+            "UPDATE packages SET required = ?, updated_at = datetime('now') WHERE name = ?",
+            (1 if required else 0, name),
+        )
+        await db.commit()
+
+
+async def update_package_notes(name: str, notes: str):
+    async with _db() as db:
+        await db.execute(
+            "UPDATE packages SET notes = ?, updated_at = datetime('now') WHERE name = ?",
+            (notes or None, name),
+        )
+        await db.commit()
+
+
+async def get_required_packages() -> list[dict]:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT {_PKG_COLS}, required, notes "
+            "FROM packages WHERE required = 1 ORDER BY display_name COLLATE NOCASE"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_compliance_overview() -> dict:
+    """Pro required-Paket: auf welchen Agents installiert / fehlend.
+
+    Returns:
+      {
+        required_packages: [{name, display_name, type, installed_count,
+                             missing: [agent_id,hostname,...], total_agents}],
+        fully_compliant_agents: N,
+        noncompliant_agents: N,
+      }
+    """
+    required = await get_required_packages()
+    if not required:
+        return {"required_packages": [], "fully_compliant_agents": 0, "noncompliant_agents": 0}
+
+    all_agents = await get_agents()
+    total_agents = len(all_agents)
+    agent_map = {a["agent_id"]: a for a in all_agents}
+
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        result_packages: list[dict] = []
+        # Fuer Compliance-Summary je Agent
+        missing_by_agent: dict[str, int] = {a["agent_id"]: 0 for a in all_agents}
+
+        for pkg in required:
+            ptype = pkg.get("type") or "choco"
+            installed_ids: set[str] = set()
+            if ptype == "winget":
+                async with db.execute(
+                    "SELECT agent_id FROM agent_winget_state WHERE winget_id = ?",
+                    (pkg["name"],),
+                ) as cur:
+                    installed_ids = {r["agent_id"] for r in await cur.fetchall()}
+            elif ptype == "choco":
+                async with db.execute(
+                    "SELECT agent_id FROM agent_choco_state WHERE choco_name = ?",
+                    (pkg["name"],),
+                ) as cur:
+                    installed_ids = {r["agent_id"] for r in await cur.fetchall()}
+            else:  # custom
+                async with db.execute(
+                    "SELECT agent_id FROM agent_installations WHERE package_name = ?",
+                    (pkg["name"],),
+                ) as cur:
+                    installed_ids = {r["agent_id"] for r in await cur.fetchall()}
+
+            missing = []
+            for a in all_agents:
+                if a["agent_id"] not in installed_ids:
+                    missing.append({"agent_id": a["agent_id"], "hostname": a.get("hostname")})
+                    missing_by_agent[a["agent_id"]] = missing_by_agent.get(a["agent_id"], 0) + 1
+
+            result_packages.append({
+                "name":            pkg["name"],
+                "display_name":    pkg["display_name"],
+                "type":            ptype,
+                "installed_count": len(installed_ids),
+                "total_agents":    total_agents,
+                "missing":         missing,
+            })
+
+        fully_compliant = sum(1 for v in missing_by_agent.values() if v == 0)
+        noncompliant = total_agents - fully_compliant
+
+    return {
+        "required_packages":       result_packages,
+        "fully_compliant_agents":  fully_compliant,
+        "noncompliant_agents":     noncompliant,
+        "total_agents":            total_agents,
+    }
+
+
+async def update_winget_scope(name: str, scope: str):
+    """Aendert nur das winget_scope-Feld eines existierenden Pakets."""
+    if scope not in ("auto", "machine", "user"):
+        raise ValueError(f"Invalid winget_scope: {scope!r}")
+    async with _db() as db:
+        await db.execute(
+            "UPDATE packages SET winget_scope = ?, updated_at = datetime('now') "
+            "WHERE name = ? AND type = 'winget'",
+            (scope, name),
         )
         await db.commit()
 
@@ -1527,23 +2019,52 @@ async def upsert_action_result(
     agent_id: str,
     package_name: str,
     error: str | None,
+    full_output: str | None = None,
+    action: str | None = None,
 ):
     """Schreibt das Ergebnis einer User- oder Admin-Aktion (Install/Upgrade/
     Uninstall) in agent_scan_meta. error=None bedeutet Aktion erfolgreich,
-    bei Erfolg wird last_action_error gelöscht. Aufgerufen vom
-    _run_winget_command_bg in routes/install.py."""
+    bei Erfolg wird last_action_error gelöscht. full_output ist der ganze
+    stdout-Tail der Operation — landet in last_action_full_output und kann
+    im Admin-UI ueber das Fehler-Detail-Modal geoeffnet werden."""
+    # Output auf vernuenftiges Limit kuerzen — winget kann Megabytes Progress-
+    # Bars rauspucken die wir nicht in der DB brauchen.
+    if full_output and len(full_output) > 32_000:
+        full_output = full_output[:16_000] + "\n[...]\n" + full_output[-16_000:]
     async with _db() as db:
+        # Neue Aktion → Ack zuruecksetzen damit ein neuer Fehler (oder auch
+        # ein Erfolgs-Reset) wieder im UI auftaucht. Sonst wuerde ein
+        # gestern ack'd Agent stumm bleiben trotz frischem Problem.
         await db.execute(
             "INSERT INTO agent_scan_meta "
-            "(agent_id, last_action_at, last_action_package, last_action_error) "
-            "VALUES (?, datetime('now'), ?, ?) "
+            "(agent_id, last_action_at, last_action_package, last_action_error, "
+            " last_action_full_output, last_action_action, last_action_error_acked_at) "
+            "VALUES (?, datetime('now'), ?, ?, ?, ?, NULL) "
             "ON CONFLICT(agent_id) DO UPDATE SET "
             "last_action_at = datetime('now'), "
             "last_action_package = excluded.last_action_package, "
-            "last_action_error = excluded.last_action_error",
-            (agent_id, package_name, error),
+            "last_action_error = excluded.last_action_error, "
+            "last_action_full_output = excluded.last_action_full_output, "
+            "last_action_action = excluded.last_action_action, "
+            "last_action_error_acked_at = NULL",
+            (agent_id, package_name, error, full_output, action),
         )
         await db.commit()
+
+
+async def get_last_action_output(agent_id: str) -> dict | None:
+    """Liefert den vollen Output + Metadaten der letzten Aktion fuer einen Agent.
+    Wird vom Admin-UI Fehler-Detail-Modal gerufen."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT last_action_at, last_action_package, last_action_action, "
+            "       last_action_error, last_action_full_output "
+            "FROM agent_scan_meta WHERE agent_id = ?",
+            (agent_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
 
 
 async def get_all_scan_meta() -> list[dict]:
@@ -1554,6 +2075,402 @@ async def get_all_scan_meta() -> list[dict]:
             "FROM agent_scan_meta"
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_fleet_errors(limit: int = 200, include_acked: bool = False) -> list[dict]:
+    """Alle Agents mit aktivem last_action_error, joined mit hostname.
+    Fuer Home-Dashboard + Fleet-Error-Zentrale.
+
+    Default: nur UN-acked Fehler (acked_at IS NULL). include_acked=True
+    zeigt alles mit Flag."""
+    where = "WHERE m.last_action_error IS NOT NULL AND m.last_action_error != ''"
+    if not include_acked:
+        where += " AND (m.last_action_error_acked_at IS NULL OR m.last_action_error_acked_at = '')"
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT m.agent_id, a.hostname, m.last_action_at, m.last_action_package, "
+            f"       m.last_action_action, m.last_action_error, "
+            f"       m.last_action_error_acked_at "
+            f"FROM agent_scan_meta m "
+            f"LEFT JOIN agents a ON a.agent_id = m.agent_id "
+            f"{where} "
+            f"ORDER BY m.last_action_at DESC LIMIT ?",
+            (limit,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def ack_agent_error(agent_id: str):
+    """Markiert den letzten Fehler eines Agents als bestaetigt. Fehler-Text
+    und -Output bleiben fuer Audit-Zwecke erhalten."""
+    async with _db() as db:
+        await db.execute(
+            "UPDATE agent_scan_meta SET last_action_error_acked_at = datetime('now') "
+            "WHERE agent_id = ?",
+            (agent_id,),
+        )
+        await db.commit()
+
+
+async def ack_all_errors() -> int:
+    """Bulk-Ack aller offenen Fehler. Gibt Count zurueck."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM agent_scan_meta "
+            "WHERE last_action_error IS NOT NULL AND last_action_error != '' "
+            "AND (last_action_error_acked_at IS NULL OR last_action_error_acked_at = '')"
+        ) as cur:
+            count = (await cur.fetchone())["n"]
+        await db.execute(
+            "UPDATE agent_scan_meta SET last_action_error_acked_at = datetime('now') "
+            "WHERE last_action_error IS NOT NULL AND last_action_error != '' "
+            "AND (last_action_error_acked_at IS NULL OR last_action_error_acked_at = '')"
+        )
+        await db.commit()
+        return count
+
+
+async def get_fleet_stats() -> dict:
+    """Aggregierte Fleet-KPIs fuer das Home-Dashboard.
+
+    Returns:
+      {
+        agents: {total, online, recent, banned},
+        packages: {total, winget, choco, custom},
+        outdated: {winget, choco, custom, total_edges},
+        errors: {count_7d},
+        installs: {today, last_7d},
+      }
+    """
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    today_iso = now.date().isoformat()
+    seven_days_ago = (now - timedelta(days=7)).isoformat(timespec='seconds')
+    five_min_ago = (now - timedelta(minutes=5)).isoformat(timespec='seconds')
+    day_ago = (now - timedelta(hours=24)).isoformat(timespec='seconds')
+
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+
+        # Agents
+        async with db.execute("SELECT COUNT(*) AS n FROM agents") as cur:
+            agents_total = (await cur.fetchone())["n"]
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM agents WHERE last_seen >= ?",
+            (five_min_ago,),
+        ) as cur:
+            agents_online = (await cur.fetchone())["n"]
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM agents WHERE last_seen >= ?",
+            (day_ago,),
+        ) as cur:
+            agents_recent = (await cur.fetchone())["n"]
+        async with db.execute("SELECT COUNT(*) AS n FROM agent_blocklist") as cur:
+            agents_banned = (await cur.fetchone())["n"]
+
+        # Pakete
+        async with db.execute(
+            "SELECT type, COUNT(*) AS n FROM packages GROUP BY type"
+        ) as cur:
+            pkg_by_type = {r["type"]: r["n"] for r in await cur.fetchall()}
+        pkg_total = sum(pkg_by_type.values())
+
+        # Outdated edges
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM agent_winget_state WHERE available_version IS NOT NULL"
+        ) as cur:
+            outdated_winget = (await cur.fetchone())["n"]
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM agent_choco_state WHERE available_version IS NOT NULL"
+        ) as cur:
+            outdated_choco = (await cur.fetchone())["n"]
+        # Custom: agent_installations wo version_id != package.current_version_id
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM agent_installations ai "
+            "JOIN packages p ON p.name = ai.package_name "
+            "WHERE p.type = 'custom' AND p.current_version_id IS NOT NULL "
+            "  AND (ai.version_id IS NULL OR ai.version_id != p.current_version_id)"
+        ) as cur:
+            outdated_custom = (await cur.fetchone())["n"]
+
+        # Fehler letzte 7 Tage
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM agent_scan_meta "
+            "WHERE last_action_error IS NOT NULL AND last_action_error != '' "
+            "AND (last_action_error_acked_at IS NULL OR last_action_error_acked_at = '') "
+            "AND last_action_at >= ?",
+            (seven_days_ago,),
+        ) as cur:
+            errors_count = (await cur.fetchone())["n"]
+
+        # Installs today / last 7d (aus install_log falls vorhanden)
+        try:
+            async with db.execute(
+                "SELECT COUNT(*) AS n FROM install_log WHERE ts >= ?",
+                (today_iso,),
+            ) as cur:
+                installs_today = (await cur.fetchone())["n"]
+            async with db.execute(
+                "SELECT COUNT(*) AS n FROM install_log WHERE ts >= ?",
+                (seven_days_ago,),
+            ) as cur:
+                installs_7d = (await cur.fetchone())["n"]
+        except Exception:
+            installs_today = installs_7d = 0
+
+    ring_counts = await get_ring_counts()
+
+    return {
+        "agents": {
+            "total":   agents_total,
+            "online":  agents_online,
+            "recent":  agents_recent,
+            "banned":  agents_banned,
+            "rings":   ring_counts,
+        },
+        "packages": {
+            "total":  pkg_total,
+            "winget": pkg_by_type.get("winget", 0),
+            "choco":  pkg_by_type.get("choco", 0),
+            "custom": pkg_by_type.get("custom", 0),
+        },
+        "outdated": {
+            "winget": outdated_winget,
+            "choco":  outdated_choco,
+            "custom": outdated_custom,
+            "total":  outdated_winget + outdated_choco + outdated_custom,
+        },
+        "errors": {"count_7d": errors_count},
+        "installs": {"today": installs_today, "last_7d": installs_7d},
+    }
+
+
+async def get_recent_installs(limit: int = 20) -> list[dict]:
+    """Letzte Installs/Uninstalls fleet-weit fuer Dashboard-Widget."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        try:
+            async with db.execute(
+                "SELECT l.ts, l.agent_id, l.hostname, l.package_name, "
+                "       l.display_name, l.action "
+                "FROM install_log l "
+                "ORDER BY l.ts DESC LIMIT ?",
+                (limit,),
+            ) as cur:
+                return [dict(r) for r in await cur.fetchall()]
+        except Exception:
+            return []
+
+
+# ── Scheduled Jobs (Maintenance-Window dispatches) ─────────────────────────
+
+async def create_scheduled_job(
+    run_at: str, action_type: str, action_params: dict,
+    description: str, created_by: int | None,
+) -> int:
+    import json as _json
+    async with _db() as db:
+        cur = await db.execute(
+            "INSERT INTO scheduled_jobs "
+            "(run_at, action_type, action_params, description, created_by) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (run_at, action_type, _json.dumps(action_params), description, created_by),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_scheduled_job(job_id: int) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM scheduled_jobs WHERE id = ?", (job_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def list_scheduled_jobs(status: str | None = None, limit: int = 100) -> list[dict]:
+    where = "WHERE status = ?" if status else ""
+    params = (status, limit) if status else (limit,)
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT * FROM scheduled_jobs {where} "
+            f"ORDER BY run_at ASC LIMIT ?",
+            params,
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def list_pending_scheduled_jobs() -> list[dict]:
+    """Pending jobs fuer APScheduler-Wiederaufnahme beim Start."""
+    return await list_scheduled_jobs(status="pending", limit=500)
+
+
+async def update_scheduled_job_status(
+    job_id: int, status: str, result: str | None = None,
+):
+    async with _db() as db:
+        await db.execute(
+            "UPDATE scheduled_jobs SET status = ?, executed_at = datetime('now'), "
+            "result = ? WHERE id = ?",
+            (status, result, job_id),
+        )
+        await db.commit()
+
+
+async def cancel_scheduled_job(job_id: int):
+    async with _db() as db:
+        await db.execute(
+            "UPDATE scheduled_jobs SET status = 'cancelled', "
+            "executed_at = datetime('now') WHERE id = ? AND status = 'pending'",
+            (job_id,),
+        )
+        await db.commit()
+
+
+# ── Rollouts (phased rollout state machine) ─────────────────────────────────
+
+async def create_rollout(
+    package_name: str, display_name: str, action: str,
+    created_by: int | None,
+) -> int:
+    import json as _json
+    async with _db() as db:
+        cur = await db.execute(
+            "INSERT INTO rollouts "
+            "(package_name, display_name, action, current_phase, status, "
+            " created_by, last_advanced_at, phase_history) "
+            "VALUES (?, ?, ?, 1, 'active', ?, datetime('now'), ?)",
+            (package_name, display_name, action, created_by, _json.dumps([])),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_rollout(rollout_id: int) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM rollouts WHERE id = ?", (rollout_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def list_rollouts_for_package(name: str, limit: int = 50) -> list[dict]:
+    """Alle Rollouts eines Pakets, neueste zuerst. Fuer Per-Paket-Historie
+    im Rollout-Details-Expand."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM rollouts WHERE package_name = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (name, limit),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def list_rollouts(status: str | None = None, limit: int = 50) -> list[dict]:
+    where = "WHERE status = ?" if status else "WHERE 1=1"
+    params = (status, limit) if status else (limit,)
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT * FROM rollouts {where} "
+            f"ORDER BY (status='active') DESC, created_at DESC LIMIT ?",
+            params,
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def advance_rollout(rollout_id: int, phase_result: dict,
+                          expected_phase: int | None = None) -> dict | None:
+    """Naechste Phase — compare-and-swap gegen aktuelle Phase.
+
+    Wenn expected_phase gesetzt ist: UPDATE greift nur wenn current_phase
+    noch genau diesen Wert hat. Damit kann bei gleichzeitigem Klick von
+    zwei Admins nicht von 1 auf 3 gesprungen werden — zweiter Aufruf
+    laeuft ins Leere und bekommt None zurueck.
+
+    Returns updated rollout oder None wenn Rollout weg, inaktiv oder
+    Phase inzwischen weitergelaufen ist."""
+    import json as _json
+    r = await get_rollout(rollout_id)
+    if not r or r["status"] != "active":
+        return None
+    if expected_phase is None:
+        expected_phase = r["current_phase"]
+    if r["current_phase"] != expected_phase:
+        return None
+    hist = []
+    try:
+        hist = _json.loads(r["phase_history"] or "[]")
+    except Exception:
+        hist = []
+    hist.append({
+        "phase": r["current_phase"],
+        "at": phase_result.get("at"),
+        **phase_result,
+    })
+    next_phase = r["current_phase"] + 1
+    new_status = "done" if next_phase > 3 else "active"
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE rollouts SET current_phase = ?, status = ?, "
+            "last_advanced_at = datetime('now'), phase_history = ? "
+            "WHERE id = ? AND current_phase = ? AND status = 'active'",
+            (next_phase, new_status, _json.dumps(hist), rollout_id, expected_phase),
+        )
+        await db.commit()
+        if cur.rowcount == 0:
+            # Race verloren — anderer Request hat advanced
+            return None
+    return await get_rollout(rollout_id)
+
+
+async def cancel_rollout(rollout_id: int):
+    async with _db() as db:
+        await db.execute(
+            "UPDATE rollouts SET status = 'cancelled', "
+            "last_advanced_at = datetime('now') WHERE id = ? AND status = 'active'",
+            (rollout_id,),
+        )
+        await db.commit()
+
+
+async def get_top_outdated_packages(limit: int = 10) -> list[dict]:
+    """Pakete mit den meisten outdated Clients — priorisierte Update-Liste."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        # Winget
+        async with db.execute(
+            "SELECT s.winget_id AS name, p.display_name, 'winget' AS type, COUNT(*) AS outdated "
+            "FROM agent_winget_state s "
+            "JOIN packages p ON p.name = s.winget_id "
+            "WHERE s.available_version IS NOT NULL "
+            "GROUP BY s.winget_id, p.display_name "
+            "ORDER BY outdated DESC LIMIT ?",
+            (limit,),
+        ) as cur:
+            wg = [dict(r) for r in await cur.fetchall()]
+        # Choco
+        async with db.execute(
+            "SELECT s.choco_name AS name, p.display_name, 'choco' AS type, COUNT(*) AS outdated "
+            "FROM agent_choco_state s "
+            "JOIN packages p ON p.name = s.choco_name "
+            "WHERE s.available_version IS NOT NULL "
+            "GROUP BY s.choco_name, p.display_name "
+            "ORDER BY outdated DESC LIMIT ?",
+            (limit,),
+        ) as cur:
+            ch = [dict(r) for r in await cur.fetchall()]
+    combined = wg + ch
+    combined.sort(key=lambda r: r["outdated"], reverse=True)
+    return combined[:limit]
 
 
 async def get_agents_due_for_scan(
@@ -1825,3 +2742,306 @@ async def get_agents_with_choco_package(choco_name: str) -> list[dict]:
             (choco_name,),
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
+
+
+# ── Profile ────────────────────────────────────────────────────────────────────
+
+async def list_profiles() -> list[dict]:
+    """Alle Profile mit Paket-Count und Agent-Count fuer die Liste im Admin-UI."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT p.id, p.name, p.description, p.color, "
+            "       p.auto_update, p.auto_update_at, "
+            "       p.created_at, p.updated_at, "
+            "       (SELECT COUNT(*) FROM profile_packages WHERE profile_id = p.id) AS package_count, "
+            "       (SELECT COUNT(*) FROM agent_profiles  WHERE profile_id = p.id) AS agent_count "
+            "FROM profiles p "
+            "ORDER BY p.name COLLATE NOCASE"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_profile(profile_id: int) -> dict | None:
+    """Detail eines Profils inkl. der zugewiesenen Pakete (in sort_order)."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, name, description, color, auto_update, auto_update_at, "
+            "       created_at, updated_at "
+            "FROM profiles WHERE id = ?",
+            (profile_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            if not row:
+                return None
+            profile = dict(row)
+        async with db.execute(
+            "SELECT pp.package_name, pp.version_pin, pp.sort_order, "
+            "       p.display_name, p.type, p.category "
+            "FROM profile_packages pp "
+            "JOIN packages p ON p.name = pp.package_name "
+            "WHERE pp.profile_id = ? "
+            "ORDER BY pp.sort_order, pp.package_name",
+            (profile_id,),
+        ) as cur:
+            profile["packages"] = [dict(r) for r in await cur.fetchall()]
+        return profile
+
+
+async def get_profile_by_name(name: str) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id FROM profiles WHERE name = ? COLLATE NOCASE", (name,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def create_profile(
+    name: str,
+    description: str,
+    color: str | None = None,
+    auto_update: bool = False,
+) -> int:
+    """Legt ein neues Profil an. Wirft IntegrityError wenn der Name schon existiert."""
+    async with _db() as db:
+        cur = await db.execute(
+            "INSERT INTO profiles (name, description, color, auto_update) "
+            "VALUES (?, ?, ?, ?)",
+            (name, description or "", color, 1 if auto_update else 0),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def update_profile_meta(
+    profile_id: int,
+    name: str | None = None,
+    description: str | None = None,
+    color: str | None = None,
+    auto_update: bool | None = None,
+):
+    """Aktualisiert nur die Meta-Felder, NICHT die Pakete (das macht set_profile_packages)."""
+    fields, params = [], []
+    if name is not None:
+        fields.append("name = ?"); params.append(name)
+    if description is not None:
+        fields.append("description = ?"); params.append(description)
+    if color is not None:
+        fields.append("color = ?"); params.append(color)
+    if auto_update is not None:
+        fields.append("auto_update = ?"); params.append(1 if auto_update else 0)
+    if not fields:
+        return
+    fields.append("updated_at = datetime('now')")
+    params.append(profile_id)
+    async with _db() as db:
+        await db.execute(
+            f"UPDATE profiles SET {', '.join(fields)} WHERE id = ?",
+            params,
+        )
+        await db.commit()
+
+
+async def list_auto_update_profiles() -> list[dict]:
+    """Alle Profile mit auto_update=1, fuer den nightly Job."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, name FROM profiles WHERE auto_update = 1 ORDER BY id"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def mark_profile_auto_update_run(profile_id: int):
+    """Setzt auto_update_at = jetzt — wird vom Auto-Update-Job nach jedem Lauf
+    pro Profil gesetzt damit die UI „letzter Lauf vor X Stunden" anzeigen kann."""
+    async with _db() as db:
+        await db.execute(
+            "UPDATE profiles SET auto_update_at = datetime('now') WHERE id = ?",
+            (profile_id,),
+        )
+        await db.commit()
+
+
+async def delete_profile(profile_id: int):
+    """Loescht das Profil. Cascades auf profile_packages und agent_profiles —
+    aber NICHT auf installierte Pakete (das waere destruktiv)."""
+    async with _db() as db:
+        await db.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
+        await db.commit()
+
+
+async def set_profile_packages(
+    profile_id: int,
+    packages: list[dict],
+) -> tuple[set[str], set[str]]:
+    """Setzt die Paket-Liste eines Profils auf den uebergebenen Stand.
+
+    Eingabe: list of {package_name, version_pin?, sort_order?}.
+    Returns (added, removed) mit den Paketnamen die neu hinzugekommen bzw.
+    rausgeflogen sind — fuer Auto-Propagation und Audit-Logging.
+    """
+    async with _db() as db:
+        async with db.execute(
+            "SELECT package_name FROM profile_packages WHERE profile_id = ?",
+            (profile_id,),
+        ) as cur:
+            old = {r[0] for r in await cur.fetchall()}
+
+        new = {p["package_name"] for p in packages}
+        added = new - old
+        removed = old - new
+
+        await db.execute("DELETE FROM profile_packages WHERE profile_id = ?", (profile_id,))
+        for idx, pkg in enumerate(packages):
+            await db.execute(
+                "INSERT INTO profile_packages (profile_id, package_name, version_pin, sort_order) "
+                "VALUES (?, ?, ?, ?)",
+                (profile_id, pkg["package_name"], pkg.get("version_pin"),
+                 pkg.get("sort_order", idx)),
+            )
+        await db.execute(
+            "UPDATE profiles SET updated_at = datetime('now') WHERE id = ?",
+            (profile_id,),
+        )
+        await db.commit()
+        return added, removed
+
+
+async def list_agent_profiles(agent_id: str) -> list[dict]:
+    """Alle Profile die einem Agent zugewiesen sind (mit Profil-Namen)."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT p.id, p.name, p.description, p.color, ap.assigned_at, ap.assigned_by "
+            "FROM agent_profiles ap "
+            "JOIN profiles p ON p.id = ap.profile_id "
+            "WHERE ap.agent_id = ? "
+            "ORDER BY p.name COLLATE NOCASE",
+            (agent_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_agents_for_profile(profile_id: int) -> list[dict]:
+    """Alle Agents die ein bestimmtes Profil zugewiesen haben."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT a.agent_id, a.hostname, a.last_seen, a.ring, ap.assigned_at "
+            "FROM agent_profiles ap "
+            "JOIN agents a ON a.agent_id = ap.agent_id "
+            "WHERE ap.profile_id = ? "
+            "ORDER BY a.hostname",
+            (profile_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def assign_profile_to_agent(agent_id: str, profile_id: int, assigned_by: str | None = None) -> bool:
+    """Returns True wenn neu zugewiesen, False wenn schon assigned (idempotent)."""
+    async with _db() as db:
+        try:
+            await db.execute(
+                "INSERT INTO agent_profiles (agent_id, profile_id, assigned_by) VALUES (?, ?, ?)",
+                (agent_id, profile_id, assigned_by),
+            )
+            await db.commit()
+            return True
+        except Exception:
+            return False
+
+
+async def unassign_profile_from_agent(agent_id: str, profile_id: int) -> bool:
+    async with _db() as db:
+        cur = await db.execute(
+            "DELETE FROM agent_profiles WHERE agent_id = ? AND profile_id = ?",
+            (agent_id, profile_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_packages_in_profile(profile_id: int) -> list[dict]:
+    """Nur die Paket-Liste eines Profils (ohne Profil-Meta) — fuer Apply-Pfad."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT pp.package_name, pp.version_pin, pp.sort_order "
+            "FROM profile_packages "
+            "AS pp WHERE pp.profile_id = ? "
+            "ORDER BY pp.sort_order, pp.package_name",
+            (profile_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_profile_names_for_package(package_name: str) -> list[str]:
+    """Welche Profile referenzieren ein bestimmtes Paket — fuer die
+    'in Profilen' Spalte in der Pakete-Liste."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT p.name FROM profile_packages pp "
+            "JOIN profiles p ON p.id = pp.profile_id "
+            "WHERE pp.package_name = ? "
+            "ORDER BY p.name COLLATE NOCASE",
+            (package_name,),
+        ) as cur:
+            return [r[0] for r in await cur.fetchall()]
+
+
+# ── Event Log (typed business events, nicht HTTP-Audit) ───────────────────────
+
+async def log_audit_event(event_type: str, actor: str | None = None,
+                          details: dict | None = None):
+    """Schreibt einen typisierten Business-Event ins event_log.
+
+    Verwendet fuer Profile-Aktionen, Bulk-Operationen und andere
+    Admin-getriggerte Vorgaenge die nicht im HTTP-Audit-Log auftauchen.
+    """
+    import json as _json
+    detail_json = _json.dumps(details, ensure_ascii=False) if details else None
+    async with _db() as db:
+        await db.execute(
+            "INSERT INTO event_log (event_type, actor, details) VALUES (?, ?, ?)",
+            (event_type, actor, detail_json),
+        )
+        await db.commit()
+
+
+async def get_event_log(
+    limit: int = 200,
+    event_type_prefix: str | None = None,
+) -> list[dict]:
+    """Liefert die letzten N typisierten Events. Optional gefiltert nach
+    event_type-Prefix (z.B. 'profile_' fuer alle Profile-Events)."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        if event_type_prefix:
+            query = (
+                "SELECT id, ts, event_type, actor, details FROM event_log "
+                "WHERE event_type LIKE ? ORDER BY id DESC LIMIT ?"
+            )
+            params = (event_type_prefix + "%", limit)
+        else:
+            query = (
+                "SELECT id, ts, event_type, actor, details FROM event_log "
+                "ORDER BY id DESC LIMIT ?"
+            )
+            params = (limit,)
+        async with db.execute(query, params) as cur:
+            rows = []
+            for r in await cur.fetchall():
+                row = dict(r)
+                # JSON detail-string optional zurueck-parsen
+                if row.get("details"):
+                    try:
+                        import json as _json
+                        row["details"] = _json.loads(row["details"])
+                    except Exception:
+                        pass
+                rows.append(row)
+            return rows
