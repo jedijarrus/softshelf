@@ -3655,12 +3655,32 @@ async def delete_profile_endpoint(profile_id: int, request: Request):
     return {"ok": True}
 
 
+_PROFILE_INSTALL_DELAY = 45  # Sekunden zwischen Paket-Installationen pro Agent
+
+
+async def _apply_profile_sequential(agent_id: str, hostname: str,
+                                     packages_to_install: list[tuple[dict, str | None]]):
+    """Background-Task: installiert Pakete nacheinander auf einem Agent.
+    Wartet PROFILE_INSTALL_DELAY Sekunden zwischen den Installationen
+    damit der Agent nicht ueberlastet wird."""
+    from routes.install import dispatch_install_for_agent
+    for i, (pkg, pin) in enumerate(packages_to_install):
+        if i > 0:
+            await asyncio.sleep(_PROFILE_INSTALL_DELAY)
+        try:
+            await dispatch_install_for_agent(agent_id, hostname, pkg, version_pin=pin)
+        except Exception as e:
+            logger.warning(
+                "Profile sequential install failed agent=%s pkg=%s: %s",
+                agent_id, pkg.get("name"), e,
+            )
+
+
 @router.post("/admin/api/profiles/{profile_id}/apply", dependencies=[Depends(_require_admin)])
 async def apply_profile_endpoint(profile_id: int, body: ProfileApplyBody, request: Request):
-    """Assign Profil zu N Agents UND dispatch sofort einen Install fuer jedes
-    Profil-Paket auf jedem dieser Agents. Idempotent — bereits installierte
-    Pakete laufen einfach durch (dispatch ist fire-and-forget)."""
-    from routes.install import dispatch_install_for_agent
+    """Assign Profil zu N Agents UND dispatch Installs sequentiell pro Agent.
+    Pakete werden nacheinander installiert (45s Delay) statt alle gleichzeitig,
+    damit der Agent nicht ueberlastet wird."""
 
     profile = await database.get_profile(profile_id)
     if not profile:
@@ -3685,6 +3705,7 @@ async def apply_profile_endpoint(profile_id: int, body: ProfileApplyBody, reques
             agent_id, profile_id, assigned_by=user.get("username"),
         )
         wstate, cstate, tracked, tsw = await _agent_state_snapshot(agent_id)
+        to_install: list[tuple[dict, str | None]] = []
         for pp in profile["packages"]:
             pkg = await database.get_package(pp["package_name"])
             if not pkg:
@@ -3693,16 +3714,11 @@ async def apply_profile_endpoint(profile_id: int, body: ProfileApplyBody, reques
             if _is_package_satisfied(pkg, pin, wstate, cstate, tracked, tsw):
                 skipped_existing += 1
                 continue
-            try:
-                await dispatch_install_for_agent(
-                    agent_id, agent["hostname"], pkg, version_pin=pin,
-                )
-                queued += 1
-            except HTTPException as e:
-                logger.warning(
-                    "Profile apply dispatch failed agent=%s pkg=%s: %s",
-                    agent_id, pp["package_name"], e.detail,
-                )
+            to_install.append((pkg, pin))
+            queued += 1
+
+        if to_install:
+            _spawn_bg(_apply_profile_sequential(agent_id, agent["hostname"], to_install))
 
     await database.log_audit_event(
         "profile_applied",
