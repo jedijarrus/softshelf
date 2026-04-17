@@ -42,16 +42,16 @@ def _slug_from_filename(filename: str) -> str:
     slug = re.sub(r"_+", "_", slug).strip("_-.")
     if not slug or not slug[0].isalnum():
         slug = "pkg_" + slug
-    return slug[:100]
+    return slug[:90]  # Platz fuer -2..-99 Suffix von _unique_name
 
 
 async def _unique_name(slug: str) -> str:
     """Sucht einen freien Namen, indem ggf. -2, -3, ... angehängt wird."""
-    candidate = slug
+    candidate = slug[:100]
     n = 1
     while await database.get_package(candidate) is not None:
         n += 1
-        candidate = f"{slug}-{n}"
+        candidate = f"{slug[:96]}-{n}"
     return candidate
 
 
@@ -164,6 +164,44 @@ async def parse_msi_metadata(path: str) -> dict:
 def build_msi_uninstall_cmd(product_code: str) -> str:
     """Standard-Uninstall-Command für eine MSI per Product-Code."""
     return f'msiexec /x "{product_code}" /qn /norestart'
+
+
+async def parse_exe_metadata(path: str) -> dict:
+    """
+    Extrahiert ProductName und CompanyName aus einer EXE via 7z.
+
+    7z parsed NSIS-Header, Inno-Setup-Daten, PE-VersionInfo und embedded
+    Archive automatisch — robuster als unsere manuelle Binary-Analyse.
+    Gibt {} zurück wenn 7z fehlt oder nichts findet.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "7z", "l", "-slt", path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+    result = {}
+    for line in stdout.decode("utf-8", errors="replace").splitlines():
+        if ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        key = key.strip()
+        val = val.strip()
+        if not val:
+            continue
+        if key == "ProductName" and "ProductName" not in result:
+            result["ProductName"] = val
+        elif key == "CompanyName" and "CompanyName" not in result:
+            result["CompanyName"] = val
+    return result
 
 
 # ── Folder Upload (zippen serverseitig) ───────────────────────────────────────

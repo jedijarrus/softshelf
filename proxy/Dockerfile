@@ -5,7 +5,7 @@ WORKDIR /app
 # gosu für privilege drop in entrypoint, msitools für MSI-Metadaten-Parsing,
 # dann non-root User
 RUN apt-get update \
- && apt-get install -y --no-install-recommends gosu msitools \
+ && apt-get install -y --no-install-recommends gosu msitools p7zip-full \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -r -u 1001 -s /usr/sbin/nologin softshelf
 
