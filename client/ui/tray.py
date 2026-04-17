@@ -3,9 +3,15 @@ System Tray Icon – pystray läuft im Hintergrund-Thread,
 Fenster werden sicher über Qt-Signals auf dem Main-Thread geöffnet.
 
 Health-Monitor: pollt den Proxy alle HEALTH_INTERVAL Sekunden. Bei einem
-State-Übergang (online ↔ offline) wird eine Tray-Notification angezeigt
-und das Icon visuell aktualisiert (rot bei offline).
+State-Übergang (online ↔ offline) wird das Icon visuell aktualisiert
+(rot bei offline) und das PackageWindow informiert (In-Window-Banner
+statt aufdringlicher OS-Toast-Notifications).
+
+Custom Icon: beim Start wird versucht das Branding-Icon vom Server zu
+laden (/api/v1/icon). Wenn vorhanden wird es als Tray-Icon verwendet,
+sonst fällt es auf das generierte Fallback-Icon zurück.
 """
+import io
 import threading
 from PIL import Image, ImageDraw
 import pystray
@@ -19,9 +25,8 @@ from _version import __version__
 HEALTH_INTERVAL = 60  # Sekunden zwischen Health-Checks
 
 
-def _create_icon_image(offline: bool = False) -> Image.Image:
-    """Schlichtes Quadrat mit weißem Innenrahmen — passt zum Web-Admin.
-    Offline-Variante in Rot."""
+def _create_fallback_icon(offline: bool = False) -> Image.Image:
+    """Generiertes Fallback-Icon wenn kein Custom-Icon vom Server geladen."""
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     fill = (220, 38, 38) if offline else (9, 9, 11)  # red-600 / zinc-950
@@ -30,18 +35,28 @@ def _create_icon_image(offline: bool = False) -> Image.Image:
     return img
 
 
+def _tint_icon_red(img: Image.Image) -> Image.Image:
+    """Overlay: Custom-Icon mit rotem Warndot unten rechts."""
+    out = img.copy().convert("RGBA").resize((64, 64), Image.LANCZOS)
+    draw = ImageDraw.Draw(out)
+    # Roter Dot mit weißem Ring (unten rechts)
+    draw.ellipse([42, 42, 62, 62], fill=(255, 255, 255))
+    draw.ellipse([44, 44, 60, 60], fill=(220, 38, 38))
+    return out
+
+
 class KioskTray(QObject):
     _show_signal = pyqtSignal()
     _quit_signal = pyqtSignal()
     _health_signal = pyqtSignal(bool)  # True = online, False = offline
 
     def __init__(self, api: KioskApiClient, app_name: str = "Softshelf"):
-        # Default oben muss konsistent zu config.py sein
         super().__init__()
         self._api = api
         self._app_name = app_name
         self._window = None
         self._icon: pystray.Icon | None = None
+        self._custom_icon: Image.Image | None = None  # vom Server geladen
         # Health-Monitor State
         self._is_online: bool | None = None  # None bis erste Messung
         self._stop_health = threading.Event()
@@ -53,6 +68,7 @@ class KioskTray(QObject):
 
     def start(self):
         """Startet pystray im Hintergrund-Thread (blockiert NICHT)."""
+        self._load_custom_icon()
         menu = pystray.Menu(
             pystray.MenuItem(self._app_name, self._request_open, default=True),
             pystray.Menu.SEPARATOR,
@@ -60,12 +76,27 @@ class KioskTray(QObject):
         )
         self._icon = pystray.Icon(
             name="softshelf",
-            icon=_create_icon_image(),
+            icon=self._get_icon_image(offline=False),
             title=f"{self._app_name}  v{__version__}",
             menu=menu,
         )
         self._icon.run_detached()
         self._start_health_monitor()
+
+    def _load_custom_icon(self):
+        """Versucht das Branding-Icon vom Server zu laden (best-effort)."""
+        try:
+            data = self._api.get_icon()
+            if data:
+                self._custom_icon = Image.open(io.BytesIO(data)).convert("RGBA")
+        except Exception:
+            pass
+
+    def _get_icon_image(self, offline: bool = False) -> Image.Image:
+        """Gibt das passende Icon zurück — custom oder fallback."""
+        if self._custom_icon:
+            return _tint_icon_red(self._custom_icon) if offline else self._custom_icon.resize((64, 64), Image.LANCZOS)
+        return _create_fallback_icon(offline)
 
     def _start_health_monitor(self):
         """Hintergrund-Thread der periodisch /api/v1/health pollt."""
@@ -84,28 +115,22 @@ class KioskTray(QObject):
         self._health_thread.start()
 
     def _on_health_changed(self, online: bool):
-        """Qt-Slot: wird vom Health-Thread aufgerufen. Meldet State-Übergänge."""
-        # Erste Messung — kein Toast bei online, nur bei initialem offline
+        """Qt-Slot: meldet State-Übergänge an Tray-Icon + PackageWindow."""
         if self._is_online is None:
             self._is_online = online
             self._update_tray_visuals()
-            if not online:
-                self._notify_offline()
+            if self._window:
+                self._window.set_online_state(online)
             return
 
-        # offline → online
-        if not self._is_online and online:
-            self._is_online = True
-            self._update_tray_visuals()
-            self._notify_online()
+        if self._is_online == online:
             return
 
-        # online → offline
-        if self._is_online and not online:
-            self._is_online = False
-            self._update_tray_visuals()
-            self._notify_offline()
-            return
+        self._is_online = online
+        self._update_tray_visuals()
+        # In-Window-Banner statt OS-Toast
+        if self._window:
+            self._window.set_online_state(online)
 
     def _update_tray_visuals(self):
         if not self._icon:
@@ -113,30 +138,7 @@ class KioskTray(QObject):
         status = "Verbunden" if self._is_online else "OFFLINE"
         try:
             self._icon.title = f"{self._app_name}  v{__version__}  ·  {status}"
-            self._icon.icon = _create_icon_image(offline=not self._is_online)
-        except Exception:
-            pass
-
-    def _notify_offline(self):
-        if not self._icon:
-            return
-        try:
-            self._icon.notify(
-                f"{self._app_name} kann den Server nicht erreichen. "
-                "Software-Installation ist aktuell nicht möglich.",
-                "Server nicht erreichbar",
-            )
-        except Exception:
-            pass
-
-    def _notify_online(self):
-        if not self._icon:
-            return
-        try:
-            self._icon.notify(
-                "Verbindung zum Server wiederhergestellt.",
-                self._app_name,
-            )
+            self._icon.icon = self._get_icon_image(offline=not self._is_online)
         except Exception:
             pass
 
@@ -154,6 +156,8 @@ class KioskTray(QObject):
             self._window = PackageWindow(self._api, app_name=self._app_name)
             self._window.setAttribute(Qt.WA_DeleteOnClose)
             self._window.destroyed.connect(self._on_window_closed)
+        if self._is_online is not None:
+            self._window.set_online_state(self._is_online)
         self._window.show()
         self._window.raise_()
         self._window.activateWindow()
@@ -162,8 +166,7 @@ class KioskTray(QObject):
         self._window = None
 
     def _on_quit(self):
-        # Confirm-Dialog – versehentliches Beenden vermeiden
-        parent = self._window  # falls offen, sonst None → MessageBox auf Desktop
+        parent = self._window
         reply = QMessageBox.question(
             parent,
             "Beenden",
