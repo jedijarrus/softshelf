@@ -29,7 +29,7 @@ from routes import packages, install, admin, register
 
 logger = logging.getLogger("softshelf")
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 
 # /app/downloads — shared volume mit dem builder-Container
 DOWNLOADS_DIR = "/app/downloads"
