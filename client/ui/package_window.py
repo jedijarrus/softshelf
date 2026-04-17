@@ -617,6 +617,8 @@ class PackageWindow(QWidget):
         root.setSpacing(0)
 
         root.addWidget(self._build_header())
+        self._offline_banner = self._build_offline_banner()
+        root.addWidget(self._offline_banner)
         root.addWidget(self._divider())
 
         body = QHBoxLayout()
@@ -775,6 +777,34 @@ class PackageWindow(QWidget):
         ver_lbl.setStyleSheet(f"color: {C_FG_5}; background: transparent;")
         lay.addWidget(ver_lbl, alignment=Qt.AlignRight | Qt.AlignVCenter)
         return f
+
+    def _build_offline_banner(self) -> QFrame:
+        f = QFrame()
+        f.setFixedHeight(36)
+        f.setStyleSheet(
+            f"QFrame {{ background: {C_RED_BG}; border: none; "
+            f"border-bottom: 1px solid {C_RED_BD}; }}"
+        )
+        lay = QHBoxLayout(f)
+        lay.setContentsMargins(24, 0, 24, 0)
+        lay.setSpacing(8)
+
+        dot = QLabel("\u25cf")
+        dot.setFont(QFont(FONT, 9))
+        dot.setStyleSheet(f"color: {C_RED}; background: transparent;")
+        lay.addWidget(dot)
+
+        lbl = QLabel("Server nicht erreichbar \u2014 Software-Installation ist aktuell nicht m\u00f6glich.")
+        lbl.setFont(QFont(FONT, 10))
+        lbl.setStyleSheet(f"color: {C_RED}; background: transparent;")
+        lay.addWidget(lbl, stretch=1)
+
+        f.setVisible(False)
+        return f
+
+    def set_online_state(self, online: bool):
+        """Vom Tray-Health-Monitor aufgerufen: Banner ein-/ausblenden."""
+        self._offline_banner.setVisible(not online)
 
     # ── Data loading ─────────────────────────────────────────────────────────
 

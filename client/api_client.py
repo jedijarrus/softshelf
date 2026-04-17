@@ -92,3 +92,14 @@ class KioskApiClient:
                 return r.status_code == 200
         except Exception:
             return False
+
+    def get_icon(self) -> bytes | None:
+        """Branding-Icon vom Server laden (ICO). None wenn nicht vorhanden."""
+        try:
+            with self._client() as c:
+                r = c.get(f"{self._base}/api/v1/icon", timeout=5)
+                if r.status_code == 200:
+                    return r.content
+        except Exception:
+            pass
+        return None

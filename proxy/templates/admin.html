@@ -5431,7 +5431,7 @@ button.outdated-badge.clickable:disabled {
       <div class="field">
         <label>Silent-Install Argumente</label>
         <input class="input" id="upload-args" placeholder="leer = Default">
-        <div class="hint">Default: <code>/qn /norestart</code> für MSI · <code>/S</code> für EXE</div>
+        <div class="hint" id="upload-args-hint">Default: <code>/qn /norestart</code> f\u00fcr MSI \u00b7 <code>/S</code> f\u00fcr EXE</div>
       </div>
 
       <div class="field">
@@ -10939,23 +10939,342 @@ function invalidateStorageCache() {
 
 let _uploadFile = null;
 
+// ── Installer-Typ-Erkennung (PE-aware, inspiriert von Detect It Easy) ───────
+//
+// Stufe 1: PE-Header parsen → Section-Namen + Overlay-Offset
+// Stufe 2: Strukturelle Checks (Overlay-Magic, Section-Names)
+// Stufe 3: Fallback String-Suche im gesamten Buffer
+//
+const _INSTALLER_SCAN_SIZE = 2097152; // 2MB
+
+// PE-Header parsen: Section-Namen und Overlay-Offset extrahieren
+function _parsePeHeaders(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.length < 64 || bytes[0] !== 0x4D || bytes[1] !== 0x5A) return null; // MZ check
+  const peOff = dv.getUint32(0x3C, true);
+  if (peOff + 24 > bytes.length) return null;
+  if (bytes[peOff] !== 0x50 || bytes[peOff+1] !== 0x45) return null; // PE\0\0
+  const numSections = Math.min(dv.getUint16(peOff + 6, true), 96); // PE spec: max ~96 realistisch
+  const optHeaderSize = dv.getUint16(peOff + 20, true);
+  const sectStart = peOff + 24 + optHeaderSize;
+  const sections = [];
+  let overlayOff = 0;
+  for (let i = 0; i < numSections && sectStart + i * 40 + 40 <= bytes.length; i++) {
+    const off = sectStart + i * 40;
+    let name = '';
+    for (let j = 0; j < 8 && bytes[off+j] !== 0; j++) name += String.fromCharCode(bytes[off+j]);
+    const rawSize = dv.getUint32(off + 16, true);
+    const rawPtr  = dv.getUint32(off + 20, true);
+    sections.push({ name, rawPtr, rawSize });
+    const end = rawPtr + rawSize;
+    if (end > overlayOff) overlayOff = end;
+  }
+  return { sections, overlayOff };
+}
+
+// Bytes an Offset vergleichen
+function _bytesMatch(bytes, offset, pattern) {
+  if (offset + pattern.length > bytes.length) return false;
+  for (let i = 0; i < pattern.length; i++) {
+    if (pattern[i] !== null && bytes[offset + i] !== pattern[i]) return false;
+  }
+  return true;
+}
+
+// String an Offset suchen
+function _findString(bytes, start, end, str) {
+  const e = Math.min(end, bytes.length - str.length);
+  outer: for (let i = start; i < e; i++) {
+    for (let j = 0; j < str.length; j++) {
+      if (bytes[i+j] !== str.charCodeAt(j)) continue outer;
+    }
+    return i;
+  }
+  return -1;
+}
+
+function _detectInstallerStructural(bytes) {
+  const pe = _parsePeHeaders(bytes);
+  if (!pe) return null;
+  const sectionNames = pe.sections.map(s => s.name);
+  const ovl = pe.overlayOff;
+
+  // 1. NSIS: Overlay starts with EFBEADDE + "NullsoftInst" or "nsisinstall"
+  if (ovl > 0 && ovl + 16 < bytes.length) {
+    if (_bytesMatch(bytes, ovl, [0xEF, 0xBE, 0xAD, 0xDE])) {
+      const ovlStr = String.fromCharCode(...bytes.slice(ovl + 4, Math.min(ovl + 24, bytes.length)));
+      if (ovlStr.includes('Null') || ovlStr.includes('nsisinstall') || ovlStr.includes('oftInst')) {
+        return { type: 'NSIS', args: '/S' };
+      }
+    }
+    // NSIS alternate: magic at overlay + readDword(overlay)
+    if (ovl + 4 <= bytes.length) {
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const jump = dv.getUint32(ovl, true);
+      if (jump > 0 && jump < bytes.length) {
+      const alt = ovl + jump;
+      if (alt + 20 < bytes.length && _bytesMatch(bytes, alt, [0xEF, 0xBE, 0xAD, 0xDE])) {
+        const s = String.fromCharCode(...bytes.slice(alt + 4, Math.min(alt + 24, bytes.length)));
+        if (s.includes('Null') || s.includes('nsisinstall') || s.includes('oftInst')) {
+          return { type: 'NSIS', args: '/S' };
+        }
+      }
+      }
+    }
+  }
+
+  // 2. WiX Burn: .wixburn section
+  if (sectionNames.includes('.wixburn')) {
+    return { type: 'WiX Burn', args: '/quiet /norestart' };
+  }
+
+  // 3. Inno Setup: section named ".data" or "data" containing "Inno Setup Setup Data"
+  for (const sec of pe.sections) {
+    if (sec.name === '.data' || sec.name === 'data') {
+      const end = Math.min(sec.rawPtr + sec.rawSize, bytes.length);
+      if (_findString(bytes, sec.rawPtr, end, 'Inno Setup') >= 0) {
+        return { type: 'Inno Setup', args: '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' };
+      }
+    }
+  }
+
+  // 4. WiX MSI Cabinet: Overlay starts with "MSCF" (Microsoft Cabinet)
+  if (ovl > 0 && ovl + 4 < bytes.length && _bytesMatch(bytes, ovl, [0x4D, 0x53, 0x43, 0x46])) {
+    return { type: 'WiX Burn', args: '/quiet /norestart' };
+  }
+
+  return null;
+}
+
+// Fallback: String-basierte Erkennung (wie bisher, fuer Vendor-spezifische Formate)
+const _INSTALLER_STRING_SIGS = [
+  { type: 'NSIS',               patterns: ['Nullsoft', 'NullsoftInst'],   args: '/S' },
+  { type: 'Inno Setup',         patterns: ['Inno Setup'],                 args: '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' },
+  { type: 'InstallShield',      patterns: ['InstallShield'],              args: '/s /v"/qn"' },
+  { type: 'WiX Burn',           patterns: ['.wixburn', 'BootstrapperApplication'], args: '/quiet /norestart' },
+  { type: 'Wise',               patterns: ['WiseMain'],                   args: '/s' },
+  { type: 'Advanced Installer', patterns: ['Advanced Installer', 'Caphyon'], args: '/i /qn' },
+  { type: 'Bitdefender SFX',    patterns: ['!@bdsfx@!'],                  args: '/quietinstall /skipeula' },
+  { type: 'SAP SFX',            patterns: ['SapSx:', 'SAP front-end installer self-extractor'], args: '/silent /norestart' },
+  { type: 'MSI (gewrappt)',     patterns: ['Windows Installer', 'msiexec.exe'], args: '/qn /norestart' },
+  { type: '7-Zip SFX',          patterns: ['7z\xBC\xAF\x27\x1C'],        args: '' },
+];
+
+// PE VersionInfo aus dem Binary lesen (VS_VERSION_INFO UTF-16LE Block)
+function _extractPeInfo(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  // VS_VERSION_INFO als UTF-16LE suchen
+  const marker = [0x56,0x00,0x53,0x00,0x5F,0x00,0x56,0x00,0x45,0x00,0x52,0x00,0x53,0x00,0x49,0x00,0x4F,0x00,0x4E,0x00];
+  let offset = -1;
+  for (let i = 0; i < bytes.length - marker.length; i++) {
+    let match = true;
+    for (let j = 0; j < marker.length; j++) {
+      if (bytes[i + j] !== marker[j]) { match = false; break; }
+    }
+    if (match) { offset = i; break; }
+  }
+  if (offset < 0) return null;
+  // Block um den Marker herum als UTF-16LE dekodieren
+  const start = Math.max(0, offset - 64);
+  const end = Math.min(bytes.length, offset + 4000);
+  const slice = bytes.slice(start, end);
+  const text = new TextDecoder('utf-16le', { fatal: false }).decode(slice);
+  const peFieldNames = new Set(['FileDescription', 'ProductName', 'CompanyName', 'InternalName', 'OriginalFilename', 'FileVersion', 'LegalCopyright', 'ProductVersion', 'Comments']);
+  // Installer-Framework-Namen die als ProductName auftauchen aber nicht das eigentliche Produkt sind
+  const frameworkNames = new Set(['InstallShield', 'Nullsoft Install System', 'NSIS', 'Inno Setup', 'WiX Toolset', 'Windows Installer', 'setup.exe', 'Setup', 'install.exe']);
+  const info = {};
+  for (const key of ['FileDescription', 'ProductName', 'CompanyName', 'InternalName', 'OriginalFilename', 'FileVersion']) {
+    const re = new RegExp(key + '[\\x00-\\x1f]+([^\\x00-\\x1f]+)');
+    const m = text.match(re);
+    if (!m) continue;
+    let val = m[1].replace(/[\x00-\x1f\x7f]/g, '').substring(0, 120).trim();
+    // Verwerfen wenn Wert selbst ein PE-Feldname ist (korrupte VersionInfo)
+    if (peFieldNames.has(val) || frameworkNames.has(val)) continue;
+    // Verwerfen wenn >30% non-printable-ASCII (Muell aus komprimiertem Payload)
+    const nonAscii = [...val].filter(c => c.charCodeAt(0) > 126 || c.charCodeAt(0) < 32).length;
+    if (val.length > 0 && nonAscii / val.length > 0.3) continue;
+    if (val) info[key] = val;
+  }
+  return Object.keys(info).length > 0 ? info : null;
+}
+
+// MSI Property-Strings aus dem Raw-Binary lesen. MSI ist ein OLE Compound
+// File — wir parsen nicht die Struktur, sondern suchen nach UTF-16LE Strings
+// die direkt hinter den Property-Namen stehen (funktioniert weil MSI die
+// String-Tabelle unkomprimiert speichert).
+function _extractMsiStrings(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  const text = new TextDecoder('utf-16le', { fatal: false }).decode(bytes);
+  const info = {};
+  // MSI Property-Tabelle hat Rows im Format: PropertyName\tValue
+  // Im UTF-16LE sieht das aus als "ProductName\tAcme Tool" etc.
+  for (const key of ['ProductName', 'Manufacturer', 'ProductVersion', 'ProductCode']) {
+    const idx = text.indexOf(key);
+    if (idx < 0) continue;
+    // Nach dem Key kommt Tab (\t) dann der Wert bis zum naechsten Steuerzeichen
+    const after = text.substring(idx + key.length);
+    const m = after.match(/^\t([^\t\n\r\x00-\x08]{1,120})/);
+    if (m) info[key] = m[1].trim();
+  }
+  // Strings sanitizen: Control-Chars + Null-Bytes strippen, Laenge kappen
+  for (const k of Object.keys(info)) {
+    info[k] = info[k].replace(/[\x00-\x1f\x7f]/g, '').substring(0, 120);
+  }
+  // ProductCode muss GUID-Format sein, sonst verwerfen (Injection-Schutz)
+  const pc = info.ProductCode || '';
+  const validGuid = /^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$/.test(pc);
+
+  // Mapping auf PE-Info-Format damit _showInstallerDetection es versteht
+  return Object.keys(info).length > 0 ? {
+    ProductName: info.ProductName || null,
+    CompanyName: info.Manufacturer || null,
+    FileVersion: info.ProductVersion || null,
+    _msiProductCode: validGuid ? pc : null,
+  } : null;
+}
+
+function _detectInstallerType(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  const pe = _extractPeInfo(arrayBuffer);
+
+  // Stufe 1: Strukturelle PE-Erkennung (Overlay-Magic, Section-Namen)
+  const structural = _detectInstallerStructural(bytes);
+  if (structural) return { ...structural, pe };
+
+  // Stufe 2: Fallback String-Suche
+  const text = new TextDecoder('latin1').decode(bytes);
+  for (const sig of _INSTALLER_STRING_SIGS) {
+    for (const p of sig.patterns) {
+      if (text.includes(p)) return { type: sig.type, args: sig.args, pe };
+    }
+  }
+  return { type: null, args: '', pe };
+}
+
 function onFileSelected(file) {
   if (!file) return;
   _uploadFile = file;
+  const isMsi = file.name.toLowerCase().endsWith('.msi');
   const drop = document.getElementById('upload-drop');
   drop.classList.add('has-file');
   drop.innerHTML = `
     <div class="upload-file-info">${esc(file.name)}</div>
-    <div class="upload-file-meta">${fmtBytes(file.size)} · ${(file.name.toLowerCase().endsWith('.msi') ? 'MSI' : 'EXE')}</div>
+    <div class="upload-file-meta">${fmtBytes(file.size)} · ${isMsi ? 'MSI' : 'EXE'}<span id="upload-installer-type"></span></div>
     <input type="file" id="upload-file" accept=".msi,.exe" onchange="onFileSelected(this.files[0])">
   `;
 
-  // Display-Name vorausfüllen wenn leer
+  // Display-Name vorausfuellen wenn leer — smarter Filename-Parser
   const displayInput = document.getElementById('upload-display');
   if (!displayInput.value.trim()) {
-    const base = file.name.replace(/\.(msi|exe)$/i, '').replace(/[._-]+/g, ' ').trim();
+    let base = file.name.replace(/\.(msi|exe)$/i, '');
+    // Prefixes/Suffixes die nicht zum Produktnamen gehoeren
+    base = base.replace(/^(setup|install(er)?|update|patch)[_. -]*/i, '');
+    base = base.replace(/[_. -]*(setup|install(er)?|x64|x86|amd64|win64|win32)$/i, '');
+    // Build-/Versionsnummern am Ende entfernen (z.B. _35736, -1.2.3, _v2.0)
+    base = base.replace(/[_. -]+v?\d[\d.]{0,20}$/i, '');
+    // CamelCase aufbrechen (CodeTwoSignatures -> Code Two Signatures)
+    base = base.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+    // Separatoren normalisieren
+    base = base.replace(/[._]+/g, ' ').replace(/-/g, '-').trim();
+    if (base.length < 2) base = file.name.replace(/\.(msi|exe)$/i, '');
     displayInput.value = base.charAt(0).toUpperCase() + base.slice(1);
   }
+
+  // Installer-Typ erkennen
+  const chunk = file.slice(0, _INSTALLER_SCAN_SIZE);
+  const reader = new FileReader();
+  reader.onload = () => {
+    if (isMsi) {
+      const pe = _extractMsiStrings(reader.result);
+      _showInstallerDetection('MSI', '/qn /norestart', pe);
+    } else {
+      const det = _detectInstallerType(reader.result);
+      _showInstallerDetection(det.type, det.args, det.pe);
+    }
+  };
+  reader.readAsArrayBuffer(chunk);
+}
+
+function _showInstallerDetection(type, args, pe) {
+  const badge = document.getElementById('upload-installer-type');
+  if (badge && type) {
+    badge.textContent = ' \u00b7 ' + type;
+  }
+  // PE-Info als Kontext anzeigen (Hersteller / Produkt)
+  if (badge && pe) {
+    const parts = [];
+    if (pe.CompanyName) parts.push(pe.CompanyName);
+    if (pe.ProductName && pe.ProductName !== pe.CompanyName) parts.push(pe.ProductName);
+    if (parts.length) {
+      badge.textContent += ' \u00b7 ' + parts.join(' / ');
+    }
+    // Display-Name mit ProductName verbessern wenn generisch
+    const displayInput = document.getElementById('upload-display');
+    if (displayInput && pe.ProductName) {
+      const cur = displayInput.value.trim().toLowerCase();
+      const prod = pe.ProductName.trim();
+      if (cur && prod.toLowerCase() !== cur && (cur.includes('setup') || cur.includes('installer') || cur.includes('download'))) {
+        displayInput.value = prod;
+      }
+    }
+    // Detection-Name vorausfuellen (ProductName ~ Apps & Features DisplayName)
+    const detInput = document.getElementById('upload-detection');
+    if (detInput && !detInput.value.trim()) {
+      const detVal = pe.ProductName || document.getElementById('upload-display').value;
+      if (detVal) detInput.value = detVal.trim();
+    }
+    // Uninstall-Command aus MSI ProductCode generieren
+    const uninstInput = document.getElementById('upload-uninstall');
+    if (uninstInput && !uninstInput.value.trim() && pe._msiProductCode) {
+      uninstInput.value = 'msiexec /x "' + pe._msiProductCode + '" /qn /norestart';
+    }
+  }
+  // Detection-Name Fallback: wenn PE nix geliefert hat, Display-Name nehmen
+  const detInput2 = document.getElementById('upload-detection');
+  if (detInput2 && !detInput2.value.trim()) {
+    const fallback = document.getElementById('upload-display').value.trim();
+    if (fallback) detInput2.value = fallback;
+  }
+  const argsInput = document.getElementById('upload-args');
+  const hint = document.getElementById('upload-args-hint');
+  if (type && args) {
+    if (argsInput && !argsInput.value.trim()) {
+      argsInput.value = args;
+    }
+    if (hint) {
+      hint.innerHTML = `Erkannt: <strong>${esc(type)}</strong> \u2192 <code>${esc(args)}</code>`;
+    }
+  } else if (type === null) {
+    const peHint = pe ? ` (${esc(pe.ProductName || pe.CompanyName || '')})` : '';
+    if (hint) hint.innerHTML = `Installer-Typ nicht erkannt${peHint} \u2014 bitte manuell angeben.`;
+    // Fallback: winget-Catalog nach ProductName durchsuchen
+    const searchName = pe && (pe.ProductName || pe.CompanyName);
+    if (searchName) _wingetLookupForUpload(searchName);
+  }
+}
+
+async function _wingetLookupForUpload(query) {
+  try {
+    const results = await api('GET', `/admin/api/winget/search?q=${encodeURIComponent(query)}&limit=3`);
+    if (!results || !results.length) return;
+    const best = results[0];
+    const hint = document.getElementById('upload-args-hint');
+    if (!hint) return;
+    hint.innerHTML = `Winget-Match: <strong>${esc(best.name || best.id)}</strong> <code>${esc(best.id)}</code> ${esc(best.latest_version || '')}`
+      + ` \u2014 Statt als eigenes Paket hochladen lieber <a href="#" onclick="event.preventDefault();_switchToWingetActivate(${jsStr(best.id)})">als winget-Paket aktivieren</a>?`;
+  } catch (e) {}
+}
+
+function _switchToWingetActivate(wingetId) {
+  closeAll();
+  setTimeout(() => {
+    openSearch();
+    setAddMode('winget');
+    setTimeout(() => {
+      const inp = document.getElementById('winget-search-input');
+      if (inp) { inp.value = wingetId; inp.dispatchEvent(new Event('input')); }
+    }, 250);
+  }, 150);
 }
 
 // Drag & drop
