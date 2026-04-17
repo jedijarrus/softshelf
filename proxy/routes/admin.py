@@ -2221,8 +2221,68 @@ async def set_winget_version_pin(name: str, body: WingetVersionPinBody):
 @router.get("/admin/api/compliance", dependencies=[Depends(_require_admin)])
 async def get_compliance():
     """Compliance-Uebersicht: fuer jedes required-Paket welche Agents es haben,
-    welche fehlen. Admin sieht auf einen Blick wo Policy verletzt wird."""
-    return await database.get_compliance_overview()
+    welche fehlen. Nutzt Tactical Software-Scan als primaere Quelle fuer
+    Custom/Choco-Pakete statt nur interne Tracking-Tabellen."""
+    overview = await database.get_compliance_overview()
+
+    # Enrichment: fuer Pakete die auf detection_name matchen, den Tactical
+    # Software-Scan pro Agent pruefen. Damit werden auch manuell/extern
+    # installierte Pakete korrekt als "installiert" erkannt.
+    required_with_detection = [
+        p for p in overview["required_packages"]
+        if p.get("missing") and p.get("type") in ("custom", "choco")
+    ]
+    if required_with_detection:
+        # Pro Agent einmal Tactical-Scan holen (gecached fuer alle Pakete)
+        all_agents = await database.get_agents()
+        tactical = TacticalClient()
+        agent_software_cache: dict[str, list[str]] = {}
+        for a in all_agents:
+            aid = a["agent_id"]
+            try:
+                sw = await tactical.get_installed_software(aid)
+                # DisplayNames normalisiert cachen
+                agent_software_cache[aid] = [
+                    (s.get("name") or "").lower() for s in sw
+                ]
+            except Exception:
+                agent_software_cache[aid] = []
+
+        # Pakete mit detection_name gegen Tactical-Scan matchen
+        for p in required_with_detection:
+            pkg = await database.get_package(p["name"])
+            if not pkg:
+                continue
+            det = (pkg.get("detection_name") or "").lower()
+            choco_name = (pkg.get("name") or "").lower() if p["type"] == "choco" else ""
+            if not det and not choco_name:
+                continue
+            still_missing = []
+            for miss in p["missing"]:
+                aid = miss["agent_id"]
+                sw_names = agent_software_cache.get(aid, [])
+                # Substring-Match wie in routes/packages.py
+                found = any(
+                    (det and det in name) or (choco_name and choco_name in name)
+                    for name in sw_names
+                )
+                if not found:
+                    still_missing.append(miss)
+            removed = len(p["missing"]) - len(still_missing)
+            if removed:
+                p["missing"] = still_missing
+                p["installed_count"] = p["total_agents"] - len(still_missing)
+
+        # Summary neu berechnen
+        all_agent_ids = {a["agent_id"] for a in all_agents}
+        noncompliant_ids = set()
+        for p in overview["required_packages"]:
+            for m in p.get("missing", []):
+                noncompliant_ids.add(m["agent_id"])
+        overview["noncompliant_agents"] = len(noncompliant_ids)
+        overview["fully_compliant_agents"] = len(all_agent_ids) - len(noncompliant_ids)
+
+    return overview
 
 
 @router.post("/admin/api/compliance/fix", dependencies=[Depends(_require_admin)])
