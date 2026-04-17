@@ -3436,14 +3436,13 @@ async def update_profile_endpoint(profile_id: int, body: ProfileUpdate, request:
     propagated = 0
     skipped_existing = 0
     if added:
-        from routes.install import dispatch_install_for_agent
         agents = await database.get_agents_for_profile(profile_id)
-        # Aktuelle Profile-Pakete mit ihren version_pins fuer Lookup
         profile_now = await database.get_profile(profile_id)
         pin_by_name = {pp["package_name"]: pp.get("version_pin")
                        for pp in profile_now["packages"]}
         for ag in agents:
             wstate, cstate, tracked, tsw = await _agent_state_snapshot(ag["agent_id"])
+            to_install: list[tuple[dict, str | None]] = []
             for pkg_name in added:
                 pkg = await database.get_package(pkg_name)
                 if not pkg:
@@ -3452,16 +3451,10 @@ async def update_profile_endpoint(profile_id: int, body: ProfileUpdate, request:
                 if _is_package_satisfied(pkg, pin, wstate, cstate, tracked, tsw):
                     skipped_existing += 1
                     continue
-                try:
-                    await dispatch_install_for_agent(
-                        ag["agent_id"], ag["hostname"], pkg, version_pin=pin,
-                    )
-                    propagated += 1
-                except HTTPException as e:
-                    logger.warning(
-                        "Auto-propagation failed for agent=%s pkg=%s: %s",
-                        ag["agent_id"], pkg_name, e.detail,
-                    )
+                to_install.append((pkg, pin))
+                propagated += 1
+            if to_install:
+                _spawn_bg(_apply_profile_sequential(ag["agent_id"], ag["hostname"], to_install))
         if propagated or skipped_existing:
             await database.log_audit_event(
                 "profile_propagated",
@@ -3504,9 +3497,9 @@ async def _run_profile_autoupdate(profile_id: int, actor: str = "scheduler") -> 
 
     queued = 0
     skipped = 0
-    failed = 0
     for ag in agents:
         wstate, cstate, tracked, tsw = await _agent_state_snapshot(ag["agent_id"])
+        to_install: list[tuple[dict, str | None]] = []
         for pp in packages:
             pkg = await database.get_package(pp["package_name"])
             if not pkg:
@@ -3515,17 +3508,10 @@ async def _run_profile_autoupdate(profile_id: int, actor: str = "scheduler") -> 
             if _is_package_satisfied(pkg, pin, wstate, cstate, tracked, tsw):
                 skipped += 1
                 continue
-            try:
-                await dispatch_install_for_agent(
-                    ag["agent_id"], ag["hostname"], pkg, version_pin=pin,
-                )
-                queued += 1
-            except HTTPException as e:
-                failed += 1
-                logger.warning(
-                    "auto-update dispatch failed agent=%s pkg=%s: %s",
-                    ag["agent_id"], pp["package_name"], e.detail,
-                )
+            to_install.append((pkg, pin))
+            queued += 1
+        if to_install:
+            _spawn_bg(_apply_profile_sequential(ag["agent_id"], ag["hostname"], to_install))
 
     await database.mark_profile_auto_update_run(profile_id)
     await database.log_audit_event(
