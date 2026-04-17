@@ -11216,16 +11216,24 @@ function _showInstallerDetection(type, args, pe) {
     const displayInput = document.getElementById('upload-display');
     if (displayInput && pe.ProductName) {
       const cur = displayInput.value.trim().toLowerCase();
-      const prod = pe.ProductName.trim();
+      let prod = pe.ProductName.trim();
+      // CompanyName voranstellen wenn nicht schon enthalten
+      if (pe.CompanyName && !prod.toLowerCase().includes(pe.CompanyName.toLowerCase())) {
+        prod = pe.CompanyName.trim() + ' ' + prod;
+      }
       if (cur && prod.toLowerCase() !== cur && (cur.includes('setup') || cur.includes('installer') || cur.includes('download'))) {
         displayInput.value = prod;
       }
     }
     // Detection-Name vorausfuellen (ProductName ~ Apps & Features DisplayName)
+    // CompanyName voranstellen wenn nicht schon im ProductName enthalten
     const detInput = document.getElementById('upload-detection');
-    if (detInput && !detInput.value.trim()) {
-      const detVal = pe.ProductName || document.getElementById('upload-display').value;
-      if (detVal) detInput.value = detVal.trim();
+    if (detInput && !detInput.value.trim() && pe.ProductName) {
+      let detVal = pe.ProductName.trim();
+      if (pe.CompanyName && !detVal.toLowerCase().includes(pe.CompanyName.toLowerCase())) {
+        detVal = pe.CompanyName.trim() + ' ' + detVal;
+      }
+      detInput.value = detVal;
     }
     // Uninstall-Command aus MSI ProductCode generieren
     const uninstInput = document.getElementById('upload-uninstall');

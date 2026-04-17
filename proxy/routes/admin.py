@@ -3897,8 +3897,11 @@ async def upload_custom_file(
     ext = os.path.splitext(file.filename or "")[1].lower()
 
     msi_meta = {}
+    exe_meta = {}
     if ext == ".msi":
         msi_meta = await file_uploads.parse_msi_metadata(final_path)
+    elif ext == ".exe":
+        exe_meta = await file_uploads.parse_exe_metadata(final_path)
 
     # Install-Args: Eingabe → Default, im Versions-Modus auch vom Paket erben
     eff_args = _validate_install_args(install_args)
@@ -3914,11 +3917,19 @@ async def upload_custom_file(
     if not eff_uninstall and ext == ".msi" and msi_meta.get("ProductCode"):
         eff_uninstall = file_uploads.build_msi_uninstall_cmd(msi_meta["ProductCode"])
 
-    # Detection-Name: Eingabe → MSI-ProductName → vom Paket erben (nur neuer Pkg)
+    # Detection-Name: Eingabe → MSI-ProductName → EXE-ProductName (mit
+    # CompanyName-Prefix wenn nicht schon enthalten) → vom Paket erben
     eff_detection = detection_name.strip()
-    if is_new_package:
-        if not eff_detection and msi_meta.get("ProductName"):
+    if is_new_package and not eff_detection:
+        if msi_meta.get("ProductName"):
             eff_detection = msi_meta["ProductName"]
+        elif exe_meta.get("ProductName"):
+            pn = exe_meta["ProductName"]
+            cn = exe_meta.get("CompanyName", "")
+            if cn and cn.lower() not in pn.lower():
+                eff_detection = f"{cn} {pn}"
+            else:
+                eff_detection = pn
 
     # ── Modus 1: Neues Paket ──
     if is_new_package:
@@ -3973,6 +3984,7 @@ async def upload_custom_file(
             "uninstall_cmd": eff_uninstall or None,
             "detection_name": eff_detection or None,
             "msi_metadata": msi_meta,
+            "exe_metadata": exe_meta,
             "version": {"id": version_id, "label": label, "is_current": True},
         }
 
@@ -4021,6 +4033,7 @@ async def upload_custom_file(
         "install_args": eff_args,
         "uninstall_cmd": eff_uninstall or None,
         "msi_metadata": msi_meta,
+            "exe_metadata": exe_meta,
         "version": {"id": version_id, "label": label, "is_current": set_current_flag},
     }
 
