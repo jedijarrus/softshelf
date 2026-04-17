@@ -41,6 +41,18 @@ logger = logging.getLogger("softshelf.winget.scanner")
 # und ist von SYSTEM aus zugreifbar (regulärer User nicht). Wir resolven
 # beide Pfade und fallen auf die WindowsApps-Variante zurück.
 _PS_FIND_WINGET = r"""
+function Ensure-VCLibsInPath {
+    $vcDir = Get-ChildItem 'C:\Program Files\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__*' `
+        -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -First 1
+    if (-not $vcDir) { return }
+    if ($env:PATH -like "*$($vcDir.FullName)*") { return }
+    $mp = [Environment]::GetEnvironmentVariable('PATH', 'Machine')
+    if ($mp -notlike "*$($vcDir.FullName)*") {
+        [Environment]::SetEnvironmentVariable('PATH', "$mp;$($vcDir.FullName)", 'Machine')
+    }
+    $env:PATH = "$env:PATH;$($vcDir.FullName)"
+}
 function Find-WingetExe {
     $cmd = Get-Command winget -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
@@ -51,7 +63,17 @@ function Find-WingetExe {
         | Sort-Object Name -Descending
     foreach ($d in $dirs) {
         $exe = Join-Path $d.FullName 'winget.exe'
-        if (Test-Path -LiteralPath $exe) { return $exe }
+        if (Test-Path -LiteralPath $exe) {
+            Ensure-VCLibsInPath
+            if ($env:PATH -notlike "*$($d.FullName)*") {
+                $mp2 = [Environment]::GetEnvironmentVariable('PATH', 'Machine')
+                if ($mp2 -notlike "*$($d.FullName)*") {
+                    [Environment]::SetEnvironmentVariable('PATH', "$mp2;$($d.FullName)", 'Machine')
+                }
+                $env:PATH = "$env:PATH;$($d.FullName)"
+            }
+            return $exe
+        }
     }
     return $null
 }

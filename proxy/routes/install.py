@@ -259,6 +259,21 @@ def _check_winget_id(wid: str) -> str:
 
 
 _PS_FIND_WINGET = r"""
+function Ensure-VCLibsInPath {
+    # winget.exe braucht VCLibs DLLs (MSVCP140.dll, VCRUNTIME140.dll).
+    # Unter SYSTEM sind diese oft nicht im PATH obwohl das AppX-Paket
+    # installiert ist. Einmalig zur Machine PATH hinzufuegen.
+    $vcDir = Get-ChildItem 'C:\Program Files\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__*' `
+        -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -First 1
+    if (-not $vcDir) { return }
+    if ($env:PATH -like "*$($vcDir.FullName)*") { return }
+    $mp = [Environment]::GetEnvironmentVariable('PATH', 'Machine')
+    if ($mp -notlike "*$($vcDir.FullName)*") {
+        [Environment]::SetEnvironmentVariable('PATH', "$mp;$($vcDir.FullName)", 'Machine')
+    }
+    $env:PATH = "$env:PATH;$($vcDir.FullName)"
+}
 function Find-WingetExe {
     $cmd = Get-Command winget -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
@@ -269,7 +284,17 @@ function Find-WingetExe {
         | Sort-Object Name -Descending
     foreach ($d in $dirs) {
         $exe = Join-Path $d.FullName 'winget.exe'
-        if (Test-Path -LiteralPath $exe) { return $exe }
+        if (Test-Path -LiteralPath $exe) {
+            Ensure-VCLibsInPath
+            if ($env:PATH -notlike "*$($d.FullName)*") {
+                $mp2 = [Environment]::GetEnvironmentVariable('PATH', 'Machine')
+                if ($mp2 -notlike "*$($d.FullName)*") {
+                    [Environment]::SetEnvironmentVariable('PATH', "$mp2;$($d.FullName)", 'Machine')
+                }
+                $env:PATH = "$env:PATH;$($d.FullName)"
+            }
+            return $exe
+        }
     }
     return $null
 }
