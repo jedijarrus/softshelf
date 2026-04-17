@@ -3267,16 +3267,32 @@ async def _validate_profile_packages_exist(packages: list[ProfilePackageEntry]) 
     return resolved
 
 
-async def _agent_state_snapshot(agent_id: str) -> tuple[dict, dict, set[str]]:
-    """Cacht winget+choco-State + tracked-installations fuer einen Agent.
+async def _agent_state_snapshot(agent_id: str) -> tuple[dict, dict, set[str], list[str]]:
+    """Cacht winget+choco-State + tracked-installations + Tactical Software-
+    Scan fuer einen Agent.
 
-    Wird vom smart-skip-Logik in Profile-Apply / Auto-Propagation benutzt,
-    damit wir nicht pro Paket die DB neu fragen.
+    Returns:
+      (winget_state, choco_state, tracked_set, tactical_sw_names_lower)
+
+    tactical_sw_names_lower enthaelt die lowercased DisplayNames aus dem
+    Tactical Software-Scan — damit koennen Custom/Choco-Pakete auch dann
+    als installiert erkannt werden wenn sie nicht ueber Softshelf deployed
+    wurden (z.B. manuell oder per GPO installiert).
     """
     winget_state = await database.get_agent_winget_state(agent_id)
     choco_state = await database.get_agent_choco_state(agent_id)
     tracked = {t["package_name"] for t in await database.get_agent_installations(agent_id)}
-    return winget_state, choco_state, tracked
+
+    # Tactical Software-Scan (best-effort, timeout-tolerant)
+    tactical_names: list[str] = []
+    try:
+        tactical = TacticalClient()
+        sw = await tactical.get_installed_software(agent_id)
+        tactical_names = [(s.get("name") or "").lower() for s in sw]
+    except Exception:
+        pass
+
+    return winget_state, choco_state, tracked, tactical_names
 
 
 def _is_package_satisfied(
@@ -3285,16 +3301,17 @@ def _is_package_satisfied(
     winget_state: dict,
     choco_state: dict,
     tracked: set[str],
+    tactical_sw_names: list[str] | None = None,
 ) -> bool:
     """True wenn das Paket bereits in der gewuenschten Form auf dem Agent
     installiert ist und der Profile-Apply nichts dispatchen muss.
 
     Logik:
-      • version_pin gesetzt → nur skip wenn installed_version == pin
-      • winget/choco im scan-state mit installed_version + (kein
-        available_version ODER inst==avail) → fully current, skip
-      • cross-source: in agent_installations (heuristisch tracked) → skip
-      • sonst → False (= dispatch)
+      - version_pin gesetzt: nur skip wenn installed_version == pin
+      - winget/choco im scan-state mit installed_version: skip
+      - in agent_installations (tracked): skip
+      - detection_name matched im Tactical Software-Scan: skip
+      - sonst: False (= dispatch)
     """
     name = pkg["name"]
     ptype = pkg.get("type") or "choco"
@@ -3309,9 +3326,10 @@ def _is_package_satisfied(
             if inst and (not avail or inst == avail):
                 return True
             return False
-        return name in tracked
+        if name in tracked:
+            return True
 
-    if ptype == "choco":
+    elif ptype == "choco":
         st = choco_state.get(name)
         if st:
             inst = (st.get("installed_version") or "").strip()
@@ -3321,10 +3339,23 @@ def _is_package_satisfied(
             if inst and (not avail or inst == avail):
                 return True
             return False
-        return name in tracked
+        if name in tracked:
+            return True
 
-    # custom: nur tracked-Check, kein scan-state
-    return name in tracked
+    else:  # custom
+        if name in tracked:
+            return True
+
+    # Fallback: detection_name gegen Tactical Software-Scan matchen
+    if tactical_sw_names and not version_pin:
+        det = (pkg.get("detection_name") or "").lower()
+        if det and any(det in n for n in tactical_sw_names):
+            return True
+        # Choco: Paketname als Substring im DisplayName
+        if ptype == "choco" and any(name.lower() in n for n in tactical_sw_names):
+            return True
+
+    return False
 
 
 @router.get("/admin/api/profiles", dependencies=[Depends(_require_admin)])
@@ -3412,13 +3443,13 @@ async def update_profile_endpoint(profile_id: int, body: ProfileUpdate, request:
         pin_by_name = {pp["package_name"]: pp.get("version_pin")
                        for pp in profile_now["packages"]}
         for ag in agents:
-            wstate, cstate, tracked = await _agent_state_snapshot(ag["agent_id"])
+            wstate, cstate, tracked, tsw = await _agent_state_snapshot(ag["agent_id"])
             for pkg_name in added:
                 pkg = await database.get_package(pkg_name)
                 if not pkg:
                     continue
                 pin = pin_by_name.get(pkg_name)
-                if _is_package_satisfied(pkg, pin, wstate, cstate, tracked):
+                if _is_package_satisfied(pkg, pin, wstate, cstate, tracked, tsw):
                     skipped_existing += 1
                     continue
                 try:
@@ -3475,13 +3506,13 @@ async def _run_profile_autoupdate(profile_id: int, actor: str = "scheduler") -> 
     skipped = 0
     failed = 0
     for ag in agents:
-        wstate, cstate, tracked = await _agent_state_snapshot(ag["agent_id"])
+        wstate, cstate, tracked, tsw = await _agent_state_snapshot(ag["agent_id"])
         for pp in packages:
             pkg = await database.get_package(pp["package_name"])
             if not pkg:
                 continue
             pin = pp.get("version_pin")
-            if _is_package_satisfied(pkg, pin, wstate, cstate, tracked):
+            if _is_package_satisfied(pkg, pin, wstate, cstate, tracked, tsw):
                 skipped += 1
                 continue
             try:
@@ -3564,13 +3595,13 @@ async def run_profile_autoupdate_endpoint(profile_id: int, request: Request):
     skipped = 0
     failed = 0
     for ag in agents:
-        wstate, cstate, tracked = await _agent_state_snapshot(ag["agent_id"])
+        wstate, cstate, tracked, tsw = await _agent_state_snapshot(ag["agent_id"])
         for pp in packages:
             pkg = await database.get_package(pp["package_name"])
             if not pkg:
                 continue
             pin = pp.get("version_pin")
-            if _is_package_satisfied(pkg, pin, wstate, cstate, tracked):
+            if _is_package_satisfied(pkg, pin, wstate, cstate, tracked, tsw):
                 skipped += 1
                 continue
             try:
@@ -3653,13 +3684,13 @@ async def apply_profile_endpoint(profile_id: int, body: ProfileApplyBody, reques
         await database.assign_profile_to_agent(
             agent_id, profile_id, assigned_by=user.get("username"),
         )
-        wstate, cstate, tracked = await _agent_state_snapshot(agent_id)
+        wstate, cstate, tracked, tsw = await _agent_state_snapshot(agent_id)
         for pp in profile["packages"]:
             pkg = await database.get_package(pp["package_name"])
             if not pkg:
                 continue
             pin = pp.get("version_pin")
-            if _is_package_satisfied(pkg, pin, wstate, cstate, tracked):
+            if _is_package_satisfied(pkg, pin, wstate, cstate, tracked, tsw):
                 skipped_existing += 1
                 continue
             try:
