@@ -5,6 +5,11 @@ Kapselt alle Calls – kein anderer Code spricht direkt mit Tactical.
 URL + API-Key werden bei jedem Request aus der DB (settings-Tabelle) gelesen,
 damit Änderungen im Admin-UI sofort wirksam werden ohne Restart.
 
+Globaler Concurrency-Limiter: maximal MAX_CONCURRENT_COMMANDS gleichzeitige
+run_command-Calls. Verhindert dass Bulk-Aktionen (Profile-Apply, Compliance-Fix)
+den Tactical-Server mit parallelen Requests fluten und dessen uwsgi-Worker-Pool
+erschoepfen.
+
 Verwendete Endpoints:
   GET  /software/<agent_id>/           → Installierte Software
   GET  /software/chocos/               → Chocolatey-Liste
@@ -13,12 +18,28 @@ Verwendete Endpoints:
   POST /agents/<agent_id>/cmd/         → Raw Command (für custom MSI/EXE)
 """
 import asyncio
+import logging
 import re
 import httpx
 
 from config import runtime_value
 
-_RETRYABLE_STATUS = {502, 503, 504}
+logger = logging.getLogger(__name__)
+
+_RETRYABLE_STATUS = {500, 502, 503, 504}
+
+# Globaler Semaphore: max 2 gleichzeitige run_command Calls an Tactical.
+# Schuetzt den Tactical-Server vor Worker-Pool-Erschoepfung.
+MAX_CONCURRENT_COMMANDS = 2
+_cmd_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    """Lazy init — Semaphore muss im Event-Loop erzeugt werden."""
+    global _cmd_semaphore
+    if _cmd_semaphore is None:
+        _cmd_semaphore = asyncio.Semaphore(MAX_CONCURRENT_COMMANDS)
+    return _cmd_semaphore
 
 # Defense-in-depth: Namens-Validierung vor jeder URL-/Shell-Interpolation
 _PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,99}$")
@@ -127,23 +148,47 @@ class TacticalClient:
     ) -> str:
         """Fuehrt cmd via Tactical run_command aus.
 
+        Concurrency-limitiert durch globalen Semaphore (MAX_CONCURRENT_COMMANDS)
+        damit Bulk-Aktionen den Tactical-Server nicht fluten. Retry bei 500/502/503/504
+        mit exponentiellem Backoff.
+
         run_as_user=True laesst Tactical den Befehl im Kontext des interaktiv
-        eingeloggten Users ausfuehren statt als SYSTEM. Wird fuer winget
-        per-user-only Pakete (LastPass, Bitwarden etc.) gebraucht — ohne
-        interaktiven User lehnt Tactical das ab.
+        eingeloggten Users ausfuehren statt als SYSTEM.
         """
         _check_agent(agent_id)
         base, headers = await self._connection()
-        async with httpx.AsyncClient(headers=headers, timeout=timeout + 15) as c:
-            r = await c.post(
-                f"{base}/agents/{agent_id}/cmd/",
-                json={
-                    "shell": shell,
-                    "cmd": cmd,
-                    "timeout": timeout,
-                    "custom_shell": "",
-                    "run_as_user": bool(run_as_user),
-                },
-            )
-            r.raise_for_status()
-            return r.text
+        url = f"{base}/agents/{agent_id}/cmd/"
+        payload = {
+            "shell": shell,
+            "cmd": cmd,
+            "timeout": timeout,
+            "custom_shell": "",
+            "run_as_user": bool(run_as_user),
+        }
+        delays = [0, 5, 15]  # Retry mit Backoff bei Server-Fehlern
+        last_exc: Exception | None = None
+
+        async with _get_semaphore():
+            async with httpx.AsyncClient(headers=headers, timeout=timeout + 15) as c:
+                for attempt, delay in enumerate(delays):
+                    if delay:
+                        logger.warning(
+                            "Tactical cmd/ retry %d for agent %s after %ds (last: %s)",
+                            attempt, agent_id[:12], delay, last_exc,
+                        )
+                        await asyncio.sleep(delay)
+                    try:
+                        r = await c.post(url, json=payload)
+                        if r.status_code in _RETRYABLE_STATUS:
+                            last_exc = httpx.HTTPStatusError(
+                                f"Tactical returned HTTP {r.status_code}",
+                                request=r.request, response=r,
+                            )
+                            continue
+                        r.raise_for_status()
+                        return r.text
+                    except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+                        last_exc = e
+                        continue
+            assert last_exc is not None
+            raise last_exc
