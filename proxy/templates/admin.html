@@ -2282,8 +2282,6 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 420px;
-  overflow-y: auto;
   padding-right: 2px;
 }
 .sw-row {
@@ -2474,6 +2472,102 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   border-color: #6ee7b7;
   color: #065f46;
 }
+
+/* ── Agent-Detail Overflow Menu ────────────────────────────────────── */
+.agent-overflow-wrap {
+  position: relative;
+}
+.agent-overflow-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: var(--fg-3);
+  font-size: 16px;
+  line-height: 1;
+  transition: background .12s, border-color .12s;
+}
+.agent-overflow-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-s);
+  color: var(--fg);
+}
+.agent-overflow-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 180px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  box-shadow: 0 4px 16px rgba(0,0,0,.10);
+  z-index: 50;
+  padding: 4px;
+}
+.agent-overflow-menu.open { display: block; }
+.agent-overflow-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-2);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: background .1s;
+}
+.agent-overflow-item:hover { background: var(--bg-hover); }
+.agent-overflow-item.danger { color: var(--red); }
+.agent-overflow-item.danger:hover { background: var(--red-bg); }
+.agent-overflow-item.warn { color: #b45309; }
+.agent-overflow-item.warn:hover { background: #fffbeb; }
+.agent-overflow-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* ── Install-History Gruppierung ──────────────────────────────────── */
+.history-group-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-5);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 10px 22px 4px;
+}
+.history-group-label:first-child { padding-top: 4px; }
+.history-show-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--fg-3);
+  cursor: pointer;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-sm);
+  margin-top: 4px;
+  transition: background .12s, color .12s;
+}
+.history-show-more:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.install-row.history-hidden { display: none; }
 
 /* Storage indicator (im add-modes Bar oder Verteilung filter-bar) */
 .storage-indicator {
@@ -4668,6 +4762,60 @@ button.outdated-badge.clickable:disabled {
   font-size: 12px;
 }
 
+/* ── Deploy-Snippet ───────────────────────────────────────────────────── */
+.deploy-snippet-block {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.deploy-snippet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-soft);
+}
+.deploy-snippet-head span {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-4);
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.deploy-snippet-copy {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: var(--fg-3);
+  transition: background .12s, color .12s;
+}
+.deploy-snippet-copy:hover { background: var(--bg-hover); color: var(--fg); }
+.deploy-snippet-code {
+  padding: 14px 16px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--fg-2);
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-x: auto;
+  max-height: 340px;
+  overflow-y: auto;
+}
+.deploy-snippet-hint {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--fg-5);
+  background: var(--bg-soft);
+}
+
 /* ─── RESPONSIVE ──────────────────────────────────────────────────────── */
 
 @media (max-width: 720px) {
@@ -5075,10 +5223,28 @@ button.outdated-badge.clickable:disabled {
             </select>
           </label>
           <button class="btn btn-ghost btn-sm" type="button" id="agent-detail-rescan-btn" onclick="agentDetailRescan()" title="winget-Scan jetzt anstoßen">Neu scannen</button>
-          <button class="btn btn-ghost btn-sm" type="button" id="agent-detail-revoke-btn" onclick="agentRevoke()" title="Token revoken — Client muss neu registriert werden">Token widerrufen</button>
-          <button class="btn push-update-btn btn-sm" type="button" id="agent-detail-ban-btn" onclick="agentBan()" title="Sperren — auch nach Re-Register blockiert">Sperren</button>
-          <button class="btn btn-ghost btn-sm" type="button" id="agent-detail-unban-btn" onclick="agentUnban()" title="Sperre aufheben" style="display:none">Entsperren</button>
-          <button class="btn btn-danger btn-sm" type="button" id="agent-detail-delete-btn" onclick="agentDelete()" title="Aus Datenbank entfernen">Löschen</button>
+          <div class="agent-overflow-wrap">
+            <button class="agent-overflow-btn" type="button" onclick="toggleAgentOverflow(event)" title="Weitere Aktionen">⋯</button>
+            <div class="agent-overflow-menu" id="agent-overflow-menu">
+              <button class="agent-overflow-item" type="button" id="agent-detail-revoke-btn" onclick="agentRevoke(); closeAgentOverflow()">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2v-4M9 21H5a2 2 0 0 1-2-2v-4"/></svg>
+                Token widerrufen
+              </button>
+              <div class="agent-overflow-sep"></div>
+              <button class="agent-overflow-item warn" type="button" id="agent-detail-ban-btn" onclick="agentBan(); closeAgentOverflow()">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 14.14 14.14"/></svg>
+                Sperren
+              </button>
+              <button class="agent-overflow-item" type="button" id="agent-detail-unban-btn" onclick="agentUnban(); closeAgentOverflow()" style="display:none">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18.36 6.64A9 9 0 1 1 5.64 18.36"/><circle cx="12" cy="12" r="1"/></svg>
+                Entsperren
+              </button>
+              <button class="agent-overflow-item danger" type="button" id="agent-detail-delete-btn" onclick="agentDelete(); closeAgentOverflow()">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                Löschen
+              </button>
+            </div>
+          </div>
         </div>
       </div>
       <div id="agents-detail-body">
@@ -5154,6 +5320,23 @@ button.outdated-badge.clickable:disabled {
 
     <div id="build-status" class="build-status">
       <div class="loading-block"><span class="spinner"></span><span class="loading-label">Status wird geladen</span></div>
+    </div>
+
+    <div class="section-head" style="margin-top:48px; margin-bottom:20px">
+      <div>
+        <h2 class="section-title" style="font-size:18px">Tactical-Deploy-Script</h2>
+        <div class="section-sub">PowerShell-Script zum Ausrollen des Kiosk-Clients via Tactical RMM. Werte werden aus den Einstellungen oben gezogen. In Tactical unter <i>Scripts &rarr; PowerShell</i> einf&uuml;gen und auf Agents ausf&uuml;hren.</div>
+      </div>
+    </div>
+    <div id="deploy-snippet-container">
+      <div class="deploy-snippet-block">
+        <div class="deploy-snippet-head">
+          <span>PowerShell</span>
+          <button class="deploy-snippet-copy" type="button" onclick="copyDeploySnippet(this)">Kopieren</button>
+        </div>
+        <pre class="deploy-snippet-code" id="deploy-snippet-code">Lade Script...</pre>
+        <div class="deploy-snippet-hint">Die Agent-ID wird vom Installer automatisch aus der Tactical-Registry gelesen &mdash; kein Parameter n&ouml;tig.</div>
+      </div>
     </div>
   </section>
 
@@ -9953,6 +10136,8 @@ function copyId(id, el) {
 let _currentAgent = null;  // {agent_id, hostname, banned}
 
 async function openAgentDetail(agentId, hostname) {
+  // Filter-State zuruecksetzen damit smart default greifen kann
+  _agentSoftwareFilter = { q: '', mode: 'all' };
   // State im modul-globalen Speichern, damit die Action-Buttons wissen welcher Agent gemeint ist
   const cached = (cachedAgents || []).find(a => a.agent_id === agentId);
   _currentAgent = {
@@ -9995,6 +10180,33 @@ async function openAgentDetail(agentId, hostname) {
     document.getElementById('agents-detail-body').innerHTML =
       `<div class="panel-error">Fehler: ${esc(e.message)}</div>`;
   }
+}
+
+// ── Overflow-Menu für Agent-Detail ───────────────────────────────────────────
+function toggleAgentOverflow(e) {
+  e.stopPropagation();
+  const menu = document.getElementById('agent-overflow-menu');
+  if (!menu) return;
+  menu.classList.toggle('open');
+  if (menu.classList.contains('open')) {
+    setTimeout(() => document.addEventListener('click', _closeOverflowOnOutside, { once: true }), 0);
+  }
+}
+function closeAgentOverflow() {
+  const menu = document.getElementById('agent-overflow-menu');
+  if (menu) menu.classList.remove('open');
+}
+function _closeOverflowOnOutside(e) {
+  const menu = document.getElementById('agent-overflow-menu');
+  if (menu && !menu.contains(e.target)) menu.classList.remove('open');
+}
+
+// ── Install-History: show-more toggle ───────────────────────────────────────
+function toggleHistoryShowMore() {
+  const hidden = document.querySelectorAll('.install-row.history-hidden');
+  hidden.forEach(el => el.classList.remove('history-hidden'));
+  const btn = document.getElementById('history-show-more-btn');
+  if (btn) btn.remove();
 }
 
 function closeAgentDetailPage() {
@@ -10078,6 +10290,21 @@ async function agentDetailRescan() {
 let _agentSoftwareItems = [];
 let _agentSoftwareFilter = { q: '', mode: 'all' };
 
+function _historyGroupLabel(isoStr) {
+  if (!isoStr) return 'Unbekannt';
+  const d = new Date(isoStr.endsWith('Z') ? isoStr : isoStr + 'Z');
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+  const itemDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  if (itemDay >= today) return 'Heute';
+  if (itemDay >= yesterday) return 'Gestern';
+  const diff = Math.floor((today - itemDay) / 86400000);
+  if (diff <= 7) return 'Letzte 7 Tage';
+  if (diff <= 30) return 'Letzte 30 Tage';
+  return '\u00c4lter';
+}
+
 function renderAgentDetail(softwareData, log) {
   _agentSoftwareItems = (softwareData && softwareData.items) || [];
   const items = _agentSoftwareItems;
@@ -10117,6 +10344,12 @@ function renderAgentDetail(softwareData, log) {
   const unmanaged = items.length - managed;
   const total = items.length;
 
+  // Smart default filter: wenn >60% unverwaltet, starte mit "managed" view
+  const managedRatio = total > 0 ? managed / total : 1;
+  if (managedRatio < 0.4 && managed > 0 && _agentSoftwareFilter.mode === 'all') {
+    _agentSoftwareFilter.mode = 'managed';
+  }
+
   const f = _agentSoftwareFilter.mode;
   const chip = (mode, label, count) =>
     `<button class="sw-chip${f===mode?' active':''}" type="button" data-mode="${esc(mode)}" onclick="_setSoftwareFilterMode('${esc(mode)}')">${label} <span class="sw-chip-count">${count}</span></button>`;
@@ -10130,6 +10363,7 @@ function renderAgentDetail(softwareData, log) {
       </div>
       <div class="sw-filter-chips">
         ${chip('all',       'Alle',         total)}
+        ${chip('managed',   'Verwaltet',    managed)}
         ${chip('updates',   'Updates',      updates)}
         ${chip('winget',    'Winget',       winget)}
         ${chip('choco',     'Chocolatey',   choco)}
@@ -10139,17 +10373,34 @@ function renderAgentDetail(softwareData, log) {
     </div>
   `;
 
-  const logBlock = log.length
-    ? log.map(e => `
-      <div class="install-row">
+  // History: gruppiert nach Tag, limitiert auf HISTORY_LIMIT
+  const HISTORY_LIMIT = 15;
+  let logBlock = '';
+  if (!log.length) {
+    logBlock = '<div class="empty-mini">Noch keine Installationen aufgezeichnet.</div>';
+  } else {
+    let lastGroup = '';
+    const rows = log.map((e, idx) => {
+      const group = _historyGroupLabel(e.ts);
+      const groupHeader = (group !== lastGroup) ? `<div class="history-group-label">${esc(group)}</div>` : '';
+      lastGroup = group;
+      const hidden = idx >= HISTORY_LIMIT ? ' history-hidden' : '';
+      return `${groupHeader}<div class="install-row${hidden}"${hidden ? ' style="display:none"' : ''}>
         <span class="install-badge ${e.action}">${e.action === 'install' ? 'Install' : 'Uninstall'}</span>
         <div>
           <div class="install-pkg">${esc(e.display_name)}</div>
           <div class="install-name">${esc(e.package_name)}</div>
         </div>
         <div class="install-time" title="${esc(fmtDt(e.ts))}">${esc(relTime(e.ts))}</div>
-      </div>`).join('')
-    : '<div class="empty-mini">Noch keine Installationen aufgezeichnet.</div>';
+      </div>`;
+    }).join('');
+    const showMoreBtn = log.length > HISTORY_LIMIT
+      ? `<div class="history-show-more" id="history-show-more-btn" onclick="toggleHistoryShowMore()">
+           ${log.length - HISTORY_LIMIT} weitere Eintr\u00e4ge anzeigen
+         </div>`
+      : '';
+    logBlock = rows + showMoreBtn;
+  }
 
   // Profile-Pills + Update-All-Banner
   const profs = (_currentAgent && _currentAgent.profiles) || [];
@@ -10170,7 +10421,7 @@ function renderAgentDetail(softwareData, log) {
   const updateAllBanner = updates > 0
     ? `<div class="agent-update-banner">
          <div style="flex:1; min-width:0">
-           <div class="aub-title">${updates} Update${updates===1?'':'s'} verfuegbar</div>
+           <div class="aub-title">${updates} Update${updates===1?'':'s'} verf\u00fcgbar</div>
            <div class="aub-sub">${updateList}</div>
          </div>
          <button class="btn btn-primary btn-sm" onclick="agentUpdateAll(this)">Alle updaten</button>
@@ -10184,7 +10435,7 @@ function renderAgentDetail(softwareData, log) {
     ${updateAllBanner}
     <div class="agent-section-head">
       <span class="agent-section-title">Installierte Software</span>
-      <span class="agent-section-count" id="sw-section-count">${total} · ${managed} verwaltet · ${updates} Update${updates === 1 ? '' : 's'}</span>
+      <span class="agent-section-count" id="sw-section-count">${total} insgesamt · ${managed} verwaltet${updates ? ` · ${updates} Update${updates === 1 ? '' : 's'}` : ''}</span>
     </div>
     ${filterBar}
     <div class="agent-software-list" id="agent-software-list"></div>
@@ -10220,6 +10471,7 @@ function _applySoftwareFilter() {
   const mode = _agentSoftwareFilter.mode;
 
   const filtered = _agentSoftwareItems.filter(i => {
+    if (mode === 'managed'   && !i.managed) return false;
     if (mode === 'updates'   && !i.update_available) return false;
     if (mode === 'winget'    && !(i.managed && i.managed_type === 'winget')) return false;
     if (mode === 'choco'     && !(i.managed && i.managed_type === 'choco')) return false;
@@ -11628,12 +11880,111 @@ async function loadSettings() {
     const data = await api('GET', '/admin/api/settings');
     _settingsMeta = data.settings;
     renderSettings();
+    renderDeploySnippet();
     loadBranding();
     loadBuildStatus();
   } catch (e) {
     document.getElementById('settings-form').innerHTML =
       `<div class="empty"><h3>Fehler beim Laden</h3><p>${esc(e.message)}</p></div>`;
   }
+}
+
+// ── Deploy-Snippet ──────────────────────────────────────────────────────────
+
+async function renderDeploySnippet() {
+  const el = document.getElementById('deploy-snippet-code');
+  if (!el) return;
+
+  const get = (key) => {
+    const s = (_settingsMeta || []).find(m => m.key === key);
+    return s ? s.value : '';
+  };
+
+  const proxyUrl = get('proxy_public_url') || 'http://PROXY-URL:8765';
+  const slug = get('product_slug') || 'Softshelf';
+  const setupExe = slug + '-setup.exe';
+  const setupUrl = proxyUrl.replace(/\/+$/, '') + '/download/' + setupExe;
+
+  // Secret via Reveal-API holen damit der echte Wert im Snippet steht
+  let secretDisplay = '<REGISTRATION-SECRET>';
+  try {
+    const r = await api('GET', '/admin/api/settings/registration_secret/reveal');
+    if (r.value) secretDisplay = r.value;
+  } catch (e) {}
+
+  el.textContent =
+`# Softshelf Tactical-Deploy-Script
+# In Tactical \u2192 Scripts \u2192 PowerShell einf\u00fcgen und auf Agents ausf\u00fchren.
+
+$ProxyUrl           = "${proxyUrl}"
+$RegistrationSecret = "${secretDisplay}"
+$SetupExeUrl        = "${setupUrl}"
+
+$ErrorActionPreference = "Stop"
+$ProgressPreference    = "SilentlyContinue"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+$SetupFile = [System.IO.Path]::GetFileName(([Uri]$SetupExeUrl).AbsolutePath)
+if ([string]::IsNullOrWhiteSpace($SetupFile)) { $SetupFile = "setup.exe" }
+$TempSetup = Join-Path $env:TEMP $SetupFile
+$Slug      = [System.IO.Path]::GetFileNameWithoutExtension($SetupFile) -replace '-setup$',''
+$ErrorLog  = Join-Path $env:TEMP ("{0}_setup_error.txt" -f $Slug.ToLower())
+
+Write-Host "=== Deployment ===" -ForegroundColor Cyan
+Write-Host "Proxy: $ProxyUrl"
+Write-Host "Setup: $SetupFile"
+
+Write-Host "Lade $SetupFile herunter..."
+try {
+    Invoke-WebRequest -Uri $SetupExeUrl -OutFile $TempSetup -UseBasicParsing
+} catch {
+    Write-Host "Download fehlgeschlagen: $($_.Exception.Message)" -ForegroundColor Red
+    exit 2
+}
+Write-Host "Download abgeschlossen." -ForegroundColor Green
+
+Write-Host "Starte Installation..."
+$proc = Start-Process \`
+    -FilePath $TempSetup \`
+    -ArgumentList @("--proxy-url", $ProxyUrl, "--reg-secret", $RegistrationSecret) \`
+    -Wait -PassThru -NoNewWindow
+
+if ($proc.ExitCode -ne 0) {
+    $errMsg = if (Test-Path $ErrorLog) { Get-Content $ErrorLog -Raw } else { "Unbekannter Fehler" }
+    Write-Host "Installation fehlgeschlagen (ExitCode $($proc.ExitCode)):" -ForegroundColor Red
+    Write-Host $errMsg -ForegroundColor Red
+    exit 1
+}
+
+Remove-Item $TempSetup -Force -ErrorAction SilentlyContinue
+Remove-Item $ErrorLog  -Force -ErrorAction SilentlyContinue
+$RegistrationSecret = $null
+[System.GC]::Collect()
+
+Write-Host "=== Deployment abgeschlossen ===" -ForegroundColor Cyan
+Write-Host "Der Tray-Client startet beim naechsten Benutzer-Login automatisch." -ForegroundColor Green`;
+}
+
+function copyDeploySnippet(btn) {
+  const el = document.getElementById('deploy-snippet-code');
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Kopiert!';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  }).catch(() => {
+    // Fallback
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.execCommand('copy');
+    sel.removeAllRanges();
+    const orig = btn.textContent;
+    btn.textContent = 'Kopiert!';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  });
 }
 
 // ── Branding (App-Icon Upload) ───────────────────────────────────────────────

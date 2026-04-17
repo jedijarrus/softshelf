@@ -1,6 +1,6 @@
 # Softshelf – Systemarchitektur
 
-**Version:** 2.0.0
+**Version:** 2.0.1
 **Stand:** 2026-04-16
 
 > **Softshelf ist eine Windows-Software-Verteilungs-Plattform** mit Tactical-
