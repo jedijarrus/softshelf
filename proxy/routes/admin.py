@@ -4543,7 +4543,7 @@ async def trigger_build():
     icon_b64    = _read_icon_b64()  # None wenn kein Icon hochgeladen
 
     cfg = get_settings()
-    version = "2.0.1"  # wird in der EXE angezeigt
+    version = "2.0.2"  # wird in der EXE angezeigt
 
     build_id = await database.start_build_log(proxy_url, version)
 

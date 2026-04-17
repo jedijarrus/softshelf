@@ -29,7 +29,7 @@ from routes import packages, install, admin, register
 
 logger = logging.getLogger("softshelf")
 
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 
 # /app/downloads — shared volume mit dem builder-Container
 DOWNLOADS_DIR = "/app/downloads"
@@ -455,6 +455,15 @@ async def client_config():
         "app_name": app_name,
         "version": VERSION,
     }
+
+
+@app.get("/api/v1/icon")
+async def public_icon():
+    """Branding-Icon für den Tray-Client (öffentlich, kein Auth)."""
+    icon_path = os.path.join(os.path.dirname(database.DB_PATH), "branding", "icon.ico")
+    if not os.path.isfile(icon_path):
+        raise HTTPException(status_code=404)
+    return FileResponse(icon_path, media_type="image/x-icon")
 
 
 @app.get("/api/v1/health")
