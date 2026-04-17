@@ -11167,13 +11167,17 @@ function onFileSelected(file) {
   const displayInput = document.getElementById('upload-display');
   if (!displayInput.value.trim()) {
     let base = file.name.replace(/\.(msi|exe)$/i, '');
-    // Prefixes/Suffixes die nicht zum Produktnamen gehoeren
-    base = base.replace(/^(setup|install(er)?|update|patch)[_. -]*/i, '');
+    // Prefixes: nur wenn Separator danach (setup_foo, nicht setupdownloader)
+    base = base.replace(/^(setup|install(er)?|update|patch)[_. -]+/i, '');
+    // Suffixes: mit oder ohne Separator (FooSetup, Foo-Setup, Foo_x64)
     base = base.replace(/[_. -]*(setup|install(er)?|x64|x86|amd64|win64|win32)$/i, '');
-    // Build-/Versionsnummern am Ende entfernen (z.B. _35736, -1.2.3, _v2.0)
+    // Versionsnummern am Ende (z.B. _35736, -1.2.3, _v2.0, -6.3.5)
     base = base.replace(/[_. -]+v?\d[\d.]{0,20}$/i, '');
-    // CamelCase aufbrechen (CodeTwoSignatures -> Code Two Signatures)
-    base = base.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+    // CamelCase: nur sichere Splits (lowercase gefolgt von Uppercase+lowercase,
+    // mind. 2 Zeichen auf jeder Seite). Lookahead damit alle Splits greifen.
+    if (/^[A-Za-z0-9._-]+$/.test(base)) {
+      base = base.replace(/([a-z])(?=[A-Z][a-z])/g, '$1 ');
+    }
     // Separatoren normalisieren
     base = base.replace(/[._]+/g, ' ').replace(/-/g, '-').trim();
     if (base.length < 2) base = file.name.replace(/\.(msi|exe)$/i, '');
@@ -11229,12 +11233,8 @@ function _showInstallerDetection(type, args, pe) {
       uninstInput.value = 'msiexec /x "' + pe._msiProductCode + '" /qn /norestart';
     }
   }
-  // Detection-Name Fallback: wenn PE nix geliefert hat, Display-Name nehmen
-  const detInput2 = document.getElementById('upload-detection');
-  if (detInput2 && !detInput2.value.trim()) {
-    const fallback = document.getElementById('upload-display').value.trim();
-    if (fallback) detInput2.value = fallback;
-  }
+  // Detection-Name: NUR aus PE/MSI ProductName. Kein Fallback auf Filename —
+  // ein falscher Detection-Name ist schlimmer als keiner.
   const argsInput = document.getElementById('upload-args');
   const hint = document.getElementById('upload-args-hint');
   if (type && args) {
