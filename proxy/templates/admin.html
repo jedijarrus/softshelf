@@ -7516,7 +7516,7 @@ function renderCompliance(d) {
           <span class="pkg-type-pill ${esc(p.type)}">${esc(p.type)}</span>
           ${esc(p.display_name || p.name)}
         </div>
-        <div class="er-pkg"><code>${esc(p.name)}</code></div>
+        <div class="er-pkg"><code title="${esc(p.name)}" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:middle">${esc(p.name)}</code></div>
         <div class="er-action">${p.installed_count}/${p.total_agents} (${pct}%)</div>
         <div class="er-msg">${p.missing.length ? `fehlt auf: ${missingList}${missingMore}` : '—'}</div>
         <div class="er-time">${p.missing.length ? `<span class="dist-outdated-count">${p.missing.length}</span>` : '<span class="dist-outdated-zero">✓</span>'}</div>
