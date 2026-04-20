@@ -49,47 +49,48 @@ async def _run_custom_command_bg(
     cmd: str,
     action: str,
     version_id: int | None = None,
+    log_id: int | None = None,
 ):
     """
-    Background-Task für custom install/uninstall via Tactical run-cmd.
-    Dauert Minuten (Download + msiexec), daher nicht synchron am Request hängen.
-    Bei Erfolg wird agent_installations aktualisiert. Bei Fehler wird die
-    Meldung in scan_meta.last_action_error persistiert damit das Admin-UI
-    sie als Banner im Agent-Detail zeigen kann (gleicher Mechanismus wie
-    bei winget und choco).
+    Background-Task fuer custom install/uninstall via Tactical run-cmd.
+    Verwendet Callback-Pattern: Tactical-Timeout auf 30s (nur Delivery-Check),
+    Ergebnis kommt asynchron via POST /api/v1/callback/{job_id}.
+    Falls Tactical sofort 200 + Output liefert (schnelle Commands), wird das
+    Ergebnis direkt verarbeitet. Falls Timeout/502 → Callback wird erwartet.
     """
-    error_msg: str | None = None
-    raw_output = ""
+    if log_id:
+        try:
+            await database.update_action_log_status(log_id, "running")
+        except Exception:
+            pass
+
+    # Kurzer Timeout: nur pruefen ob NATS Delivery klappt.
+    # Bei Timeout: Command laeuft trotzdem, Callback kommt spaeter.
     try:
-        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=600)
+        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=30)
         if raw_output and raw_output.startswith('"'):
             try:
                 import json as _json
                 raw_output = _json.loads(raw_output)
             except Exception:
                 pass
-        logger.info("custom %s ok: %s auf %s", action, display_name, hostname)
-        if action == "install":
-            await database.set_agent_installation(agent_id, package_name, version_id)
-        elif action == "uninstall":
-            await database.delete_agent_installation(agent_id, package_name)
+        # Tactical hat synchron geantwortet (schneller Command).
+        # Callback wird trotzdem kommen, aber wir loggen schon mal.
+        logger.info("custom %s delivered+returned: %s auf %s", action, display_name, hostname)
     except Exception as e:
-        error_msg = str(e)[:300] or "unbekannter Fehler"
-        raw_output = raw_output or error_msg
-        logger.warning("custom %s fehlgeschlagen: %s auf %s — %s",
-                       action, display_name, hostname, error_msg)
+        # Timeout oder 502 — normal bei langen Commands.
+        # Command laeuft auf Agent, Callback kommt spaeter.
+        logger.info(
+            "custom %s delivered (async, callback pending): %s auf %s — %s",
+            action, display_name, hostname, type(e).__name__,
+        )
+        # Nicht als Fehler werten — Callback liefert das Ergebnis
+        return
 
-    try:
-        full_out = (
-            f"=== custom {action} {package_name} ===\n\n"
-            f"{raw_output or '(kein Output)'}"
-        )
-        await database.upsert_action_result(
-            agent_id, package_name, error_msg,
-            full_output=full_out, action=action,
-        )
-    except Exception as e:
-        logger.warning("upsert_action_result custom failed: %s", e)
+    # Falls wir hier ankommen: Tactical hat synchron geantwortet.
+    # Das passiert nur bei sehr schnellen Commands (<30s).
+    # Callback wird trotzdem kommen und das Ergebnis ueberschreiben,
+    # daher hier nichts weiter tun — Callback handled alles.
 
 
 class SoftwareRequest(BaseModel):
@@ -147,6 +148,9 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
 
     nonce = _secrets.token_hex(4)
 
+    install_timeout_s = 120
+    install_timeout_ms = install_timeout_s * 1000
+
     if archive_type == "archive":
         entry_point = (pkg.get("entry_point") or "").strip()
         if not entry_point:
@@ -159,31 +163,43 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
         args_array = _ps_arg_array(install_args)
         args_line = (
             f"$proc = Start-Process -FilePath $exe -ArgumentList {args_array} "
-            f"-WorkingDirectory $workDir -Wait -PassThru -NoNewWindow"
+            f"-WorkingDirectory $workDir -PassThru -WindowStyle Hidden"
             if args_array
             else
             f"$proc = Start-Process -FilePath $exe "
-            f"-WorkingDirectory $workDir -Wait -PassThru -NoNewWindow"
+            f"-WorkingDirectory $workDir -PassThru -WindowStyle Hidden"
         )
-        return f"""$ErrorActionPreference = 'Stop'
+        return f"""$ErrorActionPreference = 'Continue'
 $zipPath = Join-Path $env:TEMP 'kiosk_install_{nonce}.zip'
 $extPath = Join-Path $env:TEMP 'kiosk_install_{nonce}'
+Write-Output 'Download laeuft...'
 Invoke-WebRequest -Uri '{url_quoted}' -OutFile $zipPath -UseBasicParsing
+Write-Output "Download abgeschlossen, entpacke..."
 Expand-Archive -LiteralPath $zipPath -DestinationPath $extPath -Force
 $exe = Join-Path $extPath '{ep_quoted}'
 if (-not (Test-Path -LiteralPath $exe)) {{
     Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
     Remove-Item $extPath -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Error "Entry-Point nicht gefunden im Archiv: {ep_quoted}"
-    exit 1
+    Write-Output "FEHLER: Entry-Point nicht gefunden im Archiv: {ep_quoted}"
+    cmd /c "exit 1"
 }}
 $workDir = Split-Path -LiteralPath $exe -Parent
+Write-Output "Starte Installer: $exe"
 {args_line}
+if (-not $proc.WaitForExit({install_timeout_ms})) {{
+    try {{ $proc.Kill() }} catch {{ }}
+    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+    Remove-Item $extPath -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Output "FEHLER: Installer hat nach {install_timeout_s}s nicht geantwortet — abgebrochen"
+    cmd /c "exit 1"
+}}
+$ec = if ($null -eq $proc.ExitCode) {{ 0 }} else {{ $proc.ExitCode }}
+Write-Output "Prozess beendet mit ExitCode $ec"
 Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
 Remove-Item $extPath -Recurse -Force -ErrorAction SilentlyContinue
-if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {{
-    Write-Error "Installer beendete mit ExitCode $($proc.ExitCode)"
-    exit $proc.ExitCode
+if ($ec -ne 0 -and $ec -ne 3010) {{
+    Write-Output "FEHLER: Installer beendete mit ExitCode $ec"
+    cmd /c "exit $ec"
 }}
 Write-Output 'Installation abgeschlossen.'
 """
@@ -199,7 +215,7 @@ Write-Output 'Installation abgeschlossen.'
         install_line = (
             f"$proc = Start-Process -FilePath msiexec "
             f"-ArgumentList {args_line} "
-            f"-Wait -PassThru -NoNewWindow"
+            f"-PassThru -WindowStyle Hidden"
         )
     else:
         extra = [f"'{_ps_quote(a)}'" for a in install_args.split()]
@@ -208,38 +224,98 @@ Write-Output 'Installation abgeschlossen.'
             install_line = (
                 f"$proc = Start-Process -FilePath {tmp_var} "
                 f"-ArgumentList {args_line} "
-                f"-Wait -PassThru -NoNewWindow"
+                f"-PassThru -WindowStyle Hidden"
             )
         else:
             install_line = (
                 f"$proc = Start-Process -FilePath {tmp_var} "
-                f"-Wait -PassThru -NoNewWindow"
+                f"-PassThru -WindowStyle Hidden"
             )
 
-    return f"""$ErrorActionPreference = 'Stop'
+    return f"""$ErrorActionPreference = 'Continue'
 {tmp_init}
+Write-Output 'Download laeuft...'
 Invoke-WebRequest -Uri '{url_quoted}' -OutFile {tmp_var} -UseBasicParsing
+Write-Output 'Download abgeschlossen, starte Installer...'
 {install_line}
+if (-not $proc.WaitForExit({install_timeout_ms})) {{
+    try {{ $proc.Kill() }} catch {{ }}
+    Remove-Item {tmp_var} -Force -ErrorAction SilentlyContinue
+    Write-Output "FEHLER: Installer hat nach {install_timeout_s}s nicht geantwortet — abgebrochen"
+    cmd /c "exit 1"
+}}
+$ec = if ($null -eq $proc.ExitCode) {{ 0 }} else {{ $proc.ExitCode }}
+Write-Output "Prozess beendet mit ExitCode $ec"
 Remove-Item {tmp_var} -Force -ErrorAction SilentlyContinue
-if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {{
-    Write-Error "Installer beendete mit ExitCode $($proc.ExitCode)"
-    exit $proc.ExitCode
+if ($ec -ne 0 -and $ec -ne 3010) {{
+    Write-Output "FEHLER: Installer beendete mit ExitCode $ec"
+    cmd /c "exit $ec"
 }}
 Write-Output 'Installation abgeschlossen.'
 """
 
 
-def _build_uninstall_command(uninstall_cmd: str) -> str:
+def _build_uninstall_command(
+    uninstall_cmd: str, timeout_s: int = 120, detection_name: str = "",
+) -> str:
     """PowerShell-Wrapper für ein Uninstall-Command — propagiert ExitCode
-    sauber und akzeptiert reboot-required-Codes (3010) und not-installed (1605)."""
+    sauber und akzeptiert reboot-required-Codes (3010) und not-installed (1605).
+    Timeout nach timeout_s Sekunden mit explizitem Kill + Fehlermeldung.
+    Post-Uninstall-Verify: prüft ob Software noch in Registry steht."""
     safe = uninstall_cmd.replace("'", "''")
-    return f"""$ErrorActionPreference = 'Stop'
-$proc = Start-Process -FilePath cmd.exe -ArgumentList '/c','{safe}' -Wait -PassThru -NoNewWindow
-if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010 -and $proc.ExitCode -ne 1605) {{
-    Write-Error "Uninstaller beendete mit ExitCode $($proc.ExitCode)"
-    exit $proc.ExitCode
+    timeout_ms = timeout_s * 1000
+    # Detection-Name für Post-Verify (PS single-quote safe)
+    det = (detection_name or "").replace("'", "''")
+    verify_block = """
+            Write-Output 'Deinstallation abgeschlossen.'"""
+    if det:
+        verify_block = f"""
+    # Post-Uninstall-Verify
+    Start-Sleep -Seconds 2
+    $regPaths = @(
+        'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+        'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+    )
+    $stillThere = $false
+    foreach ($rp in $regPaths) {{
+        $found = Get-ItemProperty $rp -ErrorAction SilentlyContinue |
+            Where-Object {{ $_.DisplayName -like '*{det}*' }}
+        if ($found) {{ $stillThere = $true; break }}
+    }}
+    if ($stillThere) {{
+        Write-Output "WARNUNG: Software ist nach Uninstall noch in der Registry vorhanden"
+        Write-Output "Moeglicherweise hat der Uninstaller ein /S oder /silent Flag gebraucht, oder ein Dialog wurde nicht bestaetigt."
+        Write-Output "FEHLER: Uninstall fehlgeschlagen — Software noch installiert"
+        cmd /c "exit 1"
+    }} else {{
+        Write-Output "Verify: Software nicht mehr in Registry"
+        Write-Output 'Deinstallation abgeschlossen.'
+    }}"""
+    # WICHTIG: kein `exit` im Script — der Callback-Wrapper muss danach noch laufen!
+    # Stattdessen `cmd /c "exit N"` um $LASTEXITCODE zu setzen ohne PowerShell zu beenden.
+    return f"""$ErrorActionPreference = 'Continue'
+Write-Output 'Starte Uninstall ({timeout_s}s Timeout)'
+try {{
+    $proc = Start-Process -FilePath cmd.exe -ArgumentList '/c','{safe}' -PassThru -WindowStyle Hidden
+    if (-not $proc.WaitForExit({timeout_ms})) {{
+        Write-Output "TIMEOUT nach {timeout_s}s — Prozess wird beendet"
+        try {{ $proc.Kill() }} catch {{ }}
+        Write-Output "FEHLER: Uninstaller hat nach {timeout_s}s nicht geantwortet — abgebrochen. Moeglicherweise wartet der Installer auf Benutzereingabe oder ein Uninstall-Passwort."
+        cmd /c "exit 1"
+    }} else {{
+        $ec = if ($null -eq $proc.ExitCode) {{ 0 }} else {{ $proc.ExitCode }}
+        Write-Output "Prozess beendet mit ExitCode $ec"
+        if ($ec -ne 0 -and $ec -ne 3010 -and $ec -ne 1605) {{
+            Write-Output "FEHLER: Uninstaller beendete mit ExitCode $ec"
+            cmd /c "exit $ec"
+        }} else {{{verify_block}
+        }}
+    }}
+}} catch {{
+    Write-Output "Exception: $($_.Exception.Message)"
+    Write-Output "FEHLER: $($_.Exception.Message)"
+    cmd /c "exit 1"
 }}
-Write-Output 'Deinstallation abgeschlossen.'
 """
 
 
@@ -656,6 +732,7 @@ async def _run_choco_command_bg(
     display_name: str,
     cmd: str,
     action: str,
+    log_id: int | None = None,
 ):
     """Background-Task für choco install/uninstall via Tactical run-cmd. Spiegelt
     `_run_winget_command_bg`: capture output, detect soft errors, persist
@@ -665,6 +742,12 @@ async def _run_choco_command_bg(
     aber die `<name>.install`-Variante existiert (z.B. 'vlc' weg, 'vlc.install'
     noch da), retry mit dem .install-Namen. Behebt Orphans aus früheren
     halb-fehlgeschlagenen Uninstalls."""
+    if log_id:
+        try:
+            await database.update_action_log_status(log_id, "running")
+        except Exception:
+            pass
+
     exit_code, raw_output = await _run_choco_one(agent_id, cmd)
     soft_err = _detect_choco_soft_error(raw_output, exit_code)
     success = exit_code in _CHOCO_SUCCESS_CODES and not soft_err
@@ -752,6 +835,17 @@ async def _run_choco_command_bg(
     except Exception as e:
         logger.warning("post-action choco rescan failed for %s: %s", agent_id, e)
 
+    if log_id:
+        try:
+            al_status = "error" if error_msg else "success"
+            await database.complete_action_log(
+                log_id, al_status, exit_code=exit_code,
+                error_summary=error_msg,
+                stdout=raw_output or None,
+            )
+        except Exception as e:
+            logger.warning("complete_action_log choco failed: %s", e)
+
 
 # winget ExitCode der "kein Installer fuer dieses System / scope" meint.
 # Tritt auf wenn wir --scope machine erzwingen, das Paket aber nur per-user
@@ -791,6 +885,7 @@ async def _run_winget_command_bg(
     winget_id: str,
     winget_scope: str = "auto",
     version: str | None = None,
+    log_id: int | None = None,
 ):
     """
     Background-Task für winget install/upgrade/uninstall via Tactical run-cmd.
@@ -811,6 +906,12 @@ async def _run_winget_command_bg(
     Der uebergebene `cmd` ist der initial gebaute Wrapper. Fuer den Fallback-
     Pfad bauen wir den user-scope-Wrapper selbst hier um Parameter zu behalten.
     """
+    if log_id:
+        try:
+            await database.update_action_log_status(log_id, "running")
+        except Exception:
+            pass
+
     scope = (winget_scope or "auto").lower()
     if scope not in ("auto", "machine", "user"):
         scope = "auto"
@@ -961,6 +1062,17 @@ async def _run_winget_command_bg(
     except Exception as e:
         logger.warning("post-action winget rescan failed for %s: %s", agent_id, e)
 
+    if log_id:
+        try:
+            al_status = "error" if error_msg else "success"
+            await database.complete_action_log(
+                log_id, al_status, exit_code=exit_code,
+                error_summary=error_msg,
+                stdout=raw_output or None,
+            )
+        except Exception as e:
+            logger.warning("complete_action_log winget failed: %s", e)
+
 
 @router.post("/install", response_model=SoftwareResponse)
 async def install_package(
@@ -981,9 +1093,6 @@ async def install_package(
 
     if ptype == "winget":
         _check_winget_id(body.package_name)
-        # winget hat eigenes Update-Verhalten: wir wählen install vs. upgrade
-        # anhand des aktuellen state. Wenn schon installiert + available_version
-        # gesetzt → upgrade. Sonst install.
         state = await database.get_agent_winget_state(agent_id)
         st = state.get(body.package_name)
         if st and st.get("installed_version") and st.get("available_version"):
@@ -997,18 +1106,19 @@ async def install_package(
             action, body.package_name, ver,
             include_scope_machine=include_scope_machine,
         )
+        log_id = await database.create_action_log(
+            agent_id, hostname, body.package_name,
+            pkg["display_name"], "winget", action,
+        )
         _spawn_bg(_run_winget_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
             cmd, action, body.package_name,
-            winget_scope=scope, version=ver,
+            winget_scope=scope, version=ver, log_id=log_id,
         ))
         verb = "Aktualisierung" if action == "upgrade" else "Installation"
         msg = (
             f"{verb} von '{pkg['display_name']}' auf {hostname} gestartet. "
             f"Das kann einige Minuten dauern."
-        )
-        await database.log_install(
-            agent_id, hostname, body.package_name, pkg["display_name"], "install"
         )
         return SoftwareResponse(status="started", message=msg)
 
@@ -1018,32 +1128,35 @@ async def install_package(
     if ptype == "custom":
         if not pkg.get("sha256"):
             raise HTTPException(status_code=500, detail="Custom-Paket ohne Datei-Hash")
-        cmd = await _build_install_command(pkg, agent_id)
-        # Fire-and-forget: der softshelf-Client soll nicht auf den Install warten
+        inner_cmd = await _build_install_command(pkg, agent_id)
+        job_id = _generate_job_id()
+        cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        log_id = await database.create_action_log(
+            agent_id, hostname, body.package_name,
+            pkg["display_name"], "custom", "install", job_id=job_id,
+        )
         _spawn_bg(_run_custom_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"], cmd, "install",
-            pkg.get("current_version_id"),
+            pkg.get("current_version_id"), log_id=log_id,
         ))
         msg = (
             f"Installation von '{pkg['display_name']}' auf {hostname} gestartet. "
             f"Das kann einige Minuten dauern."
         )
     else:
-        # Choco via run_command (statt /software/{id}/) damit wir stdout sehen
-        # und Soft-Errors wie 3cx-404 in scan_meta.last_action_error landen können.
         cmd = _build_choco_command("install", body.package_name)
+        log_id = await database.create_action_log(
+            agent_id, hostname, body.package_name,
+            pkg["display_name"], "choco", "install",
+        )
         _spawn_bg(_run_choco_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, "install",
+            cmd, "install", log_id=log_id,
         ))
         msg = (
             f"Installation von '{pkg['display_name']}' auf {hostname} gestartet. "
             f"Das kann einige Minuten dauern."
         )
-
-    await database.log_install(
-        agent_id, hostname, body.package_name, pkg["display_name"], "install"
-    )
 
     return SoftwareResponse(
         status="started",
@@ -1069,17 +1182,18 @@ async def uninstall_package(
         _check_winget_id(body.package_name)
         cmd = _build_winget_command("uninstall", body.package_name)
         scope = pkg.get("winget_scope") or "auto"
+        log_id = await database.create_action_log(
+            agent_id, hostname, body.package_name,
+            pkg["display_name"], "winget", "uninstall",
+        )
         _spawn_bg(_run_winget_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
             cmd, "uninstall", body.package_name,
-            winget_scope=scope,
+            winget_scope=scope, log_id=log_id,
         ))
         msg = (
             f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
             f"Das kann einige Minuten dauern."
-        )
-        await database.log_install(
-            agent_id, hostname, body.package_name, pkg["display_name"], "uninstall"
         )
         return SoftwareResponse(status="started", message=msg)
 
@@ -1093,34 +1207,37 @@ async def uninstall_package(
                 status_code=400,
                 detail="Für dieses Paket wurde kein Uninstall-Command hinterlegt.",
             )
-        ps_cmd = _build_uninstall_command(uninstall_cmd)
-        # Fire-and-forget auch hier
+        inner_cmd = _build_uninstall_command(
+            uninstall_cmd, detection_name=pkg.get("detection_name") or pkg.get("display_name") or "",
+        )
+        job_id = _generate_job_id()
+        ps_cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        log_id = await database.create_action_log(
+            agent_id, hostname, body.package_name,
+            pkg["display_name"], "custom", "uninstall", job_id=job_id,
+        )
         _spawn_bg(_run_custom_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"], ps_cmd, "uninstall",
-            pkg.get("current_version_id"),
+            pkg.get("current_version_id"), log_id=log_id,
         ))
         msg = (
             f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
             f"Das kann einige Minuten dauern."
         )
     else:
-        # Choco via run_command (gleicher Pfad wie install) — kein Vorab-Check
-        # auf Tactical-Scan mehr nötig, choco selber sagt uns ob das Paket
-        # da war oder nicht (over stdout / exit code). Das spart auch den
-        # 409-Fall der nur an Heuristik-Matches lag.
         cmd = _build_choco_command("uninstall", body.package_name)
+        log_id = await database.create_action_log(
+            agent_id, hostname, body.package_name,
+            pkg["display_name"], "choco", "uninstall",
+        )
         _spawn_bg(_run_choco_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, "uninstall",
+            cmd, "uninstall", log_id=log_id,
         ))
         msg = (
             f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
             f"Das kann einige Minuten dauern."
         )
-
-    await database.log_install(
-        agent_id, hostname, body.package_name, pkg["display_name"], "uninstall"
-    )
 
     return SoftwareResponse(
         status="started",
@@ -1149,7 +1266,6 @@ async def dispatch_install_for_agent(
 
     if ptype == "winget":
         _check_winget_id(package_name)
-        # winget braucht install vs. upgrade entscheidung
         state = await database.get_agent_winget_state(agent_id)
         st = state.get(package_name)
         if st and st.get("installed_version") and st.get("available_version"):
@@ -1163,10 +1279,14 @@ async def dispatch_install_for_agent(
             action, package_name, ver,
             include_scope_machine=include_scope_machine,
         )
+        log_id = await database.create_action_log(
+            agent_id, hostname, package_name,
+            pkg["display_name"], "winget", action,
+        )
         _spawn_bg(_run_winget_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
             cmd, action, package_name,
-            winget_scope=scope, version=ver,
+            winget_scope=scope, version=ver, log_id=log_id,
         ))
 
     elif ptype == "custom":
@@ -1174,10 +1294,16 @@ async def dispatch_install_for_agent(
             raise HTTPException(status_code=400, detail="Ungültiger Paketname")
         if not pkg.get("sha256"):
             raise HTTPException(status_code=400, detail="Custom-Paket ohne aktive Version")
-        cmd = await _build_install_command(pkg, agent_id)
+        inner_cmd = await _build_install_command(pkg, agent_id)
+        job_id = _generate_job_id()
+        cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        log_id = await database.create_action_log(
+            agent_id, hostname, package_name,
+            pkg["display_name"], "custom", "install", job_id=job_id,
+        )
         _spawn_bg(_run_custom_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
-            cmd, "install", pkg.get("current_version_id"),
+            cmd, "install", pkg.get("current_version_id"), log_id=log_id,
         ))
         action = "install"
 
@@ -1185,15 +1311,16 @@ async def dispatch_install_for_agent(
         if not _is_safe_package_name(package_name):
             raise HTTPException(status_code=400, detail="Ungültiger Paketname")
         cmd = _build_choco_command("install", package_name, version=version_pin)
+        log_id = await database.create_action_log(
+            agent_id, hostname, package_name,
+            pkg["display_name"], "choco", "install",
+        )
         _spawn_bg(_run_choco_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
-            cmd, "install",
+            cmd, "install", log_id=log_id,
         ))
         action = "install"
 
-    await database.log_install(
-        agent_id, hostname, package_name, pkg["display_name"], "install"
-    )
     return {"action": action, "package_name": package_name, "type": ptype}
 
 
@@ -1226,10 +1353,14 @@ async def dispatch_uninstall_for_agent(
         _check_winget_id(package_name)
         cmd = _build_winget_command("uninstall", package_name)
         scope = pkg.get("winget_scope") or "auto"
+        log_id = await database.create_action_log(
+            agent_id, hostname, package_name,
+            pkg["display_name"], "winget", "uninstall",
+        )
         _spawn_bg(_run_winget_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
             cmd, "uninstall", package_name,
-            winget_scope=scope,
+            winget_scope=scope, log_id=log_id,
         ))
 
     elif ptype == "custom":
@@ -1241,22 +1372,156 @@ async def dispatch_uninstall_for_agent(
                 status_code=400,
                 detail=f"Paket {package_name!r} hat keinen Uninstall-Command hinterlegt",
             )
-        ps_cmd = _build_uninstall_command(uninstall_cmd)
+        inner_cmd = _build_uninstall_command(
+            uninstall_cmd, detection_name=pkg.get("detection_name") or pkg.get("display_name") or "",
+        )
+        job_id = _generate_job_id()
+        ps_cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        log_id = await database.create_action_log(
+            agent_id, hostname, package_name,
+            pkg["display_name"], "custom", "uninstall", job_id=job_id,
+        )
         _spawn_bg(_run_custom_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
-            ps_cmd, "uninstall", pkg.get("current_version_id"),
+            ps_cmd, "uninstall", pkg.get("current_version_id"), log_id=log_id,
         ))
 
     else:
         if not _is_safe_package_name(package_name):
             raise HTTPException(status_code=400, detail="Ungültiger Paketname")
         cmd = _build_choco_command("uninstall", package_name)
+        log_id = await database.create_action_log(
+            agent_id, hostname, package_name,
+            pkg["display_name"], "choco", "uninstall",
+        )
         _spawn_bg(_run_choco_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
-            cmd, "uninstall",
+            cmd, "uninstall", log_id=log_id,
         ))
-
-    await database.log_install(
-        agent_id, hostname, package_name, pkg["display_name"], "uninstall"
-    )
     return {"action": "uninstall", "package_name": package_name, "type": ptype}
+
+
+# ── Callback Pattern ─────────────────────────────────────────────────────────
+# Agent ruft nach Command-Completion direkt unseren Proxy an.
+# Eliminiert NATS-Timeout-Abhaengigkeit komplett.
+
+class CallbackPayload(BaseModel):
+    exit_code: int = 0
+    output: str = ""
+    success: bool = True
+
+
+@router.post("/callback/{job_id}")
+async def receive_callback(job_id: str, body: CallbackPayload):
+    """Agent meldet Ergebnis einer Install/Uninstall-Aktion zurueck.
+    job_id ist ein kryptographisch zufaelliger 64-hex-Token (256 bit),
+    dient gleichzeitig als Auth (unguessable)."""
+    if not re.fullmatch(r"[a-f0-9]{64}", job_id):
+        raise HTTPException(status_code=400, detail="Invalid job_id")
+    entry = await database.get_action_log_by_job_id(job_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Unknown job_id")
+    if entry["status"] not in ("pending", "running"):
+        # Already completed (duplicate callback) — ignore
+        return {"ok": True, "duplicate": True}
+
+    status = "success" if body.success else "error"
+    error_summary = None
+    if not body.success:
+        # Letzte Zeilen als Error-Summary
+        lines = (body.output or "").strip().splitlines()
+        error_summary = "\n".join(lines[-5:])[:500] if lines else "Unbekannter Fehler"
+
+    await database.complete_action_log(
+        entry["id"], status,
+        exit_code=body.exit_code,
+        error_summary=error_summary,
+        stdout=body.output or None,
+    )
+
+    # Tracking aktualisieren
+    if body.success:
+        if entry["action"] in ("install", "upgrade"):
+            await database.set_agent_installation(
+                entry["agent_id"], entry["package_name"], None
+            )
+        elif entry["action"] == "uninstall":
+            await database.delete_agent_installation(
+                entry["agent_id"], entry["package_name"]
+            )
+
+    # Targeted re-scan
+    try:
+        pkg_type = entry["pkg_type"]
+        if pkg_type == "winget":
+            await winget_scanner.scan_agent(entry["agent_id"])
+        elif pkg_type == "choco":
+            await choco_scanner.scan_agent(entry["agent_id"])
+    except Exception as e:
+        logger.warning("post-callback rescan failed for %s: %s", entry["agent_id"], e)
+
+    logger.info(
+        "callback %s: %s %s auf %s (exit=%s)",
+        status, entry["action"], entry["display_name"],
+        entry["hostname"], body.exit_code,
+    )
+    return {"ok": True}
+
+
+def _generate_job_id() -> str:
+    return _secrets.token_hex(32)
+
+
+async def _build_callback_wrapper(inner_script: str, job_id: str) -> str:
+    """Wrappt ein PS-Script mit Callback am Ende. Der Agent ruft nach
+    Completion direkt unseren Proxy an mit Exit-Code + Output.
+    WICHTIG: String-Concatenation statt f-string weil inner_script
+    geschweifte Klammern enthalten kann (GUIDs in Pfaden)."""
+    base = await _public_proxy_url()
+    callback_url = f"{base}/api/v1/callback/{job_id}"
+    url_safe = _ps_quote(callback_url)
+
+    header = """\
+$ErrorActionPreference = 'Continue'
+$_sfOutput = [System.Collections.Generic.List[string]]::new()
+function _sfLog($msg) { $_sfOutput.Add($msg); Write-Output $msg }
+
+_sfLog 'Softshelf: Command gestartet'
+$_sfExitCode = 0
+$_sfSuccess = $true
+try {
+$_sfInnerOut = & {
+"""
+    footer = """
+} 2>&1 | Out-String
+$_sfOutput.Add($_sfInnerOut.Trim())
+Write-Output $_sfInnerOut
+if ($LASTEXITCODE -and $LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010 -and $LASTEXITCODE -ne 1605) {
+    $_sfExitCode = $LASTEXITCODE
+    $_sfSuccess = $false
+}
+} catch {
+    $_sfExitCode = 1
+    $_sfSuccess = $false
+    _sfLog "Exception: $($_.Exception.Message)"
+}
+
+_sfLog 'Sende Ergebnis an Proxy...'
+$_sfBody = @{
+    exit_code = $_sfExitCode
+    output    = ($_sfOutput -join "`n")
+    success   = $_sfSuccess
+} | ConvertTo-Json -Compress
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri '""" + url_safe + """' -Method POST -Body $_sfBody -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null
+    _sfLog 'Callback gesendet.'
+} catch {
+    _sfLog "Callback fehlgeschlagen: $($_.Exception.Message)"
+    Start-Sleep -Seconds 3
+    try {
+        Invoke-WebRequest -Uri '""" + url_safe + """' -Method POST -Body $_sfBody -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null
+    } catch { }
+}
+"""
+    return header + inner_script + footer

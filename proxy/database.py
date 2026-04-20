@@ -283,6 +283,52 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_rollouts_status ON rollouts(status)"
         )
 
+        # Action-Log (Install-Observability: pending → running → success/error)
+        # Migration: alte Tabelle mit defekter FK droppen (packages hat name PK, nicht id)
+        async with db.execute("PRAGMA table_info(action_log)") as cur:
+            al_cols = {row[1] for row in await cur.fetchall()}
+        if "package_id" in al_cols:
+            await db.execute("DROP TABLE IF EXISTS action_log")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS action_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id     TEXT NOT NULL,
+                hostname     TEXT NOT NULL,
+                package_name TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                pkg_type     TEXT NOT NULL,
+                action       TEXT NOT NULL,
+                status       TEXT NOT NULL DEFAULT 'pending',
+                exit_code    INTEGER,
+                error_summary TEXT,
+                stdout       TEXT,
+                created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                completed_at TEXT,
+                job_id       TEXT
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_action_log_agent "
+            "ON action_log(agent_id, created_at DESC)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_action_log_status "
+            "ON action_log(status)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_action_log_created "
+            "ON action_log(created_at)"
+        )
+        # Migration: job_id Spalte fuer Callback-Pattern
+        if "job_id" not in al_cols:
+            await db.execute(
+                "ALTER TABLE action_log ADD COLUMN job_id TEXT"
+            )
+            await db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_action_log_job "
+                "ON action_log(job_id) WHERE job_id IS NOT NULL"
+            )
+
         # Migration: role-Spalte auf admin_users fuer RBAC
         async with db.execute("PRAGMA table_info(admin_users)") as cur:
             au_cols = {row[1] for row in await cur.fetchall()}
@@ -3045,3 +3091,138 @@ async def get_event_log(
                         pass
                 rows.append(row)
             return rows
+
+
+# ── action_log ──────────────────────────────────────────────
+
+async def create_action_log(
+    agent_id: str, hostname: str, package_name: str,
+    display_name: str, pkg_type: str, action: str,
+    job_id: str | None = None,
+) -> int:
+    """INSERT pending action, returns id. Dual-write in install_log."""
+    async with _db() as db:
+        cur = await db.execute(
+            "INSERT INTO action_log "
+            "(agent_id, hostname, package_name, display_name, pkg_type, action, job_id) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (agent_id, hostname, package_name, display_name, pkg_type, action, job_id),
+        )
+        log_id = cur.lastrowid
+        await db.execute(
+            "INSERT INTO install_log (agent_id, hostname, package_name, display_name, action) "
+            "VALUES (?,?,?,?,?)",
+            (agent_id, hostname, package_name, display_name,
+             action if action in ("install", "uninstall") else "install"),
+        )
+        await db.commit()
+        return log_id
+
+
+async def update_action_log_status(log_id: int, status: str):
+    async with _db() as db:
+        await db.execute(
+            "UPDATE action_log SET status = ? WHERE id = ?", (status, log_id)
+        )
+        await db.commit()
+
+
+async def complete_action_log(
+    log_id: int, status: str, exit_code: int | None = None,
+    error_summary: str | None = None, stdout: str | None = None,
+):
+    async with _db() as db:
+        await db.execute(
+            "UPDATE action_log SET status = ?, exit_code = ?, error_summary = ?, "
+            "stdout = ?, completed_at = datetime('now') WHERE id = ?",
+            (status, exit_code, error_summary, stdout, log_id),
+        )
+        await db.commit()
+
+
+async def get_action_log(
+    agent_id: str | None = None, package_name: str | None = None,
+    status: str | None = None, pkg_type: str | None = None,
+    limit: int = 50, offset: int = 0,
+) -> list[dict]:
+    """Filterbarer Query OHNE stdout (nur in Detail-Endpoint)."""
+    clauses: list[str] = []
+    params: list = []
+    if agent_id:
+        clauses.append("agent_id = ?"); params.append(agent_id)
+    if package_name:
+        clauses.append("package_name = ?"); params.append(package_name)
+    if status:
+        clauses.append("status = ?"); params.append(status)
+    if pkg_type:
+        clauses.append("pkg_type = ?"); params.append(pkg_type)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params += [limit, offset]
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT id, agent_id, hostname, package_name, display_name, "
+            f"pkg_type, action, status, exit_code, error_summary, "
+            f"created_at, completed_at "
+            f"FROM action_log {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            params,
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_action_log_detail(log_id: int) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM action_log WHERE id = ?", (log_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def get_action_log_by_job_id(job_id: str) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM action_log WHERE job_id = ?", (job_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def get_agent_error_counts(since_hours: int = 24) -> dict:
+    """Returns {agent_id: error_count} fuer Agents mit Fehlern."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT agent_id, COUNT(*) as cnt FROM action_log "
+            "WHERE status = 'error' AND created_at > datetime('now', ? || ' hours') "
+            "GROUP BY agent_id",
+            (f"-{since_hours}",),
+        ) as cur:
+            return {r["agent_id"]: r["cnt"] for r in await cur.fetchall()}
+
+
+async def get_package_failed_counts() -> dict:
+    """Returns {package_name: count} — Agents wo letzte Aktion error war."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT package_name, COUNT(DISTINCT agent_id) as cnt FROM action_log "
+            "WHERE status = 'error' "
+            "AND id IN ("
+            "  SELECT MAX(id) FROM action_log "
+            "  GROUP BY agent_id, package_name"
+            ") GROUP BY package_name",
+        ) as cur:
+            return {r["package_name"]: r["cnt"] for r in await cur.fetchall()}
+
+
+async def cleanup_action_logs(days: int = 30) -> int:
+    async with _db() as db:
+        cur = await db.execute(
+            "DELETE FROM action_log WHERE created_at < datetime('now', ? || ' days')",
+            (f"-{days}",),
+        )
+        await db.commit()
+        return cur.rowcount
