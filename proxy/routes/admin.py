@@ -1348,7 +1348,7 @@ async def push_update(name: str, stage: str = "all"):
     Geht durch den shared dispatch_install_for_agent/upgrade-Helper, damit
     scope, version-pin und soft-error-detection konsistent bleiben.
     """
-    from routes.install import dispatch_upgrade_for_agent, _build_install_command, _run_custom_command_bg
+    from routes.install import dispatch_upgrade_for_agent, _build_install_command, _run_custom_command_bg, _build_callback_wrapper, _generate_job_id
 
     # Namens-Check ist fuer winget looser als fuer choco/custom
     pkg = await database.get_package(name)
@@ -1382,14 +1382,17 @@ async def push_update(name: str, stage: str = "all"):
         failed: list[str] = []
         for ag in outdated:
             try:
-                cmd = await _build_install_command(pkg, ag["agent_id"])
+                inner_cmd = await _build_install_command(pkg, ag["agent_id"])
+                job_id = _generate_job_id()
+                cmd = await _build_callback_wrapper(inner_cmd, job_id)
+                log_id = await database.create_action_log(
+                    ag["agent_id"], ag["hostname"], name,
+                    pkg["display_name"], "custom", "install", job_id=job_id,
+                )
                 _spawn_bg(_run_custom_command_bg(
                     ag["agent_id"], ag["hostname"], name, pkg["display_name"],
-                    cmd, "install", current_vid,
+                    cmd, "install", current_vid, log_id=log_id,
                 ))
-                await database.log_install(
-                    ag["agent_id"], ag["hostname"], name, pkg["display_name"], "install",
-                )
                 dispatched += 1
             except Exception as e:
                 failed.append(f"{ag.get('hostname')}: {e}")
@@ -2448,9 +2451,87 @@ async def bulk_activate_winget(body: BulkWingetImportBody):
     }
 
 
+# ── Action Log ─────────────────────────────────────────────────────────────────
+
+@router.get("/admin/api/action-log", dependencies=[Depends(_require_admin)])
+async def get_action_log_list(
+    agent_id: str | None = Query(default=None),
+    package_name: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    pkg_type: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    return await database.get_action_log(
+        agent_id=agent_id, package_name=package_name,
+        status=status, pkg_type=pkg_type,
+        limit=limit, offset=offset,
+    )
+
+
+@router.get("/admin/api/action-log/{log_id}", dependencies=[Depends(_require_admin)])
+async def get_action_log_entry(log_id: int):
+    entry = await database.get_action_log_detail(log_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Eintrag nicht gefunden")
+    return entry
+
+
+@router.post("/admin/api/action-log/{log_id}/retry", dependencies=[Depends(_require_admin)])
+async def retry_action(log_id: int):
+    original = await database.get_action_log_detail(log_id)
+    if not original:
+        raise HTTPException(status_code=404, detail="Eintrag nicht gefunden")
+    if original["status"] != "error":
+        raise HTTPException(status_code=400, detail="Nur fehlgeschlagene Aktionen wiederholbar")
+
+    from routes.install import dispatch_install_for_agent, dispatch_uninstall_for_agent
+
+    pkg = await database.get_package(original["package_name"])
+    if not pkg and original["pkg_type"] != "winget":
+        raise HTTPException(status_code=404, detail="Paket nicht mehr vorhanden")
+
+    # Dummy-pkg fuer winget ad-hoc wenn Paket geloescht wurde
+    if not pkg:
+        pkg = {
+            "name": original["package_name"],
+            "display_name": original["display_name"],
+            "type": original["pkg_type"],
+        }
+
+    if original["action"] == "uninstall":
+        result = await dispatch_uninstall_for_agent(
+            original["agent_id"], original["hostname"], pkg,
+        )
+    else:
+        result = await dispatch_install_for_agent(
+            original["agent_id"], original["hostname"], pkg,
+        )
+    return {"ok": True, **result}
+
+
+@router.get("/admin/api/agents/{agent_id}/action-summary",
+            dependencies=[Depends(_require_admin)])
+async def get_agent_action_summary(agent_id: str):
+    errors = await database.get_action_log(agent_id=agent_id, status="error", limit=1)
+    pending = await database.get_action_log(agent_id=agent_id, status="pending", limit=100)
+    running = await database.get_action_log(agent_id=agent_id, status="running", limit=100)
+    error_counts = await database.get_agent_error_counts()
+    return {
+        "error_count": error_counts.get(agent_id, 0),
+        "pending_count": len(pending),
+        "running_count": len(running),
+        "last_error_at": errors[0]["created_at"] if errors else None,
+    }
+
+
 @router.get("/admin/api/agents", dependencies=[Depends(_require_admin)])
 async def get_agents():
-    return await database.get_agents()
+    agents = await database.get_agents()
+    error_counts = await database.get_agent_error_counts()
+    for a in agents:
+        a["error_count"] = error_counts.get(a["agent_id"], 0)
+    return agents
 
 
 @router.get("/admin/api/agents/{agent_id}/last-action-output",
@@ -2468,6 +2549,10 @@ async def get_agent_last_action_output(agent_id: str):
 
 @router.get("/admin/api/agents/{agent_id}/installs", dependencies=[Depends(_require_admin)])
 async def get_agent_installs(agent_id: str, limit: int = Query(default=200, ge=1, le=1000)):
+    # Primaer aus action_log, Fallback auf install_log fuer alte Eintraege
+    entries = await database.get_action_log(agent_id=agent_id, limit=limit)
+    if entries:
+        return entries
     return await database.get_install_log(agent_id=agent_id, limit=limit)
 
 
@@ -2629,6 +2714,7 @@ async def get_distributions(
 
     # Summary-Zaehler holen (pro Paket ein leichter DB-Call, aber kein
     # Tactical-Round-Trip — nur agent_*_state Tabellen).
+    failed_counts = await database.get_package_failed_counts()
     items = []
     for pkg in packages:
         ptype = pkg.get("type") or "choco"
@@ -2683,6 +2769,7 @@ async def get_distributions(
                 "current":  current,
                 "outdated": outdated,
                 "unknown":  unknown,
+                "failed":   failed_counts.get(pkg["name"], 0),
             },
         })
 
@@ -2748,59 +2835,19 @@ async def admin_install_on_agent(agent_id: str, package_name: str):
 )
 async def admin_uninstall_on_agent(agent_id: str, package_name: str):
     """Admin-getriggerter Uninstall eines whitelisted Pakets auf einem
-    einzelnen Agent. Dispatch nach packages.type."""
-    from routes.install import (
-        _run_custom_command_bg,
-        _build_uninstall_command,
-        _build_winget_command,
-        _run_winget_command_bg,
-    )
+    einzelnen Agent. Dispatch nach packages.type — nutzt den shared
+    dispatch_uninstall_for_agent Helper (inkl. action_log Tracking)."""
+    from routes.install import dispatch_uninstall_for_agent
 
     if not _AGENT_ID_RE.fullmatch(agent_id):
-        raise HTTPException(status_code=400, detail="Ungültige Agent-ID")
+        raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
     pkg = await database.get_package(package_name)
     if not pkg:
         raise HTTPException(status_code=404, detail="Paket nicht gefunden")
 
     agent = await _resolve_agent(agent_id)
-    ptype = pkg.get("type") or "choco"
-
-    if ptype == "custom":
-        if not _PKG_NAME_RE.fullmatch(package_name):
-            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
-        uninstall_cmd = (pkg.get("uninstall_cmd") or "").strip()
-        if not uninstall_cmd:
-            raise HTTPException(
-                status_code=400,
-                detail="Für dieses Paket wurde kein Uninstall-Command hinterlegt.",
-            )
-        ps_cmd = _build_uninstall_command(uninstall_cmd)
-        _spawn_bg(_run_custom_command_bg(
-            agent_id, agent["hostname"], package_name, pkg["display_name"],
-            ps_cmd, "uninstall", pkg.get("current_version_id"),
-        ))
-    elif ptype == "winget":
-        if not _WINGET_ID_RE.fullmatch(package_name):
-            raise HTTPException(status_code=400, detail="Ungültige winget-ID")
-        cmd = _build_winget_command("uninstall", package_name)
-        _spawn_bg(_run_winget_command_bg(
-            agent_id, agent["hostname"], package_name, pkg["display_name"],
-            cmd, "uninstall", package_name,
-        ))
-    else:
-        if not _PKG_NAME_RE.fullmatch(package_name):
-            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
-        from routes.install import _build_choco_command, _run_choco_command_bg
-        cmd = _build_choco_command("uninstall", package_name)
-        _spawn_bg(_run_choco_command_bg(
-            agent_id, agent["hostname"], package_name, pkg["display_name"],
-            cmd, "uninstall",
-        ))
-
-    await database.log_install(
-        agent_id, agent["hostname"], package_name, pkg["display_name"], "uninstall"
-    )
-    return {"ok": True, "agent": agent["hostname"]}
+    result = await dispatch_uninstall_for_agent(agent_id, agent["hostname"], pkg)
+    return {"ok": True, "agent": agent["hostname"], **result}
 
 
 _SOFTWARE_PARENS_RE = re.compile(r"\s*[\(\[].*?[\)\]]\s*")
@@ -4946,19 +4993,19 @@ async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentR
     from routes.install import _build_winget_command, _run_winget_command_bg
 
     if not _AGENT_ID_RE.fullmatch(agent_id):
-        raise HTTPException(status_code=400, detail="Ungültige Agent-ID")
+        raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
     agent = await _resolve_agent(agent_id)
 
     wid = body.winget_id
     cmd = _build_winget_command("uninstall", wid)
-    # Display-Name aus der Whitelist falls vorhanden, sonst die ID selbst
     pkg = await database.get_package(wid)
     display_name = pkg["display_name"] if pkg else wid
-
+    log_id = await database.create_action_log(
+        agent_id, agent["hostname"], wid,
+        display_name, "winget", "uninstall",
+    )
     _spawn_bg(_run_winget_command_bg(
         agent_id, agent["hostname"], wid, display_name, cmd, "uninstall", wid,
+        log_id=log_id,
     ))
-    await database.log_install(
-        agent_id, agent["hostname"], wid, display_name, "uninstall"
-    )
     return {"ok": True, "agent": agent["hostname"]}
