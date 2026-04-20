@@ -320,14 +320,16 @@ async def init_db():
             "ON action_log(created_at)"
         )
         # Migration: job_id Spalte fuer Callback-Pattern
-        if "job_id" not in al_cols:
+        async with db.execute("PRAGMA table_info(action_log)") as cur:
+            al_cols_now = {row[1] for row in await cur.fetchall()}
+        if "job_id" not in al_cols_now:
             await db.execute(
                 "ALTER TABLE action_log ADD COLUMN job_id TEXT"
             )
-            await db.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_action_log_job "
-                "ON action_log(job_id) WHERE job_id IS NOT NULL"
-            )
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_action_log_job "
+            "ON action_log(job_id) WHERE job_id IS NOT NULL"
+        )
 
         # Migration: role-Spalte auf admin_users fuer RBAC
         async with db.execute("PRAGMA table_info(admin_users)") as cur:
