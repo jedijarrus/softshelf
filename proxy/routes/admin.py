@@ -3688,25 +3688,36 @@ async def delete_profile_endpoint(profile_id: int, request: Request):
     return {"ok": True}
 
 
-_PROFILE_INSTALL_DELAY = 45  # Sekunden zwischen Paket-Installationen pro Agent
+_PROFILE_POLL_INTERVAL = 5   # Sekunden zwischen Completion-Checks
+_PROFILE_MAX_WAIT = 300      # Max Wartezeit pro Paket bevor naechstes dran kommt
 
 
 async def _apply_profile_sequential(agent_id: str, hostname: str,
                                      packages_to_install: list[tuple[dict, str | None]]):
-    """Background-Task: installiert Pakete nacheinander auf einem Agent.
-    Wartet PROFILE_INSTALL_DELAY Sekunden zwischen den Installationen
-    damit der Agent nicht ueberlastet wird."""
+    """Background-Task: installiert Pakete sequentiell auf einem Agent.
+    Wartet nach jedem Dispatch bis die Aktion in action_log abgeschlossen
+    ist (success/error) bevor das naechste Paket gestartet wird.
+    Kein starrer Timer — reagiert auf tatsaechliche Completion."""
     from routes.install import dispatch_install_for_agent
-    for i, (pkg, pin) in enumerate(packages_to_install):
-        if i > 0:
-            await asyncio.sleep(_PROFILE_INSTALL_DELAY)
+    for pkg, pin in packages_to_install:
         try:
-            await dispatch_install_for_agent(agent_id, hostname, pkg, version_pin=pin)
+            result = await dispatch_install_for_agent(agent_id, hostname, pkg, version_pin=pin)
         except Exception as e:
             logger.warning(
                 "Profile sequential install failed agent=%s pkg=%s: %s",
                 agent_id, pkg.get("name"), e,
             )
+            continue
+        # Auf Completion warten — poll action_log bis nicht mehr running
+        waited = 0
+        while waited < _PROFILE_MAX_WAIT:
+            await asyncio.sleep(_PROFILE_POLL_INTERVAL)
+            waited += _PROFILE_POLL_INTERVAL
+            entries = await database.get_action_log(
+                agent_id=agent_id, package_name=pkg["name"], limit=1,
+            )
+            if entries and entries[0]["status"] not in ("pending", "running"):
+                break
 
 
 @router.post("/admin/api/profiles/{profile_id}/apply", dependencies=[Depends(_require_admin)])
@@ -4990,19 +5001,21 @@ async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentR
     benutzt um unerwünschte Software via `winget uninstall --id <ID>` direkt
     aufzuräumen.
     """
-    from routes.install import _build_winget_command, _run_winget_command_bg
+    from routes.install import _build_winget_command, _run_winget_command_bg, _build_callback_wrapper, _generate_job_id
 
     if not _AGENT_ID_RE.fullmatch(agent_id):
         raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
     agent = await _resolve_agent(agent_id)
 
     wid = body.winget_id
-    cmd = _build_winget_command("uninstall", wid)
+    inner_cmd = _build_winget_command("uninstall", wid)
+    job_id = _generate_job_id()
+    cmd = await _build_callback_wrapper(inner_cmd, job_id)
     pkg = await database.get_package(wid)
     display_name = pkg["display_name"] if pkg else wid
     log_id = await database.create_action_log(
         agent_id, agent["hostname"], wid,
-        display_name, "winget", "uninstall",
+        display_name, "winget", "uninstall", job_id=job_id,
     )
     _spawn_bg(_run_winget_command_bg(
         agent_id, agent["hostname"], wid, display_name, cmd, "uninstall", wid,
