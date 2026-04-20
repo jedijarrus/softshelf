@@ -837,12 +837,15 @@ async def _run_choco_command_bg(
 
     if log_id:
         try:
-            al_status = "error" if error_msg else "success"
-            await database.complete_action_log(
-                log_id, al_status, exit_code=exit_code,
-                error_summary=error_msg,
-                stdout=raw_output or None,
-            )
+            # Nur schreiben wenn Callback nicht schon da war
+            entry = await database.get_action_log_detail(log_id)
+            if entry and entry["status"] in ("pending", "running"):
+                al_status = "error" if error_msg else "success"
+                await database.complete_action_log(
+                    log_id, al_status, exit_code=exit_code,
+                    error_summary=error_msg,
+                    stdout=raw_output or None,
+                )
         except Exception as e:
             logger.warning("complete_action_log choco failed: %s", e)
 
@@ -1064,12 +1067,14 @@ async def _run_winget_command_bg(
 
     if log_id:
         try:
-            al_status = "error" if error_msg else "success"
-            await database.complete_action_log(
-                log_id, al_status, exit_code=exit_code,
-                error_summary=error_msg,
-                stdout=raw_output or None,
-            )
+            entry = await database.get_action_log_detail(log_id)
+            if entry and entry["status"] in ("pending", "running"):
+                al_status = "error" if error_msg else "success"
+                await database.complete_action_log(
+                    log_id, al_status, exit_code=exit_code,
+                    error_summary=error_msg,
+                    stdout=raw_output or None,
+                )
         except Exception as e:
             logger.warning("complete_action_log winget failed: %s", e)
 
@@ -1102,13 +1107,15 @@ async def install_package(
         scope = pkg.get("winget_scope") or "auto"
         ver = pkg.get("winget_version")
         include_scope_machine = scope != "user"
-        cmd = _build_winget_command(
+        inner_cmd = _build_winget_command(
             action, body.package_name, ver,
             include_scope_machine=include_scope_machine,
         )
+        job_id = _generate_job_id()
+        cmd = await _build_callback_wrapper(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
-            pkg["display_name"], "winget", action,
+            pkg["display_name"], "winget", action, job_id=job_id,
         )
         _spawn_bg(_run_winget_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
@@ -1144,10 +1151,12 @@ async def install_package(
             f"Das kann einige Minuten dauern."
         )
     else:
-        cmd = _build_choco_command("install", body.package_name)
+        inner_cmd = _build_choco_command("install", body.package_name)
+        job_id = _generate_job_id()
+        cmd = await _build_callback_wrapper(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
-            pkg["display_name"], "choco", "install",
+            pkg["display_name"], "choco", "install", job_id=job_id,
         )
         _spawn_bg(_run_choco_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
@@ -1180,11 +1189,13 @@ async def uninstall_package(
 
     if ptype == "winget":
         _check_winget_id(body.package_name)
-        cmd = _build_winget_command("uninstall", body.package_name)
+        inner_cmd = _build_winget_command("uninstall", body.package_name)
         scope = pkg.get("winget_scope") or "auto"
+        job_id = _generate_job_id()
+        cmd = await _build_callback_wrapper(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
-            pkg["display_name"], "winget", "uninstall",
+            pkg["display_name"], "winget", "uninstall", job_id=job_id,
         )
         _spawn_bg(_run_winget_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
@@ -1225,10 +1236,12 @@ async def uninstall_package(
             f"Das kann einige Minuten dauern."
         )
     else:
-        cmd = _build_choco_command("uninstall", body.package_name)
+        inner_cmd = _build_choco_command("uninstall", body.package_name)
+        job_id = _generate_job_id()
+        cmd = await _build_callback_wrapper(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
-            pkg["display_name"], "choco", "uninstall",
+            pkg["display_name"], "choco", "uninstall", job_id=job_id,
         )
         _spawn_bg(_run_choco_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
@@ -1275,13 +1288,15 @@ async def dispatch_install_for_agent(
         ver = version_pin or pkg.get("winget_version")
         scope = pkg.get("winget_scope") or "auto"
         include_scope_machine = scope != "user"
-        cmd = _build_winget_command(
+        inner_cmd = _build_winget_command(
             action, package_name, ver,
             include_scope_machine=include_scope_machine,
         )
+        job_id = _generate_job_id()
+        cmd = await _build_callback_wrapper(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
-            pkg["display_name"], "winget", action,
+            pkg["display_name"], "winget", action, job_id=job_id,
         )
         _spawn_bg(_run_winget_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1310,10 +1325,12 @@ async def dispatch_install_for_agent(
     else:
         if not _is_safe_package_name(package_name):
             raise HTTPException(status_code=400, detail="Ungültiger Paketname")
-        cmd = _build_choco_command("install", package_name, version=version_pin)
+        inner_cmd = _build_choco_command("install", package_name, version=version_pin)
+        job_id = _generate_job_id()
+        cmd = await _build_callback_wrapper(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
-            pkg["display_name"], "choco", "install",
+            pkg["display_name"], "choco", "install", job_id=job_id,
         )
         _spawn_bg(_run_choco_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1351,11 +1368,13 @@ async def dispatch_uninstall_for_agent(
 
     if ptype == "winget":
         _check_winget_id(package_name)
-        cmd = _build_winget_command("uninstall", package_name)
+        inner_cmd = _build_winget_command("uninstall", package_name)
         scope = pkg.get("winget_scope") or "auto"
+        job_id = _generate_job_id()
+        cmd = await _build_callback_wrapper(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
-            pkg["display_name"], "winget", "uninstall",
+            pkg["display_name"], "winget", "uninstall", job_id=job_id,
         )
         _spawn_bg(_run_winget_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1389,10 +1408,12 @@ async def dispatch_uninstall_for_agent(
     else:
         if not _is_safe_package_name(package_name):
             raise HTTPException(status_code=400, detail="Ungültiger Paketname")
-        cmd = _build_choco_command("uninstall", package_name)
+        inner_cmd = _build_choco_command("uninstall", package_name)
+        job_id = _generate_job_id()
+        cmd = await _build_callback_wrapper(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
-            pkg["display_name"], "choco", "uninstall",
+            pkg["display_name"], "choco", "uninstall", job_id=job_id,
         )
         _spawn_bg(_run_choco_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
