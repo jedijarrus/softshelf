@@ -422,7 +422,7 @@ def _build_winget_command(
     else:
         scope_arg = "--scope machine " if include_scope_machine else ""
         winget_args = (
-            f"{action} --id '{safe_id}' {scope_arg}--silent "
+            f"{action} --id '{safe_id}' --source winget {scope_arg}--silent "
             f"--accept-package-agreements --accept-source-agreements "
             f"--disable-interactivity -h "
             f"{version_arg}"
