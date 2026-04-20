@@ -143,14 +143,18 @@ class TacticalClient:
         agent_id: str,
         cmd: str,
         shell: str = "powershell",
-        timeout: int = 600,
+        timeout: int = 300,
         run_as_user: bool = False,
     ) -> str:
         """Fuehrt cmd via Tactical run_command aus.
 
         Concurrency-limitiert durch globalen Semaphore (MAX_CONCURRENT_COMMANDS)
-        damit Bulk-Aktionen den Tactical-Server nicht fluten. Retry bei 500/502/503/504
-        mit exponentiellem Backoff.
+        damit Bulk-Aktionen den Tactical-Server nicht fluten.
+
+        KEIN Retry: Tactical liefert den Befehl sofort via NATS an den Agent.
+        Bei HTTP 502/504 ist der Befehl bereits raus — Retry wuerde ihn
+        duplizieren. Stattdessen einmal versuchen und bei Fehler sauber
+        abbrechen.
 
         run_as_user=True laesst Tactical den Befehl im Kontext des interaktiv
         eingeloggten Users ausfuehren statt als SYSTEM.
@@ -165,30 +169,17 @@ class TacticalClient:
             "custom_shell": "",
             "run_as_user": bool(run_as_user),
         }
-        delays = [0, 5, 15]  # Retry mit Backoff bei Server-Fehlern
-        last_exc: Exception | None = None
 
         async with _get_semaphore():
             async with httpx.AsyncClient(headers=headers, timeout=timeout + 15) as c:
-                for attempt, delay in enumerate(delays):
-                    if delay:
-                        logger.warning(
-                            "Tactical cmd/ retry %d for agent %s after %ds (last: %s)",
-                            attempt, agent_id[:12], delay, last_exc,
+                try:
+                    r = await c.post(url, json=payload)
+                    if r.status_code in _RETRYABLE_STATUS:
+                        raise httpx.HTTPStatusError(
+                            f"Tactical returned HTTP {r.status_code}",
+                            request=r.request, response=r,
                         )
-                        await asyncio.sleep(delay)
-                    try:
-                        r = await c.post(url, json=payload)
-                        if r.status_code in _RETRYABLE_STATUS:
-                            last_exc = httpx.HTTPStatusError(
-                                f"Tactical returned HTTP {r.status_code}",
-                                request=r.request, response=r,
-                            )
-                            continue
-                        r.raise_for_status()
-                        return r.text
-                    except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
-                        last_exc = e
-                        continue
-            assert last_exc is not None
-            raise last_exc
+                    r.raise_for_status()
+                    return r.text
+                except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+                    raise
