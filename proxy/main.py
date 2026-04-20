@@ -29,7 +29,7 @@ from routes import packages, install, admin, register
 
 logger = logging.getLogger("softshelf")
 
-VERSION = "2.0.2"
+VERSION = "2.0.3"
 
 # /app/downloads — shared volume mit dem builder-Container
 DOWNLOADS_DIR = "/app/downloads"
@@ -99,6 +99,30 @@ async def _choco_nightly_job():
         await choco_scanner.run_nightly_scan()
     except Exception as e:
         logger.exception("nightly choco scan job crashed: %s", e)
+
+
+async def _action_log_cleanup_job():
+    try:
+        count = await database.cleanup_action_logs(days=30)
+        if count:
+            logger.info("action_log cleanup: %d Eintraege entfernt", count)
+    except Exception as e:
+        logger.warning("action_log cleanup failed: %s", e)
+    # Stuck entries: pending/running laenger als 4 Stunden → error
+    try:
+        async with database._db() as db:
+            res = await db.execute(
+                "UPDATE action_log SET status = 'error', "
+                "error_summary = 'Keine Rueckmeldung vom Agent (Timeout nach 4h)', "
+                "completed_at = datetime('now') "
+                "WHERE status IN ('pending', 'running') "
+                "AND created_at < datetime('now', '-4 hours')"
+            )
+            if res.rowcount:
+                logger.info("action_log stuck cleanup: %d Eintraege als error markiert", res.rowcount)
+            await db.commit()
+    except Exception as e:
+        logger.warning("action_log stuck cleanup failed: %s", e)
 
 
 async def _rollout_auto_start_tick():
@@ -336,6 +360,20 @@ async def lifespan(app: FastAPI):
         await database.cleanup_expired_sessions()
     except Exception as e:
         logger.warning("Cleanup fehlgeschlagen: %s", e)
+    # Stale action_log Eintraege aus vorherigem Container-Restart aufräumen
+    try:
+        async with database._db() as db:
+            res = await db.execute(
+                "UPDATE action_log SET status = 'error', "
+                "error_summary = 'Container-Restart waehrend Ausfuehrung', "
+                "completed_at = datetime('now') "
+                "WHERE status IN ('pending', 'running')"
+            )
+            if res.rowcount:
+                logger.info("Stale action_log: %d Eintraege als error markiert", res.rowcount)
+            await db.commit()
+    except Exception as e:
+        logger.warning("action_log stale cleanup: %s", e)
     os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
     # APScheduler für nightly winget Scan + Enrichment + Catalog-Refresh.
@@ -378,6 +416,15 @@ async def lifespan(app: FastAPI):
         _profile_autoupdate_job,
         CronTrigger(hour=3, minute=0),
         id="profile_autoupdate",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    # Naechtlicher Cleanup: action_log Eintraege aelter 30 Tage entfernen
+    scheduler.add_job(
+        _action_log_cleanup_job,
+        CronTrigger(hour=3, minute=30),
+        id="action_log_cleanup",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,

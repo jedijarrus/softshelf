@@ -2624,7 +2624,7 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
 
 .dist-row {
   display: grid;
-  grid-template-columns: 32px 80px minmax(220px, 1fr) 130px 80px 90px 80px 120px;
+  grid-template-columns: 32px 80px minmax(220px, 1fr) 130px 80px 90px 80px 60px 120px;
   align-items: center;
   gap: 10px;
   padding: 0 var(--row-pad-x);
@@ -4152,13 +4152,32 @@ button.outdated-badge.clickable:disabled {
 /* ─── SETTINGS ─────────────────────────────────────────────────────────── */
 
 .settings-form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-  gap: 20px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.settings-group {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  padding: 24px 28px;
+  overflow: hidden;
+}
+.settings-group-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 24px;
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--border);
+}
+.settings-group-icon { color: var(--fg-4); display: flex; }
+.settings-group-title {
+  font-size: 14px; font-weight: 600; color: var(--fg);
+  margin: 0;
+}
+.settings-group-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 18px 28px;
+  padding: 20px 24px;
 }
 .setting-field { display: flex; flex-direction: column; gap: 6px; }
 .setting-field label {
@@ -4825,6 +4844,77 @@ button.outdated-badge.clickable:disabled {
   .main { padding: 28px 16px 60px; }
   .panel { width: 100%; }
 }
+
+/* ── Action Log ──────────────────────────────────────────── */
+.al-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 1fr 70px 72px 110px 60px 36px;
+  align-items: center; gap: 0 8px;
+  padding: 7px var(--row-pad-x);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px; cursor: pointer;
+  transition: background .12s;
+}
+.al-row:hover { background: var(--bg-hover); }
+.al-row.al-error { border-left: 3px solid var(--red); }
+.al-head { font-weight: 600; font-size: 11px; color: var(--fg-4); text-transform: uppercase; letter-spacing: .04em; cursor: default; border-bottom: 2px solid var(--border); }
+.al-head:hover { background: transparent; }
+
+.al-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 7px; border-radius: var(--pill-radius);
+  font-size: 11px; font-weight: 600; line-height: 1;
+  white-space: nowrap;
+}
+.al-badge.pending  { background: var(--bg-hover); color: var(--fg-4); }
+.al-badge.running  { background: var(--blue-bg); color: var(--blue); }
+.al-badge.success  { background: var(--green-bg); color: var(--green); }
+.al-badge.error    { background: var(--red-bg); color: var(--red); }
+
+.al-badge.running::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--blue);
+  animation: al-pulse 1.4s ease-in-out infinite;
+}
+@keyframes al-pulse { 0%,100% { opacity:.4; } 50% { opacity:1; } }
+
+.al-retry { background: none; border: 1px solid var(--border); border-radius: var(--r-sm); width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px; color: var(--fg-3); }
+.al-retry:hover { background: var(--bg-hover); color: var(--fg); }
+
+.al-stdout {
+  background: var(--bg-soft); border: 1px solid var(--border);
+  font-family: var(--mono); font-size: 12px;
+  padding: 12px; border-radius: var(--r);
+  max-height: 400px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-all;
+  color: var(--fg-2);
+}
+
+.al-detail-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  margin-bottom: 16px; font-size: 13px;
+}
+.al-detail-grid .label { font-size: 11px; color: var(--fg-4); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 2px; }
+
+.al-error-banner {
+  background: var(--red-bg); border: 1px solid var(--red-bd);
+  border-radius: var(--r); padding: 8px 12px;
+  font-size: 13px; color: var(--red); margin-bottom: 12px;
+}
+
+/* Error badge on agent rows */
+.agent-error-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  background: var(--red-bg); color: var(--red); border: 1px solid var(--red-bd);
+  font-size: 10px; font-weight: 600; padding: 1px 6px;
+  border-radius: var(--pill-radius-round); margin-left: 6px;
+}
+
+/* Persistent toast with spinner */
+.toast-item.persistent { animation: none; }
+.toast-spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: spin .6s linear infinite; margin-right: 6px; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.toast-item .toast-action-btn { background: rgba(255,255,255,.2); border: none; color: inherit; padding: 2px 8px; border-radius: 3px; cursor: pointer; margin-left: 8px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -4915,6 +5005,10 @@ button.outdated-badge.clickable:disabled {
   <button class="tab" data-tab="audit" onclick="switchTab('audit',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
     Audit-Log
+  </button>
+  <button class="tab" data-tab="actions" onclick="switchTab('actions',this)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+    Aktionen
   </button>
 
   <div class="sidebar-group-label">System</div>
@@ -5106,6 +5200,7 @@ button.outdated-badge.clickable:disabled {
           <div class="dc-devices sortable" data-sort="devices_desc" onclick="distSortBy('devices_desc')">Geräte</div>
           <div class="dc-outdated sortable active" data-sort="outdated_desc" onclick="distSortBy('outdated_desc')">Veraltet ▼</div>
           <div class="dc-current">Aktuell</div>
+          <div class="dc-failed">Fehler</div>
           <div class="dc-actions"></div>
         </div>
         <div class="dist-body" id="dist-body">
@@ -5367,6 +5462,38 @@ button.outdated-badge.clickable:disabled {
         <p>Klick auf „Aktualisieren"</p>
       </div>
     </div>
+  </section>
+
+  <!-- ── Aktionen Tab ────────────────────────────────────────── -->
+  <section class="tab-pane" id="tab-actions">
+    <div class="section-head">
+      <div>
+        <h1 class="section-title">Aktionen</h1>
+        <div class="section-sub">Install-, Uninstall- und Upgrade-Aktionen mit Ergebnis und Output.</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="loadActionLog(true)">Aktualisieren</button>
+    </div>
+    <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
+      <select id="al-filter-status" class="input input-sm" onchange="loadActionLog(true)" style="width:140px">
+        <option value="">Alle Status</option>
+        <option value="pending">Ausstehend</option>
+        <option value="running">Laeuft</option>
+        <option value="success">Erfolg</option>
+        <option value="error">Fehler</option>
+      </select>
+      <select id="al-filter-type" class="input input-sm" onchange="loadActionLog(true)" style="width:140px">
+        <option value="">Alle Typen</option>
+        <option value="choco">Chocolatey</option>
+        <option value="winget">Winget</option>
+        <option value="custom">Eigenes Paket</option>
+      </select>
+      <div class="input-search" style="max-width:200px">
+        <input class="input input-sm" type="search" id="al-filter-agent" placeholder="Agent filtern..." oninput="alFilterDebounce()">
+      </div>
+      <span class="filter-stamp" id="al-count"></span>
+    </div>
+    <div id="action-log-list"></div>
+    <div id="al-pagination" style="display:flex;gap:8px;justify-content:center;padding:12px 0"></div>
   </section>
 </main>
 </div>
@@ -6040,6 +6167,17 @@ button.outdated-badge.clickable:disabled {
   </div>
 </div>
 
+<!-- Action Detail Modal -->
+<div class="modal" id="action-detail-modal">
+  <div class="modal-card" style="max-width:600px">
+    <div class="modal-head">
+      <h3 class="modal-title">Aktions-Details</h3>
+      <button class="modal-close" onclick="closeActionDetailModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="action-detail-body"></div>
+  </div>
+</div>
+
 <!-- Profile Editor Modal -->
 <div class="modal" id="profile-editor-modal">
   <div class="modal-card" style="max-width:680px">
@@ -6251,6 +6389,7 @@ function switchTab(name, btn) {
   if (name === 'scheduled')    loadScheduled();
   if (name === 'rollouts')     loadRollouts();
   if (name === 'audit')        loadAudit();
+  if (name === 'actions')      loadActionLog(true);
   if (name === 'users')        loadUsers();
   if (name === 'settings')     loadSettings();
   if (name === 'help')         loadHelp();
@@ -9776,6 +9915,7 @@ function renderDistTable() {
         <div class="dc-devices"><strong>${s.total}</strong></div>
         <div class="dc-outdated">${outdatedBadge}</div>
         <div class="dc-current">${s.current}</div>
+        <div class="dc-failed">${s.failed ? `<span style="color:var(--red);font-weight:600">${s.failed}</span>` : '<span style="color:var(--fg-5)">—</span>'}</div>
         <div class="dc-actions">${pushBtn}</div>
       </div>`;
   }).join('');
@@ -10107,7 +10247,7 @@ function renderAgents() {
       const ringBadge = `<span class="ring-badge ring-${ring}" title="${esc(ringLbl)}">${esc(ringLbl)}</span>`;
       return `<tr class="${a.banned ? 'row-banned' : ''}">
         <td><span class="status ${st.cls}">${st.label}</span></td>
-        <td><span class="cell-host">${esc(a.hostname)}</span></td>
+        <td><span class="cell-host">${esc(a.hostname)}</span>${a.error_count ? `<span class="agent-error-badge">${a.error_count} Fehler</span>` : ''}</td>
         <td>${ringBadge}</td>
         <td><span class="cell-time" title="${esc(fmtDt(a.registered_at))}">${esc(relTime(a.registered_at))}</span></td>
         <td><span class="cell-time" title="${esc(fmtDt(a.last_seen))}">${esc(relTime(a.last_seen))}</span></td>
@@ -10381,17 +10521,24 @@ function renderAgentDetail(softwareData, log) {
   } else {
     let lastGroup = '';
     const rows = log.map((e, idx) => {
-      const group = _historyGroupLabel(e.ts);
+      const ts = e.created_at || e.ts;
+      const group = _historyGroupLabel(ts);
       const groupHeader = (group !== lastGroup) ? `<div class="history-group-label">${esc(group)}</div>` : '';
       lastGroup = group;
       const hidden = idx >= HISTORY_LIMIT ? ' history-hidden' : '';
-      return `${groupHeader}<div class="install-row${hidden}"${hidden ? ' style="display:none"' : ''}>
-        <span class="install-badge ${e.action}">${e.action === 'install' ? 'Install' : 'Uninstall'}</span>
+      const statusBadge = e.status
+        ? `<span class="al-badge ${esc(e.status)}" style="font-size:10px;margin-left:6px">${esc(_alStatusLabel[e.status] || e.status)}</span>`
+        : '';
+      const errHint = (e.status === 'error' && e.error_summary)
+        ? `<div style="font-size:11px;color:var(--red);margin-top:2px">${esc(e.error_summary.substring(0, 120))}</div>`
+        : '';
+      return `${groupHeader}<div class="install-row${hidden}${e.status === 'error' ? ' al-error' : ''}"${hidden ? ' style="display:none"' : ''}${e.id ? ` onclick="alShowDetail(${e.id})" style="cursor:pointer${hidden ? ';display:none' : ''}"` : ''}>
+        <span class="install-badge ${e.action}">${e.action === 'install' ? 'Install' : e.action === 'upgrade' ? 'Upgrade' : 'Uninstall'}</span>${statusBadge}
         <div>
           <div class="install-pkg">${esc(e.display_name)}</div>
-          <div class="install-name">${esc(e.package_name)}</div>
+          <div class="install-name">${esc(e.package_name)}${errHint}</div>
         </div>
-        <div class="install-time" title="${esc(fmtDt(e.ts))}">${esc(relTime(e.ts))}</div>
+        <div class="install-time" title="${esc(fmtDt(ts))}">${esc(relTime(ts))}</div>
       </div>`;
     }).join('');
     const showMoreBtn = log.length > HISTORY_LIMIT
@@ -11772,6 +11919,7 @@ document.addEventListener('keydown', e => {
     closeConfirm();
     closePasswordModal();
     closeBanModal();
+    closeActionDetailModal();
   }
   // Enter im ban-reason-Feld triggert submit
   if (e.key === 'Enter' && e.target && e.target.id === 'ban-reason') {
@@ -12390,43 +12538,71 @@ async function deleteBrandingIcon() {
 
 function renderSettings() {
   const el = document.getElementById('settings-form');
-  el.innerHTML = _settingsMeta.map(s => {
-    const requiredMark = s.required ? '<span class="req">*</span>' : '';
 
-    // Boolean → Checkbox
-    if (s.type === 'bool') {
-      const checked = (s.value === 'true' || s.value === '1' || s.value === 'yes') ? 'checked' : '';
-      return `
-      <div class="setting-field">
-        <label>${esc(s.label)} ${requiredMark}</label>
-        <label class="check-label">
-          <input type="checkbox" data-key="${esc(s.key)}" data-type="bool" ${checked}>
-          aktiv
-        </label>
-        <div class="help">${s.help || ''}</div>
-      </div>`;
-    }
+  // Gruppierung nach Thema
+  const groups = [
+    { id: 'connection', title: 'Verbindung', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+      keys: ['tactical_url', 'tactical_api_key', 'proxy_public_url', 'registration_secret'] },
+    { id: 'branding', title: 'Branding', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
+      keys: ['client_app_name', 'admin_portal_title', 'product_slug', 'publisher'] },
+    { id: 'security', title: 'Sicherheit & Limits', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+      keys: ['token_ttl_days', 'log_retention_days', 'max_upload_mb'] },
+    { id: 'sso', title: 'SSO (Microsoft Entra)', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>',
+      keys: ['sso_enabled', 'sso_tenant_id', 'sso_client_id', 'sso_client_secret', 'sso_auto_create'] },
+    { id: 'rollout', title: 'Rollout-Ringe', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>',
+      keys: ['rollout_ring1_label', 'rollout_ring2_label', 'rollout_ring3_label', 'rollout_default_staged',
+             'rollout_auto_advance_enabled', 'rollout_auto_advance_hours_1_to_2', 'rollout_auto_advance_hours_2_to_3',
+             'rollout_max_error_pct'] },
+  ];
+  // deprecated Keys ausblenden
+  const hiddenKeys = new Set(['rollout_auto_advance_hours']);
+  const keyMap = {};
+  for (const s of _settingsMeta) keyMap[s.key] = s;
 
-    const inputType = s.secret ? 'password' : (s.type === 'int' ? 'number' : 'text');
-    const placeholder = s.has_value && s.secret ? '(gesetzt)' : (s.default || '');
-    const rotateBtn = s.key === 'registration_secret'
-      ? `<button type="button" class="rotate-btn" onclick="rotateRegSecret()" title="Neu generieren">↻</button>`
-      : '';
-    const revealBtn = s.secret
-      ? `<button type="button" class="reveal-btn" onclick="toggleReveal(this)" data-key="${esc(s.key)}">Anzeigen</button>`
-      : '';
-    return `
-    <div class="setting-field">
-      <label>${esc(s.label)} ${requiredMark}</label>
-      <div class="input-wrap">
-        <input class="input" type="${inputType}" data-key="${esc(s.key)}"
-               value="${esc(s.value)}" placeholder="${esc(placeholder)}" autocomplete="off">
-        ${revealBtn}
-        ${rotateBtn}
+  el.innerHTML = groups.map(g => {
+    const fields = g.keys
+      .filter(k => keyMap[k] && !hiddenKeys.has(k))
+      .map(k => _renderSettingField(keyMap[k]));
+    if (!fields.length) return '';
+    return `<div class="settings-group">
+      <div class="settings-group-head">
+        <span class="settings-group-icon">${g.icon}</span>
+        <h3 class="settings-group-title">${esc(g.title)}</h3>
       </div>
-      <div class="help">${s.help || ''}</div>
+      <div class="settings-group-body">${fields.join('')}</div>
     </div>`;
   }).join('');
+}
+
+function _renderSettingField(s) {
+  const requiredMark = s.required ? '<span class="req">*</span>' : '';
+  if (s.type === 'bool') {
+    const checked = (s.value === 'true' || s.value === '1' || s.value === 'yes') ? 'checked' : '';
+    return `<div class="setting-field">
+      <label>${esc(s.label)} ${requiredMark}</label>
+      <label class="check-label">
+        <input type="checkbox" data-key="${esc(s.key)}" data-type="bool" ${checked}> aktiv
+      </label>
+      <div class="help">${s.help || ''}</div>
+    </div>`;
+  }
+  const inputType = s.secret ? 'password' : (s.type === 'int' ? 'number' : 'text');
+  const placeholder = s.has_value && s.secret ? '(gesetzt)' : (s.default || '');
+  const rotateBtn = s.key === 'registration_secret'
+    ? `<button type="button" class="rotate-btn" onclick="rotateRegSecret()" title="Neu generieren">&#8635;</button>`
+    : '';
+  const revealBtn = s.secret
+    ? `<button type="button" class="reveal-btn" onclick="toggleReveal(this)" data-key="${esc(s.key)}">Anzeigen</button>`
+    : '';
+  return `<div class="setting-field">
+    <label>${esc(s.label)} ${requiredMark}</label>
+    <div class="input-wrap">
+      <input class="input" type="${inputType}" data-key="${esc(s.key)}"
+             value="${esc(s.value)}" placeholder="${esc(placeholder)}" autocomplete="off">
+      ${revealBtn}${rotateBtn}
+    </div>
+    <div class="help">${s.help || ''}</div>
+  </div>`;
 }
 
 const _MASK = '••••••••';
@@ -12607,7 +12783,7 @@ init();
 // Tab aus URL-Hash wiederherstellen. Default ist home — wenn Hash fehlt
 // oder home ist, Home-Daten laden und nichts zu switchen.
 (function _restoreTabFromHash() {
-  const validTabs = ['home', 'packages', 'distribution', 'profiles', 'rollouts', 'agents', 'errors', 'compliance', 'scheduled', 'audit', 'users', 'settings', 'help'];
+  const validTabs = ['home', 'packages', 'distribution', 'profiles', 'rollouts', 'agents', 'errors', 'compliance', 'scheduled', 'audit', 'actions', 'users', 'settings', 'help'];
   const raw = (location.hash || '').replace(/^#/, '');
   if (!raw || raw === 'home' || !validTabs.includes(raw)) {
     // Home ist bereits aktiv via HTML — nur Daten laden
@@ -12620,13 +12796,199 @@ init();
 
 // Back/Forward-Navigation: auch auf den richtigen Tab reagieren.
 window.addEventListener('hashchange', () => {
-  const validTabs = ['home', 'packages', 'distribution', 'profiles', 'rollouts', 'agents', 'errors', 'compliance', 'scheduled', 'audit', 'users', 'settings', 'help'];
+  const validTabs = ['home', 'packages', 'distribution', 'profiles', 'rollouts', 'agents', 'errors', 'compliance', 'scheduled', 'audit', 'actions', 'users', 'settings', 'help'];
   const raw = (location.hash || '').replace(/^#/, '') || 'packages';
   if (!validTabs.includes(raw)) return;
   if (raw === currentTab) return;
   const btn = document.querySelector(`.tab[data-tab="${raw}"]`);
   if (btn) switchTab(raw, btn);
 });
+
+/* ═══════════════════════════════════════════════════════════
+   Action Log
+   ═══════════════════════════════════════════════════════════ */
+
+let alPage = 0;
+const AL_PAGE_SIZE = 50;
+let _alFilterTimer = null;
+
+function alFilterDebounce() {
+  clearTimeout(_alFilterTimer);
+  _alFilterTimer = setTimeout(() => loadActionLog(true), 300);
+}
+
+const _alStatusLabel = { pending: 'Ausstehend', running: 'Laeuft', success: 'Erfolg', error: 'Fehler' };
+
+function _alDuration(start, end) {
+  if (!start || !end) return '';
+  const ms = new Date(end+'Z') - new Date(start+'Z');
+  const s = Math.round(ms / 1000);
+  if (s < 0) return '';
+  return s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+}
+
+async function loadActionLog(reset) {
+  if (reset) alPage = 0;
+  const params = new URLSearchParams();
+  const st = document.getElementById('al-filter-status').value;
+  const tp = document.getElementById('al-filter-type').value;
+  const ag = document.getElementById('al-filter-agent').value.trim();
+  if (st) params.set('status', st);
+  if (tp) params.set('pkg_type', tp);
+  if (ag) params.set('agent_id', ag);
+  params.set('limit', AL_PAGE_SIZE);
+  params.set('offset', alPage * AL_PAGE_SIZE);
+  try {
+    const data = await api('GET', '/admin/api/action-log?' + params);
+    renderActionLog(data);
+  } catch (e) { /* api() already toasts */ }
+}
+
+function renderActionLog(entries) {
+  const el = document.getElementById('action-log-list');
+  const countEl = document.getElementById('al-count');
+  if (!entries.length && alPage === 0) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div><h3>Keine Aktionen</h3><p>Installationen und Deinstallationen erscheinen hier mit Status und Output.</p></div>';
+    countEl.textContent = '';
+    document.getElementById('al-pagination').innerHTML = '';
+    return;
+  }
+  countEl.textContent = entries.length >= AL_PAGE_SIZE ? `${AL_PAGE_SIZE}+ Eintraege` : `${entries.length} Eintraege`;
+
+  const head = `<div class="al-row al-head">
+    <span>Status</span><span>Agent</span><span>Paket</span><span>Typ</span>
+    <span>Aktion</span><span>Zeitpunkt</span><span>Dauer</span><span></span>
+  </div>`;
+
+  const rows = entries.map(e => {
+    const dur = _alDuration(e.created_at, e.completed_at);
+    const retryBtn = e.status === 'error'
+      ? `<button class="al-retry" onclick="event.stopPropagation();alRetry(${e.id})" title="Nochmal versuchen">&#8635;</button>`
+      : '';
+    return `<div class="al-row${e.status === 'error' ? ' al-error' : ''}" onclick="alShowDetail(${e.id})">
+      <span><span class="al-badge ${esc(e.status)}">${esc(_alStatusLabel[e.status] || e.status)}</span></span>
+      <span class="truncate">${esc(e.hostname)}</span>
+      <span class="truncate">${esc(e.display_name)}</span>
+      <span><span class="pkg-type-pill ${esc(e.pkg_type)}">${esc(e.pkg_type)}</span></span>
+      <span>${esc(e.action)}</span>
+      <span title="${esc(fmtDt(e.created_at))}">${esc(relTime(e.created_at))}</span>
+      <span>${esc(dur)}</span>
+      <span>${retryBtn}</span>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = head + rows;
+
+  // Pagination
+  const pag = document.getElementById('al-pagination');
+  const prevDisabled = alPage === 0;
+  const nextDisabled = entries.length < AL_PAGE_SIZE;
+  pag.innerHTML = `
+    <button class="btn btn-ghost btn-sm" ${prevDisabled ? 'disabled' : ''} onclick="alPage--;loadActionLog()">Zurueck</button>
+    <span style="line-height:32px;font-size:13px;color:var(--fg-4)">Seite ${alPage + 1}</span>
+    <button class="btn btn-ghost btn-sm" ${nextDisabled ? 'disabled' : ''} onclick="alPage++;loadActionLog()">Weiter</button>
+  `;
+}
+
+async function alShowDetail(logId) {
+  let entry;
+  try {
+    entry = await api('GET', '/admin/api/action-log/' + logId);
+  } catch { return; }
+
+  const dur = _alDuration(entry.created_at, entry.completed_at);
+  const body = document.getElementById('action-detail-body');
+  body.innerHTML = `
+    <div class="al-detail-grid">
+      <div><div class="label">Agent</div>${esc(entry.hostname)}</div>
+      <div><div class="label">Paket</div>${esc(entry.display_name)}</div>
+      <div><div class="label">Typ</div>${esc(entry.pkg_type)}</div>
+      <div><div class="label">Aktion</div>${esc(entry.action)}</div>
+      <div><div class="label">Status</div><span class="al-badge ${esc(entry.status)}">${esc(_alStatusLabel[entry.status] || entry.status)}</span></div>
+      <div><div class="label">Exit-Code</div>${entry.exit_code != null ? entry.exit_code : '\u2014'}</div>
+      <div><div class="label">Gestartet</div>${esc(fmtDt(entry.created_at))}</div>
+      <div><div class="label">Abgeschlossen</div>${entry.completed_at ? esc(fmtDt(entry.completed_at)) + (dur ? ' (' + esc(dur) + ')' : '') : '\u2014'}</div>
+    </div>
+    ${entry.error_summary ? `<div class="al-error-banner"><strong>Fehler:</strong> ${esc(entry.error_summary)}</div>` : ''}
+    ${entry.stdout ? `<details><summary style="cursor:pointer;margin-bottom:8px;font-size:13px;color:var(--fg-3)">Vollstaendiger Output</summary><div class="al-stdout">${esc(entry.stdout)}</div></details>` : ''}
+    ${entry.status === 'error' ? `<div style="margin-top:16px;text-align:right"><button class="btn btn-sm" style="background:var(--red);color:#fff" onclick="alRetry(${entry.id});closeActionDetailModal()">Nochmal versuchen</button></div>` : ''}
+  `;
+  document.getElementById('action-detail-modal').classList.add('open');
+}
+
+function closeActionDetailModal() {
+  document.getElementById('action-detail-modal').classList.remove('open');
+}
+
+async function alRetry(logId) {
+  try {
+    const r = await api('POST', '/admin/api/action-log/' + logId + '/retry');
+    if (r.ok) {
+      toast('Aktion wird wiederholt...');
+      loadActionLog();
+    }
+  } catch (e) {
+    toast('Retry fehlgeschlagen', true);
+  }
+}
+
+/* ── Install-Polling (ersetzt den simplen 3s-setTimeout) ── */
+
+async function pollActionResult(logId, displayName) {
+  let polls = 0;
+  const maxPolls = 100;
+  const toastEl = _createPersistentToast(`Installation von ${displayName} laeuft...`);
+
+  const iv = setInterval(async () => {
+    polls++;
+    if (polls > maxPolls) {
+      clearInterval(iv);
+      _updatePersistentToast(toastEl, `Keine Rueckmeldung fuer ${displayName} nach 5 Minuten`, true);
+      return;
+    }
+    try {
+      const e = await api('GET', '/admin/api/action-log/' + logId);
+      if (e.status === 'success') {
+        clearInterval(iv);
+        const dur = _alDuration(e.created_at, e.completed_at);
+        _updatePersistentToast(toastEl,
+          `${esc(e.display_name)} erfolgreich` + (dur ? ` (${dur})` : ''),
+          false);
+      } else if (e.status === 'error') {
+        clearInterval(iv);
+        _updatePersistentToast(toastEl,
+          `${esc(e.display_name)} fehlgeschlagen: ${esc(e.error_summary || 'Unbekannter Fehler')}`,
+          true);
+      }
+    } catch { /* weiter pollen */ }
+  }, 3000);
+}
+
+function _createPersistentToast(msg) {
+  let stack = document.getElementById('toast-stack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'toast-stack';
+    document.body.appendChild(stack);
+  }
+  const el = document.createElement('div');
+  el.className = 'toast-item persistent show';
+  el.innerHTML = `<span class="toast-spinner"></span>${esc(msg)}`;
+  stack.appendChild(el);
+  return el;
+}
+
+function _updatePersistentToast(el, msg, isError) {
+  if (!el || !el.parentNode) { toast(msg, isError); return; }
+  el.classList.toggle('error', isError);
+  el.classList.remove('persistent');
+  el.innerHTML = msg;
+  setTimeout(() => {
+    el.classList.remove('show');
+    el.addEventListener('transitionend', () => el.remove(), {once: true});
+    setTimeout(() => el.remove(), 600);
+  }, 5000);
+}
 </script>
 </body>
 </html>
