@@ -11558,23 +11558,22 @@ function onFolderSelected(fileList) {
   const drop = document.getElementById('folder-drop');
   drop.classList.add('has-file');
 
-  // Common Root ermitteln (alle webkitRelativePath beginnen mit demselben Ordnernamen)
   const rootName = (_folderFiles[0].webkitRelativePath || _folderFiles[0].name).split('/')[0];
 
   drop.innerHTML = `
     <div class="upload-file-info">${esc(rootName)}/</div>
-    <div class="upload-file-meta">${_folderFiles.length} Dateien · ${fmtBytes(totalBytes)}</div>
+    <div class="upload-file-meta">${_folderFiles.length} Dateien \u00b7 ${fmtBytes(totalBytes)}</div>
     <input type="file" id="folder-file" webkitdirectory directory multiple onchange="onFolderSelected(this.files)">
   `;
 
-  // Entries für Dropdown ermitteln
+  // Entries fuer Dropdown
   const entries = _folderFiles
     .map(f => f.webkitRelativePath || f.name)
     .filter(_isInstallerName);
 
   const sel = document.getElementById('folder-entry');
   if (!entries.length) {
-    sel.innerHTML = '<option value="">— keine .exe/.msi/.bat im Ordner gefunden —</option>';
+    sel.innerHTML = '<option value="">\u2014 keine .exe/.msi/.bat im Ordner \u2014</option>';
     sel.disabled = true;
     toast('Im Ordner wurde keine .exe/.msi/.bat/.cmd gefunden', true);
     return;
@@ -11585,20 +11584,24 @@ function onFolderSelected(fileList) {
     `<option value="${esc(p)}" ${p === defaultEntry ? 'selected' : ''}>${esc(p)}</option>`
   ).join('');
 
-  // Display-Name vorausfüllen wenn leer
+  // Display-Name aus Ordnername
   const displayInput = document.getElementById('folder-display');
   if (!displayInput.value.trim()) {
     const base = rootName.replace(/[._-]+/g, ' ').trim();
     displayInput.value = base.charAt(0).toUpperCase() + base.slice(1);
   }
+
+  // Auto-Upload sofort starten
+  doFolderUpload();
 }
 
 async function doFolderUpload() {
-  if (!_folderFiles.length) { toast('Bitte Ordner wählen', true); return; }
-  const display = document.getElementById('folder-display').value.trim();
-  if (!display) { toast('Anzeigename fehlt', true); document.getElementById('folder-display').focus(); return; }
+  if (!_folderFiles.length) { toast('Bitte Ordner waehlen', true); return; }
+  // Display-Name: auto-ermittelt aus Ordnername, kann leer sein → Server nimmt Ordnername
+  const display = document.getElementById('folder-display').value.trim()
+    || (_folderFiles[0].webkitRelativePath || '').split('/')[0] || 'Unbenannt';
   const entry = document.getElementById('folder-entry').value.trim();
-  if (!entry) { toast('Entry-Point fehlt', true); return; }
+  // Entry-Point kann leer sein → Server ermittelt per Heuristik
 
   const category = document.getElementById('folder-category').value.trim() || 'Custom';
   const args = document.getElementById('folder-args').value.trim();
