@@ -18,6 +18,7 @@ import asyncio
 import logging
 import re
 import secrets as _secrets
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -77,14 +78,30 @@ async def _run_custom_command_bg(
         # Tactical hat synchron geantwortet (schneller Command).
         # Callback wird trotzdem kommen, aber wir loggen schon mal.
         logger.info("custom %s delivered+returned: %s auf %s", action, display_name, hostname)
-    except Exception as e:
-        # Timeout oder 502 — normal bei langen Commands.
-        # Command laeuft auf Agent, Callback kommt spaeter.
+    except httpx.ReadTimeout:
+        # Timeout — normal bei langen Commands. Command laeuft auf Agent,
+        # Callback kommt spaeter.
         logger.info(
-            "custom %s delivered (async, callback pending): %s auf %s — %s",
-            action, display_name, hostname, type(e).__name__,
+            "custom %s delivered (async, callback pending): %s auf %s",
+            action, display_name, hostname,
         )
-        # Nicht als Fehler werten — Callback liefert das Ergebnis
+        return
+    except Exception as e:
+        # HTTP-Fehler (400/502/504) — Command wurde NICHT an Agent geschickt.
+        # Sofort als error markieren, Callback kommt nie.
+        error_msg = str(e)[:300]
+        logger.warning(
+            "custom %s delivery failed: %s auf %s — %s",
+            action, display_name, hostname, error_msg,
+        )
+        if log_id:
+            try:
+                await database.complete_action_log(
+                    log_id, "error", exit_code=None,
+                    error_summary=error_msg,
+                )
+            except Exception:
+                pass
         return
 
     # Falls wir hier ankommen: Tactical hat synchron geantwortet.
