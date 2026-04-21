@@ -68,7 +68,7 @@ async def _run_custom_command_bg(
     # Delivery-Timeout: genug fuer langsame Agents (NATS braucht manchmal 10-15s).
     # Bei ReadTimeout: Command laeuft trotzdem, Callback kommt spaeter.
     try:
-        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=60)
+        raw_output = await TacticalClient().run_command(agent_id, cmd, shell="cmd", timeout=60)
         if raw_output and raw_output.startswith('"'):
             try:
                 import json as _json
@@ -197,9 +197,26 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
     install_timeout_s = 120
     install_timeout_ms = install_timeout_s * 1000
 
+    # Pre-Check: schon installiert?
     pre_check = ""
+    if detection_name:
+        pre_check = (
+            _ps_registry_check(detection_name)
+            + "if($sfInstalled){_sfProgress \"Pre-Check: Bereits installiert (Version: $sfInstalledVersion)\"}\n"
+        )
+
+    # Post-Install-Verify
     post_check = ""
-    event_log = ""
+    if detection_name:
+        post_check = (
+            "Start-Sleep -Seconds 2\n"
+            + _ps_registry_check(detection_name)
+            + "if($sfInstalled){_sfProgress \"Post-Verify: OK (Version: $sfInstalledVersion)\"}\n"
+            + "else{_sfProgress 'Post-Verify: Software nicht in Registry — evtl. anderer Name oder Neustart noetig'}\n"
+        )
+
+    # Event-Log Query (MsiInstaller)
+    event_log = _ps_event_log_query()
 
     if archive_type == "archive":
         entry_point = (pkg.get("entry_point") or "").strip()
@@ -224,34 +241,34 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
             "$sfBefore = Get-Date\n",
             f"$zipPath = Join-Path $env:TEMP 'kiosk_install_{nonce}.zip'\n",
             f"$extPath = Join-Path $env:TEMP 'kiosk_install_{nonce}'\n",
-            "Write-Output 'Download laeuft...'\n",
+            "_sfProgress 'Download laeuft...'\n",
             f"Invoke-WebRequest -Uri '{url_quoted}' -OutFile $zipPath -UseBasicParsing\n",
-            "Write-Output 'Download abgeschlossen, entpacke...'\n",
+            "_sfProgress 'Download abgeschlossen, entpacke...'\n",
             "Expand-Archive -LiteralPath $zipPath -DestinationPath $extPath -Force\n",
             f"$exe = Join-Path $extPath '{ep_quoted}'\n",
             "if (-not (Test-Path -LiteralPath $exe)) {\n",
             "    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue\n",
             "    Remove-Item $extPath -Recurse -Force -ErrorAction SilentlyContinue\n",
-            f'    Write-Output "FEHLER: Entry-Point nicht gefunden im Archiv: {ep_quoted}"\n',
+            f'    _sfProgress "FEHLER: Entry-Point nicht gefunden: {ep_quoted}"\n',
             '    cmd /c "exit 1"\n',
             "}\n",
             "$workDir = Split-Path -LiteralPath $exe -Parent\n",
-            'Write-Output "Starte Installer: $exe"\n',
+            '_sfProgress "Starte Installer: $exe"\n',
             args_line + "\n",
             f"if (-not $proc.WaitForExit({install_timeout_ms})) {{\n",
             "    try { $proc.Kill() } catch { }\n",
             "    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue\n",
             "    Remove-Item $extPath -Recurse -Force -ErrorAction SilentlyContinue\n",
-            f'    Write-Output "FEHLER: Installer hat nach {install_timeout_s}s nicht geantwortet"\n',
+            f'    _sfProgress "FEHLER: Installer hat nach {install_timeout_s}s nicht geantwortet"\n',
             '    cmd /c "exit 1"\n',
             "}\n",
             "$ec = if ($null -eq $proc.ExitCode) { 0 } else { $proc.ExitCode }\n",
-            'Write-Output "Prozess beendet mit ExitCode $ec"\n',
+            '_sfProgress "Prozess beendet mit ExitCode $ec"\n',
             "Remove-Item $zipPath -Force -ErrorAction SilentlyContinue\n",
             "Remove-Item $extPath -Recurse -Force -ErrorAction SilentlyContinue\n",
             event_log,
             "if ($ec -ne 0 -and $ec -ne 3010) {\n",
-            '    Write-Output "FEHLER: Installer beendete mit ExitCode $ec"\n',
+            '    _sfProgress "FEHLER: Installer beendete mit ExitCode $ec"\n',
             '    cmd /c "exit $ec"\n',
             "}\n",
             post_check,
@@ -303,23 +320,24 @@ Remove-Item $logFile -Force -ErrorAction SilentlyContinue"""
         "$sfBefore = Get-Date\n",
         tmp_init + "\n",
         (log_var + "\n") if log_var else "",
-        "Write-Output 'Download laeuft...'\n",
+        "_sfProgress 'Download laeuft...'\n",
         f"Invoke-WebRequest -Uri '{url_quoted}' -OutFile {tmp_var} -UseBasicParsing\n",
-        "Write-Output 'Download abgeschlossen, starte Installer...'\n",
+        f"_sfProgress \"Download abgeschlossen ($([math]::Round((Get-Item {tmp_var}).Length/1MB,1)) MB)\"\n",
         install_line + "\n",
+        "_sfProgress 'Installer gestartet...'\n",
         f"if (-not $proc.WaitForExit({install_timeout_ms})) {{\n",
         "    try { $proc.Kill() } catch { }\n",
         f"    Remove-Item {tmp_var} -Force -ErrorAction SilentlyContinue\n",
-        f'    Write-Output "FEHLER: Installer hat nach {install_timeout_s}s nicht geantwortet"\n',
+        f'    _sfProgress "FEHLER: Installer hat nach {install_timeout_s}s nicht geantwortet"\n',
         '    cmd /c "exit 1"\n',
         "}\n",
         "$ec = if ($null -eq $proc.ExitCode) { 0 } else { $proc.ExitCode }\n",
-        'Write-Output "Prozess beendet mit ExitCode $ec"\n',
+        '_sfProgress "Prozess beendet mit ExitCode $ec"\n',
         f"Remove-Item {tmp_var} -Force -ErrorAction SilentlyContinue\n",
         event_log,
         log_read + "\n" if log_read else "",
         "if ($ec -ne 0 -and $ec -ne 3010) {\n",
-        '    Write-Output "FEHLER: Installer beendete mit ExitCode $ec"\n',
+        '    _sfProgress "FEHLER: Installer beendete mit ExitCode $ec"\n',
         '    cmd /c "exit $ec"\n',
         "}\n",
         post_check,
@@ -349,35 +367,33 @@ def _build_uninstall_command(
         post_check = (
             "Start-Sleep -Seconds 2\n"
             + _ps_registry_check(det)
-            + "if($sfInstalled){Write-Output 'FEHLER: Software noch installiert';cmd /c \"exit 1\"}\n"
-            + "else{Write-Output 'Deinstallation abgeschlossen.'}\n"
+            + "if($sfInstalled){_sfProgress 'FEHLER: Software noch installiert';cmd /c \"exit 1\"}\n"
+            + "else{_sfProgress 'Deinstallation abgeschlossen.'}\n"
         )
     else:
-        post_check = "Write-Output 'Deinstallation abgeschlossen.'\n"
+        post_check = "_sfProgress 'Deinstallation abgeschlossen.'\n"
 
-    # WICHTIG: kein `exit` — Callback-Wrapper muss danach noch laufen.
     parts = [
         "$ErrorActionPreference = 'Continue'\n",
         pre_check,
         "$sfBefore = Get-Date\n",
-        f"Write-Output 'Starte Uninstall ({timeout_s}s Timeout)'\n",
+        f"_sfProgress 'Starte Uninstall ({timeout_s}s Timeout)'\n",
         "try {\n",
         f"    $proc = Start-Process -FilePath cmd.exe -ArgumentList '/c','{safe}' -PassThru -WindowStyle Hidden\n",
         f"    if (-not $proc.WaitForExit({timeout_ms})) {{\n",
-        "        Write-Output \"TIMEOUT nach " + str(timeout_s) + "s — Prozess wird beendet\"\n",
         "        try { $proc.Kill() } catch { }\n",
-        "        Write-Output \"FEHLER: Uninstaller hat nach " + str(timeout_s) + "s nicht geantwortet\"\n",
+        "        _sfProgress 'FEHLER: Uninstaller hat nach " + str(timeout_s) + "s nicht geantwortet'\n",
         '        cmd /c "exit 1"\n',
         "    } else {\n",
         "        $ec = if ($null -eq $proc.ExitCode) { 0 } else { $proc.ExitCode }\n",
-        '        Write-Output "Prozess beendet mit ExitCode $ec"\n',
+        '        _sfProgress "Prozess beendet mit ExitCode $ec"\n',
         "        if ($ec -ne 0 -and $ec -ne 3010 -and $ec -ne 1605) {\n",
-        '            Write-Output "FEHLER: Uninstaller beendete mit ExitCode $ec"\n',
+        '            _sfProgress "FEHLER: Uninstaller beendete mit ExitCode $ec"\n',
         '            cmd /c "exit $ec"\n',
         "        }\n",
         "    }\n",
         "} catch {\n",
-        '    Write-Output "FEHLER: $($_.Exception.Message)"\n',
+        '    _sfProgress "FEHLER: $($_.Exception.Message)"\n',
         '    cmd /c "exit 1"\n',
         "}\n",
         event_log,
@@ -1179,7 +1195,7 @@ async def install_package(
             include_scope_machine=include_scope_machine,
         )
         job_id = _generate_job_id()
-        cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
             pkg["display_name"], "winget", action, job_id=job_id,
@@ -1204,7 +1220,7 @@ async def install_package(
             raise HTTPException(status_code=500, detail="Custom-Paket ohne Datei-Hash")
         inner_cmd = await _build_install_command(pkg, agent_id)
         job_id = _generate_job_id()
-        cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
             pkg["display_name"], "custom", "install", job_id=job_id,
@@ -1220,7 +1236,7 @@ async def install_package(
     else:
         inner_cmd = _build_choco_command("install", body.package_name)
         job_id = _generate_job_id()
-        cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
             pkg["display_name"], "choco", "install", job_id=job_id,
@@ -1259,7 +1275,7 @@ async def uninstall_package(
         inner_cmd = _build_winget_command("uninstall", body.package_name)
         scope = pkg.get("winget_scope") or "auto"
         job_id = _generate_job_id()
-        cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
             pkg["display_name"], "winget", "uninstall", job_id=job_id,
@@ -1289,7 +1305,7 @@ async def uninstall_package(
             uninstall_cmd, detection_name=pkg.get("detection_name") or pkg.get("display_name") or "",
         )
         job_id = _generate_job_id()
-        ps_cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        ps_cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
             pkg["display_name"], "custom", "uninstall", job_id=job_id,
@@ -1305,7 +1321,7 @@ async def uninstall_package(
     else:
         inner_cmd = _build_choco_command("uninstall", body.package_name)
         job_id = _generate_job_id()
-        cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
             pkg["display_name"], "choco", "uninstall", job_id=job_id,
@@ -1360,7 +1376,7 @@ async def dispatch_install_for_agent(
             include_scope_machine=include_scope_machine,
         )
         job_id = _generate_job_id()
-        cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
             pkg["display_name"], "winget", action, job_id=job_id,
@@ -1378,7 +1394,7 @@ async def dispatch_install_for_agent(
             raise HTTPException(status_code=400, detail="Custom-Paket ohne aktive Version")
         inner_cmd = await _build_install_command(pkg, agent_id)
         job_id = _generate_job_id()
-        cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
             pkg["display_name"], "custom", "install", job_id=job_id,
@@ -1394,7 +1410,7 @@ async def dispatch_install_for_agent(
             raise HTTPException(status_code=400, detail="Ungültiger Paketname")
         inner_cmd = _build_choco_command("install", package_name, version=version_pin)
         job_id = _generate_job_id()
-        cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
             pkg["display_name"], "choco", "install", job_id=job_id,
@@ -1438,7 +1454,7 @@ async def dispatch_uninstall_for_agent(
         inner_cmd = _build_winget_command("uninstall", package_name)
         scope = pkg.get("winget_scope") or "auto"
         job_id = _generate_job_id()
-        cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
             pkg["display_name"], "winget", "uninstall", job_id=job_id,
@@ -1462,7 +1478,7 @@ async def dispatch_uninstall_for_agent(
             uninstall_cmd, detection_name=pkg.get("detection_name") or pkg.get("display_name") or "",
         )
         job_id = _generate_job_id()
-        ps_cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        ps_cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
             pkg["display_name"], "custom", "uninstall", job_id=job_id,
@@ -1477,7 +1493,7 @@ async def dispatch_uninstall_for_agent(
             raise HTTPException(status_code=400, detail="Ungültiger Paketname")
         inner_cmd = _build_choco_command("uninstall", package_name)
         job_id = _generate_job_id()
-        cmd = await _build_callback_wrapper(inner_cmd, job_id)
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
             pkg["display_name"], "choco", "uninstall", job_id=job_id,
@@ -1489,34 +1505,45 @@ async def dispatch_uninstall_for_agent(
     return {"action": "uninstall", "package_name": package_name, "type": ptype}
 
 
-# ── Callback Pattern ─────────────────────────────────────────────────────────
-# Agent ruft nach Command-Completion direkt unseren Proxy an.
-# Eliminiert NATS-Timeout-Abhaengigkeit komplett.
+# ── Callback Pattern + Script Delivery ───────────────────────────────────────
+# Agent laed Script per HTTP vom Proxy, fuehrt es aus, meldet Ergebnis per
+# Callback zurueck. Eliminiert NATS-Timeout und Script-Size-Limit komplett.
+
+import os as _os
+
+_SCRIPTS_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "data", "scripts")
+
 
 class CallbackPayload(BaseModel):
     exit_code: int = 0
     output: str = ""
     success: bool = True
+    final: bool = True  # False = Progress-Update, True = Endergebnis
 
 
 @router.post("/callback/{job_id}")
 async def receive_callback(job_id: str, body: CallbackPayload):
-    """Agent meldet Ergebnis einer Install/Uninstall-Aktion zurueck.
-    job_id ist ein kryptographisch zufaelliger 64-hex-Token (256 bit),
-    dient gleichzeitig als Auth (unguessable)."""
+    """Agent meldet Ergebnis oder Fortschritt einer Aktion.
+    job_id (256 bit random) dient als Auth.
+    final=False: Progress-Update (stdout aktualisieren, Status bleibt running).
+    final=True: Endergebnis (action_log abschliessen)."""
     if not re.fullmatch(r"[a-f0-9]{64}", job_id):
         raise HTTPException(status_code=400, detail="Invalid job_id")
     entry = await database.get_action_log_by_job_id(job_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Unknown job_id")
     if entry["status"] not in ("pending", "running"):
-        # Already completed (duplicate callback) — ignore
         return {"ok": True, "duplicate": True}
 
+    if not body.final:
+        # Progress-Update: nur stdout aktualisieren
+        await database.update_action_log_output(entry["id"], body.output or "")
+        return {"ok": True, "progress": True}
+
+    # Final: action_log abschliessen
     status = "success" if body.success else "error"
     error_summary = None
     if not body.success:
-        # Letzte Zeilen als Error-Summary
         lines = (body.output or "").strip().splitlines()
         error_summary = "\n".join(lines[-5:])[:500] if lines else "Unbekannter Fehler"
 
@@ -1527,7 +1554,6 @@ async def receive_callback(job_id: str, body: CallbackPayload):
         stdout=body.output or None,
     )
 
-    # Tracking aktualisieren
     if body.success:
         if entry["action"] in ("install", "upgrade"):
             await database.set_agent_installation(
@@ -1538,7 +1564,6 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                 entry["agent_id"], entry["package_name"]
             )
 
-    # Targeted re-scan
     try:
         pkg_type = entry["pkg_type"]
         if pkg_type == "winget":
@@ -1548,6 +1573,13 @@ async def receive_callback(job_id: str, body: CallbackPayload):
     except Exception as e:
         logger.warning("post-callback rescan failed for %s: %s", entry["agent_id"], e)
 
+    # Script-File aufraumen
+    script_path = _os.path.join(_SCRIPTS_DIR, f"{job_id}.ps1")
+    try:
+        _os.remove(script_path)
+    except OSError:
+        pass
+
     logger.info(
         "callback %s: %s %s auf %s (exit=%s)",
         status, entry["action"], entry["display_name"],
@@ -1556,60 +1588,97 @@ async def receive_callback(job_id: str, body: CallbackPayload):
     return {"ok": True}
 
 
+@router.get("/script/{job_id}")
+async def serve_script(job_id: str):
+    """Liefert ein generiertes PS-Script aus. job_id ist Auth (256 bit)."""
+    if not re.fullmatch(r"[a-f0-9]{64}", job_id):
+        raise HTTPException(status_code=400, detail="Invalid job_id")
+    script_path = _os.path.join(_SCRIPTS_DIR, f"{job_id}.ps1")
+    if not _os.path.isfile(script_path):
+        raise HTTPException(status_code=404, detail="Script not found")
+    from fastapi.responses import FileResponse
+    return FileResponse(script_path, media_type="text/plain; charset=utf-8")
+
+
 def _generate_job_id() -> str:
     return _secrets.token_hex(32)
 
 
-async def _build_callback_wrapper(inner_script: str, job_id: str) -> str:
-    """Wrappt ein PS-Script mit Callback am Ende. Der Agent ruft nach
-    Completion direkt unseren Proxy an mit Exit-Code + Output.
-    WICHTIG: String-Concatenation statt f-string weil inner_script
-    geschweifte Klammern enthalten kann (GUIDs in Pfaden)."""
+async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
+    """Speichert ein PS-Script als Datei und returned den Bootstrap-Command
+    (~200 Bytes) der das Script per HTTP laed und ausfuehrt.
+
+    Das Script enthaelt:
+    - Progress-Callbacks nach jedem Schritt (live Output im Admin-UI)
+    - Finalen Callback mit Ergebnis
+    - Cleanup des temp Files
+    """
+    _os.makedirs(_SCRIPTS_DIR, exist_ok=True)
     base = await _public_proxy_url()
     callback_url = f"{base}/api/v1/callback/{job_id}"
-    url_safe = _ps_quote(callback_url)
+    script_url = f"{base}/api/v1/script/{job_id}"
 
-    header = """\
-$ErrorActionPreference = 'Continue'
-$_sfOutput = [System.Collections.Generic.List[string]]::new()
-function _sfLog($msg) { $_sfOutput.Add($msg); Write-Output $msg }
+    # Script-Header mit Progress-Funktion
+    header = (
+        "$ErrorActionPreference = 'Continue'\n"
+        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12\n"
+        "$_sfOutput = [System.Collections.Generic.List[string]]::new()\n"
+        "$_sfCallbackUrl = '" + _ps_quote(callback_url) + "'\n"
+        "$_sfExitCode = 0\n"
+        "$_sfSuccess = $true\n"
+        "function _sfProgress($msg) {\n"
+        "    $_sfOutput.Add($msg); Write-Output $msg\n"
+        "    $body = @{output=($_sfOutput -join \"`n\"); final=$false} | ConvertTo-Json -Compress\n"
+        "    try { Invoke-WebRequest -Uri $_sfCallbackUrl -Method POST -Body $body -ContentType 'application/json' -UseBasicParsing -TimeoutSec 5 | Out-Null } catch {}\n"
+        "}\n"
+        "\n"
+        "_sfProgress 'Command gestartet'\n"
+        "try {\n"
+    )
 
-_sfLog 'Softshelf: Command gestartet'
-$_sfExitCode = 0
-$_sfSuccess = $true
-try {
-$_sfInnerOut = & {
-"""
-    footer = """
-} 2>&1 | Out-String
-$_sfOutput.Add($_sfInnerOut.Trim())
-Write-Output $_sfInnerOut
-if ($LASTEXITCODE -and $LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010 -and $LASTEXITCODE -ne 1605) {
-    $_sfExitCode = $LASTEXITCODE
-    $_sfSuccess = $false
-}
-} catch {
-    $_sfExitCode = 1
-    $_sfSuccess = $false
-    _sfLog "Exception: $($_.Exception.Message)"
-}
+    # Script-Footer mit finalem Callback
+    footer = (
+        "\n"
+        "} catch {\n"
+        "    $_sfExitCode = 1\n"
+        "    $_sfSuccess = $false\n"
+        "    $_sfOutput.Add(\"FEHLER: $($_.Exception.Message)\")\n"
+        "}\n"
+        "\n"
+        "if ($LASTEXITCODE -and $LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010 -and $LASTEXITCODE -ne 1605) {\n"
+        "    $_sfExitCode = $LASTEXITCODE\n"
+        "    $_sfSuccess = $false\n"
+        "}\n"
+        "\n"
+        "_sfProgress 'Sende Ergebnis...'\n"
+        "$_sfBody = @{\n"
+        "    exit_code = $_sfExitCode\n"
+        "    output    = ($_sfOutput -join \"`n\")\n"
+        "    success   = $_sfSuccess\n"
+        "    final     = $true\n"
+        "} | ConvertTo-Json -Compress\n"
+        "try {\n"
+        "    Invoke-WebRequest -Uri $_sfCallbackUrl -Method POST -Body $_sfBody -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null\n"
+        "} catch {\n"
+        "    Start-Sleep -Seconds 3\n"
+        "    try { Invoke-WebRequest -Uri $_sfCallbackUrl -Method POST -Body $_sfBody -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null } catch {}\n"
+        "}\n"
+    )
 
-_sfLog 'Sende Ergebnis an Proxy...'
-$_sfBody = @{
-    exit_code = $_sfExitCode
-    output    = ($_sfOutput -join "`n")
-    success   = $_sfSuccess
-} | ConvertTo-Json -Compress
-try {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri '""" + url_safe + """' -Method POST -Body $_sfBody -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null
-    _sfLog 'Callback gesendet.'
-} catch {
-    _sfLog "Callback fehlgeschlagen: $($_.Exception.Message)"
-    Start-Sleep -Seconds 3
-    try {
-        Invoke-WebRequest -Uri '""" + url_safe + """' -Method POST -Body $_sfBody -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null
-    } catch { }
-}
-"""
-    return header + inner_script + footer
+    # Script speichern
+    script_content = header + inner_script + footer
+    script_path = _os.path.join(_SCRIPTS_DIR, f"{job_id}.ps1")
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write(script_content)
+
+    # Bootstrap-Command (~250 Bytes) — wird inline via Tactical gesendet
+    nonce = _secrets.token_hex(4)
+    script_url_safe = _ps_quote(script_url)
+    bootstrap = (
+        f"powershell -ExecutionPolicy Bypass -Command \""
+        f"$f=Join-Path $env:TEMP 'sf_{nonce}.ps1';"
+        f"Invoke-WebRequest -Uri '{script_url_safe}' -OutFile $f -UseBasicParsing;"
+        f"& $f;"
+        f"Remove-Item $f -Force\""
+    )
+    return bootstrap

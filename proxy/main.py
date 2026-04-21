@@ -5,6 +5,7 @@ Admin:   http(s)://<server>:8765/admin
 """
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -29,7 +30,7 @@ from routes import packages, install, admin, register
 
 logger = logging.getLogger("softshelf")
 
-VERSION = "2.0.3"
+VERSION = "2.0.2"
 
 # /app/downloads — shared volume mit dem builder-Container
 DOWNLOADS_DIR = "/app/downloads"
@@ -108,6 +109,19 @@ async def _action_log_cleanup_job():
             logger.info("action_log cleanup: %d Eintraege entfernt", count)
     except Exception as e:
         logger.warning("action_log cleanup failed: %s", e)
+    # Stale Script-Files (aelter als 4h) aufraeumen
+    try:
+        import glob, time
+        scripts_dir = os.path.join(os.path.dirname(__file__), "data", "scripts")
+        cutoff = time.time() - 4 * 3600
+        stale = [f for f in glob.glob(os.path.join(scripts_dir, "*.ps1"))
+                 if os.path.getmtime(f) < cutoff]
+        for f in stale:
+            os.remove(f)
+        if stale:
+            logger.info("Script cleanup: %d stale files removed", len(stale))
+    except Exception as e:
+        logger.warning("Script cleanup failed: %s", e)
     # Stuck entries: pending/running laenger als 4 Stunden → error
     try:
         async with database._db() as db:
@@ -375,6 +389,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("action_log stale cleanup: %s", e)
     os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+    # Scripts-Dir fuer Script-Delivery anlegen + alte Scripts aufraeumen
+    scripts_dir = os.path.join(os.path.dirname(__file__), "data", "scripts")
+    os.makedirs(scripts_dir, exist_ok=True)
+    try:
+        import glob
+        stale = glob.glob(os.path.join(scripts_dir, "*.ps1"))
+        for f in stale:
+            os.remove(f)
+        if stale:
+            logger.info("Startup: %d stale script files removed", len(stale))
+    except Exception as e:
+        logger.warning("Script cleanup on startup: %s", e)
 
     # APScheduler für nightly winget Scan + Enrichment + Catalog-Refresh.
     # Reihenfolge: Catalog refresh zuerst, dann scan, dann enrichment (das den
@@ -534,6 +560,9 @@ async def download_exe(filename: str):
     """
     slug = await runtime_value("product_slug") or "Softshelf"
     allowed = {f"{slug}.exe", f"{slug}-setup.exe"}
+    # .ps1 Scripts aus dem downloads-Verzeichnis (fuer Debug/Deploy)
+    if filename.endswith(".ps1") and re.fullmatch(r"[a-zA-Z0-9_\-]{1,80}\.ps1", filename):
+        allowed.add(filename)
     if filename not in allowed:
         raise HTTPException(status_code=404, detail="Nicht gefunden")
     path = os.path.join(DOWNLOADS_DIR, filename)
