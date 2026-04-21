@@ -11626,7 +11626,7 @@ async function doFolderUpload() {
   bar.style.width = '0%';
 
   try {
-    await new Promise((resolve, reject) => {
+    const result = await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/admin/api/upload-folder');
       xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
@@ -11648,17 +11648,50 @@ async function doFolderUpload() {
       xhr.send(fd);
     });
 
-    toast(`„${display}" hochgeladen`);
-    init();
-    closeAll();
-    resetFolderForm();
+    toast(`\u201E${display}\u201C hochgeladen`);
     invalidateStorageCache();
     refreshStorageIndicator();
+
+    // Server hat Metadata erkannt — Felder aktualisieren, Sidebar offen lassen
+    const detected = [];
+    if (result.install_args && !args) {
+      document.getElementById('folder-args').value = result.install_args;
+      detected.push('Install-Args: ' + result.install_args);
+    }
+    if (result.detection_name && !detection) {
+      document.getElementById('folder-detection').value = result.detection_name;
+      detected.push('Detection: ' + result.detection_name);
+    }
+    if (result.uninstall_cmd && !uninstall) {
+      const el = document.getElementById('folder-uninstall');
+      if (el) { el.value = result.uninstall_cmd; detected.push('Uninstall-Cmd erkannt'); }
+    }
+    if (detected.length) {
+      toast('Erkannt: ' + detected.join(', '));
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = 'Aktualisieren';
+      submitBtn.onclick = async function() {
+        const pArgs = document.getElementById('folder-args').value.trim();
+        const pDet = document.getElementById('folder-detection').value.trim();
+        const pUninst = document.getElementById('folder-uninstall')?.value?.trim() || '';
+        try {
+          await api('PATCH', '/admin/api/custom/' + encodeURIComponent(result.name), {
+            install_args: pArgs,
+            detection_name: pDet,
+            uninstall_cmd: pUninst,
+          });
+          toast('Paket aktualisiert');
+          init(); closeAll(); resetFolderForm();
+        } catch (e2) { toast('Aktualisierung fehlgeschlagen: ' + e2.message, true); }
+      };
+    } else {
+      init(); closeAll(); resetFolderForm();
+    }
   } catch (e) {
     toast('Upload fehlgeschlagen: ' + e.message, true);
   } finally {
     submitBtn.disabled = false;
-    submitBtn.innerHTML = 'Hochladen';
+    if (submitBtn.innerHTML.includes('Lade hoch')) submitBtn.innerHTML = 'Hochladen';
     progress.classList.remove('active');
   }
 }
