@@ -182,14 +182,27 @@ def build_msi_uninstall_cmd(product_code: str) -> str:
     return f'msiexec /x "{product_code}" /qn /norestart'
 
 
+_MAX_7Z_SIZE = 100 * 1024 * 1024  # 100 MB — darueber nur PE-Header
+
+
 async def parse_exe_metadata(path: str) -> dict:
     """
-    Extrahiert ProductName und CompanyName aus einer EXE via 7z.
+    Extrahiert ProductName und CompanyName aus einer EXE.
 
-    7z parsed NSIS-Header, Inno-Setup-Daten, PE-VersionInfo und embedded
-    Archive automatisch — robuster als unsere manuelle Binary-Analyse.
-    Gibt {} zurück wenn 7z fehlt oder nichts findet.
+    Kleine Files (<100MB): 7z parsed NSIS, Inno, PE-VersionInfo.
+    Grosse Files (>=100MB): nur PE VS_VERSION_INFO aus den ersten 2MB.
     """
+    file_size = os.path.getsize(path) if os.path.isfile(path) else 0
+
+    if file_size < _MAX_7Z_SIZE:
+        return await _parse_exe_via_7z(path)
+
+    # Grosse Datei: PE-Header direkt lesen (schnell)
+    return _parse_pe_version_info(path)
+
+
+async def _parse_exe_via_7z(path: str) -> dict:
+    """7z-basierte Metadata-Extraktion (fuer kleine Files)."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "7z", "l", "-slt", path,
@@ -199,9 +212,7 @@ async def parse_exe_metadata(path: str) -> dict:
         stdout, _ = await proc.communicate()
         if proc.returncode != 0:
             return {}
-    except FileNotFoundError:
-        return {}
-    except Exception:
+    except (FileNotFoundError, Exception):
         return {}
 
     result = {}
@@ -216,6 +227,50 @@ async def parse_exe_metadata(path: str) -> dict:
         if key == "ProductName" and "ProductName" not in result:
             result["ProductName"] = val
         elif key == "CompanyName" and "CompanyName" not in result:
+            result["CompanyName"] = val
+    return result
+
+
+def _parse_pe_version_info(path: str) -> dict:
+    """Liest VS_VERSION_INFO aus PE-Header (erste 2MB). Schnell bei grossen Files."""
+    result = {}
+    try:
+        with open(path, "rb") as f:
+            buf = f.read(2 * 1024 * 1024)
+    except Exception:
+        return result
+
+    # VS_VERSION_INFO Strings sind UTF-16LE encoded
+    # Suche nach bekannten Keys
+    for key_name in (b"P\x00r\x00o\x00d\x00u\x00c\x00t\x00N\x00a\x00m\x00e\x00",
+                     b"C\x00o\x00m\x00p\x00a\x00n\x00y\x00N\x00a\x00m\x00e\x00"):
+        idx = buf.find(key_name)
+        if idx < 0:
+            continue
+        # Value folgt nach dem Key + null terminator + alignment
+        val_start = idx + len(key_name)
+        # Skip null bytes and alignment padding
+        while val_start < len(buf) and buf[val_start:val_start+2] == b"\x00\x00":
+            val_start += 2
+        if val_start >= len(buf):
+            continue
+        # Read UTF-16LE string until double-null
+        val_end = val_start
+        while val_end + 1 < len(buf):
+            if buf[val_end:val_end+2] == b"\x00\x00":
+                break
+            val_end += 2
+        try:
+            val = buf[val_start:val_end].decode("utf-16-le").strip()
+        except Exception:
+            continue
+        if not val or len(val) > 200:
+            continue
+        # Map to dict key
+        decoded_key = key_name.decode("utf-16-le")
+        if decoded_key == "ProductName" and "ProductName" not in result:
+            result["ProductName"] = val
+        elif decoded_key == "CompanyName" and "CompanyName" not in result:
             result["CompanyName"] = val
     return result
 
