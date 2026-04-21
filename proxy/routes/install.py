@@ -125,21 +125,79 @@ def _ps_arg_array(args_str: str) -> str:
     return ", ".join(items)
 
 
+def _ps_registry_check(detection_name: str) -> str:
+    """PS-Snippet: prueft ob Software mit detection_name in der Registry steht.
+    Setzt $sfInstalled (bool) und $sfInstalledVersion (string|null).
+    KEIN f-string — pure string concat, safe fuer beliebige Einbettung."""
+    det = _ps_quote(detection_name)
+    return (
+        "$regPaths = @(\n"
+        "    'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',\n"
+        "    'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'\n"
+        ")\n"
+        "$sfInstalled = $false\n"
+        "$sfInstalledVersion = $null\n"
+        "foreach ($rp in $regPaths) {\n"
+        "    $found = Get-ItemProperty $rp -ErrorAction SilentlyContinue |\n"
+        "        Where-Object { $_.DisplayName -like '*" + det + "*' }\n"
+        "    if ($found) {\n"
+        "        $sfInstalled = $true\n"
+        "        $sfInstalledVersion = $found[0].DisplayVersion\n"
+        "        break\n"
+        "    }\n"
+        "}\n"
+    )
+
+
+def _ps_event_log_query() -> str:
+    """PS-Snippet: liest MsiInstaller Events seit $sfBefore.
+    KEIN f-string — pure string concat."""
+    return (
+        "$sfEvents = @()\n"
+        "try {\n"
+        "    $sfEvents = Get-WinEvent -FilterHashtable @{\n"
+        "        ProviderName='MsiInstaller'\n"
+        "        StartTime=$sfBefore\n"
+        "    } -MaxEvents 30 -ErrorAction SilentlyContinue |\n"
+        "        Select-Object TimeCreated, Id, Message\n"
+        "} catch { }\n"
+        "if ($sfEvents.Count -gt 0) {\n"
+        '    Write-Output "--- MSI Event Log ---"\n'
+        "    foreach ($ev in $sfEvents) {\n"
+        "        $msg = ($ev.Message -split \"`n\")[0].Trim()\n"
+        "        if ($msg.Length -gt 200) { $msg = $msg.Substring(0, 200) + '...' }\n"
+        '        Write-Output ("  [{0}] Event {1}: {2}" -f $ev.TimeCreated.ToString(\'HH:mm:ss\'), $ev.Id, $msg)\n'
+        "    }\n"
+        "    $failEvents = $sfEvents | Where-Object { $_.Id -eq 11708 -or $_.Id -eq 1023 -or $_.Id -eq 1024 }\n"
+        "    if ($failEvents) {\n"
+        '        Write-Output "FEHLER: MSI meldet fehlgeschlagene Installation (Event 11708/1023/1024)"\n'
+        '        cmd /c "exit 1"\n'
+        "    }\n"
+        "}\n"
+    )
+
+
 async def _build_install_command(pkg: dict, agent_id: str) -> str:
     """
-    Baut den PowerShell-Command, der auf dem Agent läuft, um ein custom-Paket
-    herunterzuladen und silent zu installieren.
+    Baut den PowerShell-Command fuer custom-Paket Install.
+
+    Smart Install Flow:
+      1. Pre-Check: Registry → schon installiert?
+      2. Download + Install mit Timeout
+      3. Event-Log Query (MsiInstaller Events)
+      4. Post-Check: Registry → jetzt installiert?
 
     Drei Varianten je nach archive_type / Dateiendung:
-      • single MSI    → msiexec /i <tmp> <args>
-      • single EXE    → Start-Process <tmp> <args>
-      • archive (zip) → Expand-Archive nach tmp-dir, Start-Process <entry_point>
+      - single MSI    → msiexec /i <tmp> <args> /l*v <log>
+      - single EXE    → Start-Process <tmp> <args>
+      - archive (zip) → Expand-Archive, Start-Process <entry_point>
     """
     sha = pkg["sha256"]
     filename = pkg["filename"] or f"{sha}.bin"
     ext = filename.rsplit(".", 1)[-1].lower()
     install_args = pkg.get("install_args") or ""
     archive_type = pkg.get("archive_type") or "single"
+    detection_name = pkg.get("detection_name") or pkg.get("display_name") or ""
 
     token = create_download_token(sha, agent_id)
     base = await _public_proxy_url()
@@ -147,9 +205,35 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
     url_quoted = _ps_quote(url)
 
     nonce = _secrets.token_hex(4)
-
     install_timeout_s = 120
     install_timeout_ms = install_timeout_s * 1000
+
+    # Pre-Check Block (only if detection_name available)
+    pre_check = ""
+    if detection_name:
+        pre_check = _ps_registry_check(detection_name) + """
+if ($sfInstalled) {
+    Write-Output "Pre-Check: Software bereits installiert (Version: $sfInstalledVersion)"
+}
+"""
+
+    # Post-Check Block
+    post_check = ""
+    if detection_name:
+        post_check = """
+# Post-Install-Verify
+Start-Sleep -Seconds 2
+""" + _ps_registry_check(detection_name) + """
+if ($sfInstalled) {
+    Write-Output "Post-Verify: Software in Registry gefunden (Version: $sfInstalledVersion)"
+    Write-Output 'Installation erfolgreich verifiziert.'
+} else {
+    Write-Output "WARNUNG: Software nach Install nicht in Registry gefunden"
+    Write-Output "Moeglicherweise verwendet der Installer einen anderen Anzeigenamen oder benoetigt einen Neustart."
+}"""
+
+    # Event-Log Query
+    event_log = _ps_event_log_query()
 
     if archive_type == "archive":
         entry_point = (pkg.get("entry_point") or "").strip()
@@ -157,7 +241,6 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
             raise HTTPException(
                 status_code=500, detail="Archive-Paket ohne entry_point"
             )
-        # Backslashes für Windows
         entry_win = entry_point.replace("/", "\\")
         ep_quoted = _ps_quote(entry_win)
         args_array = _ps_arg_array(install_args)
@@ -169,54 +252,68 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
             f"$proc = Start-Process -FilePath $exe "
             f"-WorkingDirectory $workDir -PassThru -WindowStyle Hidden"
         )
-        return f"""$ErrorActionPreference = 'Continue'
-$zipPath = Join-Path $env:TEMP 'kiosk_install_{nonce}.zip'
-$extPath = Join-Path $env:TEMP 'kiosk_install_{nonce}'
-Write-Output 'Download laeuft...'
-Invoke-WebRequest -Uri '{url_quoted}' -OutFile $zipPath -UseBasicParsing
-Write-Output "Download abgeschlossen, entpacke..."
-Expand-Archive -LiteralPath $zipPath -DestinationPath $extPath -Force
-$exe = Join-Path $extPath '{ep_quoted}'
-if (-not (Test-Path -LiteralPath $exe)) {{
-    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-    Remove-Item $extPath -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Output "FEHLER: Entry-Point nicht gefunden im Archiv: {ep_quoted}"
-    cmd /c "exit 1"
-}}
-$workDir = Split-Path -LiteralPath $exe -Parent
-Write-Output "Starte Installer: $exe"
-{args_line}
-if (-not $proc.WaitForExit({install_timeout_ms})) {{
-    try {{ $proc.Kill() }} catch {{ }}
-    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-    Remove-Item $extPath -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Output "FEHLER: Installer hat nach {install_timeout_s}s nicht geantwortet — abgebrochen"
-    cmd /c "exit 1"
-}}
-$ec = if ($null -eq $proc.ExitCode) {{ 0 }} else {{ $proc.ExitCode }}
-Write-Output "Prozess beendet mit ExitCode $ec"
-Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-Remove-Item $extPath -Recurse -Force -ErrorAction SilentlyContinue
-if ($ec -ne 0 -and $ec -ne 3010) {{
-    Write-Output "FEHLER: Installer beendete mit ExitCode $ec"
-    cmd /c "exit $ec"
-}}
-Write-Output 'Installation abgeschlossen.'
-"""
+        parts = [
+            "$ErrorActionPreference = 'Continue'\n",
+            pre_check,
+            "$sfBefore = Get-Date\n",
+            f"$zipPath = Join-Path $env:TEMP 'kiosk_install_{nonce}.zip'\n",
+            f"$extPath = Join-Path $env:TEMP 'kiosk_install_{nonce}'\n",
+            "Write-Output 'Download laeuft...'\n",
+            f"Invoke-WebRequest -Uri '{url_quoted}' -OutFile $zipPath -UseBasicParsing\n",
+            "Write-Output 'Download abgeschlossen, entpacke...'\n",
+            "Expand-Archive -LiteralPath $zipPath -DestinationPath $extPath -Force\n",
+            f"$exe = Join-Path $extPath '{ep_quoted}'\n",
+            "if (-not (Test-Path -LiteralPath $exe)) {\n",
+            "    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue\n",
+            "    Remove-Item $extPath -Recurse -Force -ErrorAction SilentlyContinue\n",
+            f'    Write-Output "FEHLER: Entry-Point nicht gefunden im Archiv: {ep_quoted}"\n',
+            '    cmd /c "exit 1"\n',
+            "}\n",
+            "$workDir = Split-Path -LiteralPath $exe -Parent\n",
+            'Write-Output "Starte Installer: $exe"\n',
+            args_line + "\n",
+            f"if (-not $proc.WaitForExit({install_timeout_ms})) {{\n",
+            "    try { $proc.Kill() } catch { }\n",
+            "    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue\n",
+            "    Remove-Item $extPath -Recurse -Force -ErrorAction SilentlyContinue\n",
+            f'    Write-Output "FEHLER: Installer hat nach {install_timeout_s}s nicht geantwortet"\n',
+            '    cmd /c "exit 1"\n',
+            "}\n",
+            "$ec = if ($null -eq $proc.ExitCode) { 0 } else { $proc.ExitCode }\n",
+            'Write-Output "Prozess beendet mit ExitCode $ec"\n',
+            "Remove-Item $zipPath -Force -ErrorAction SilentlyContinue\n",
+            "Remove-Item $extPath -Recurse -Force -ErrorAction SilentlyContinue\n",
+            event_log,
+            "if ($ec -ne 0 -and $ec -ne 3010) {\n",
+            '    Write-Output "FEHLER: Installer beendete mit ExitCode $ec"\n',
+            '    cmd /c "exit $ec"\n',
+            "}\n",
+            post_check,
+        ]
+        return "".join(parts)
 
-    # ── single MSI / EXE (Legacy-Pfad) ──
+    # ── single MSI / EXE ──
     tmp_var = "$tmp"
     tmp_init = f"{tmp_var} = Join-Path $env:TEMP 'kiosk_install_{nonce}.{ext}'"
+    log_var = f"$logFile = Join-Path $env:TEMP 'kiosk_install_{nonce}.log'"
 
     if ext == "msi":
+        # MSI: verbose log via /l*v
         extra = [f"'{_ps_quote(a)}'" for a in install_args.split()]
-        arg_items = ["'/i'", tmp_var] + extra
+        arg_items = ["'/i'", tmp_var] + extra + [f"'/l*v'", "$logFile"]
         args_line = ", ".join(arg_items)
         install_line = (
             f"$proc = Start-Process -FilePath msiexec "
             f"-ArgumentList {args_line} "
             f"-PassThru -WindowStyle Hidden"
         )
+        log_read = """
+# MSI-Log auslesen bei Fehler
+if ($ec -ne 0 -and $ec -ne 3010 -and (Test-Path $logFile)) {
+    Write-Output "--- MSI Install Log (letzte 30 Zeilen) ---"
+    Get-Content $logFile -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "  $_" }
+}
+Remove-Item $logFile -Force -ErrorAction SilentlyContinue"""
     else:
         extra = [f"'{_ps_quote(a)}'" for a in install_args.split()]
         if extra:
@@ -231,92 +328,114 @@ Write-Output 'Installation abgeschlossen.'
                 f"$proc = Start-Process -FilePath {tmp_var} "
                 f"-PassThru -WindowStyle Hidden"
             )
+        log_read = ""
+        log_var = ""
 
-    return f"""$ErrorActionPreference = 'Continue'
-{tmp_init}
-Write-Output 'Download laeuft...'
-Invoke-WebRequest -Uri '{url_quoted}' -OutFile {tmp_var} -UseBasicParsing
-Write-Output 'Download abgeschlossen, starte Installer...'
-{install_line}
-if (-not $proc.WaitForExit({install_timeout_ms})) {{
-    try {{ $proc.Kill() }} catch {{ }}
-    Remove-Item {tmp_var} -Force -ErrorAction SilentlyContinue
-    Write-Output "FEHLER: Installer hat nach {install_timeout_s}s nicht geantwortet — abgebrochen"
-    cmd /c "exit 1"
-}}
-$ec = if ($null -eq $proc.ExitCode) {{ 0 }} else {{ $proc.ExitCode }}
-Write-Output "Prozess beendet mit ExitCode $ec"
-Remove-Item {tmp_var} -Force -ErrorAction SilentlyContinue
-if ($ec -ne 0 -and $ec -ne 3010) {{
-    Write-Output "FEHLER: Installer beendete mit ExitCode $ec"
-    cmd /c "exit $ec"
-}}
-Write-Output 'Installation abgeschlossen.'
-"""
+    parts = [
+        "$ErrorActionPreference = 'Continue'\n",
+        pre_check,
+        "$sfBefore = Get-Date\n",
+        tmp_init + "\n",
+        (log_var + "\n") if log_var else "",
+        "Write-Output 'Download laeuft...'\n",
+        f"Invoke-WebRequest -Uri '{url_quoted}' -OutFile {tmp_var} -UseBasicParsing\n",
+        "Write-Output 'Download abgeschlossen, starte Installer...'\n",
+        install_line + "\n",
+        f"if (-not $proc.WaitForExit({install_timeout_ms})) {{\n",
+        "    try { $proc.Kill() } catch { }\n",
+        f"    Remove-Item {tmp_var} -Force -ErrorAction SilentlyContinue\n",
+        f'    Write-Output "FEHLER: Installer hat nach {install_timeout_s}s nicht geantwortet"\n',
+        '    cmd /c "exit 1"\n',
+        "}\n",
+        "$ec = if ($null -eq $proc.ExitCode) { 0 } else { $proc.ExitCode }\n",
+        'Write-Output "Prozess beendet mit ExitCode $ec"\n',
+        f"Remove-Item {tmp_var} -Force -ErrorAction SilentlyContinue\n",
+        event_log,
+        log_read + "\n" if log_read else "",
+        "if ($ec -ne 0 -and $ec -ne 3010) {\n",
+        '    Write-Output "FEHLER: Installer beendete mit ExitCode $ec"\n',
+        '    cmd /c "exit $ec"\n',
+        "}\n",
+        post_check,
+    ]
+    return "".join(parts)
 
 
 def _build_uninstall_command(
     uninstall_cmd: str, timeout_s: int = 120, detection_name: str = "",
 ) -> str:
-    """PowerShell-Wrapper für ein Uninstall-Command — propagiert ExitCode
-    sauber und akzeptiert reboot-required-Codes (3010) und not-installed (1605).
-    Timeout nach timeout_s Sekunden mit explizitem Kill + Fehlermeldung.
-    Post-Uninstall-Verify: prüft ob Software noch in Registry steht."""
+    """PowerShell-Wrapper fuer Uninstall-Command.
+
+    Smart Uninstall Flow:
+      1. Pre-Check: Registry → ueberhaupt installiert?
+      2. Uninstall mit Timeout
+      3. Event-Log Query (MsiInstaller Events)
+      4. Post-Check: Registry → wirklich weg?
+    """
     safe = uninstall_cmd.replace("'", "''")
     timeout_ms = timeout_s * 1000
-    # Detection-Name für Post-Verify (PS single-quote safe)
     det = (detection_name or "").replace("'", "''")
-    verify_block = """
-            Write-Output 'Deinstallation abgeschlossen.'"""
+
+    # Pre-Check
+    pre_check = ""
     if det:
-        verify_block = f"""
-    # Post-Uninstall-Verify
-    Start-Sleep -Seconds 2
-    $regPaths = @(
-        'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
-        'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
-    )
-    $stillThere = $false
-    foreach ($rp in $regPaths) {{
-        $found = Get-ItemProperty $rp -ErrorAction SilentlyContinue |
-            Where-Object {{ $_.DisplayName -like '*{det}*' }}
-        if ($found) {{ $stillThere = $true; break }}
-    }}
-    if ($stillThere) {{
-        Write-Output "WARNUNG: Software ist nach Uninstall noch in der Registry vorhanden"
-        Write-Output "Moeglicherweise hat der Uninstaller ein /S oder /silent Flag gebraucht, oder ein Dialog wurde nicht bestaetigt."
-        Write-Output "FEHLER: Uninstall fehlgeschlagen — Software noch installiert"
-        cmd /c "exit 1"
-    }} else {{
-        Write-Output "Verify: Software nicht mehr in Registry"
-        Write-Output 'Deinstallation abgeschlossen.'
-    }}"""
-    # WICHTIG: kein `exit` im Script — der Callback-Wrapper muss danach noch laufen!
-    # Stattdessen `cmd /c "exit N"` um $LASTEXITCODE zu setzen ohne PowerShell zu beenden.
-    return f"""$ErrorActionPreference = 'Continue'
-Write-Output 'Starte Uninstall ({timeout_s}s Timeout)'
-try {{
-    $proc = Start-Process -FilePath cmd.exe -ArgumentList '/c','{safe}' -PassThru -WindowStyle Hidden
-    if (-not $proc.WaitForExit({timeout_ms})) {{
-        Write-Output "TIMEOUT nach {timeout_s}s — Prozess wird beendet"
-        try {{ $proc.Kill() }} catch {{ }}
-        Write-Output "FEHLER: Uninstaller hat nach {timeout_s}s nicht geantwortet — abgebrochen. Moeglicherweise wartet der Installer auf Benutzereingabe oder ein Uninstall-Passwort."
-        cmd /c "exit 1"
-    }} else {{
-        $ec = if ($null -eq $proc.ExitCode) {{ 0 }} else {{ $proc.ExitCode }}
-        Write-Output "Prozess beendet mit ExitCode $ec"
-        if ($ec -ne 0 -and $ec -ne 3010 -and $ec -ne 1605) {{
-            Write-Output "FEHLER: Uninstaller beendete mit ExitCode $ec"
-            cmd /c "exit $ec"
-        }} else {{{verify_block}
-        }}
-    }}
-}} catch {{
-    Write-Output "Exception: $($_.Exception.Message)"
-    Write-Output "FEHLER: $($_.Exception.Message)"
-    cmd /c "exit 1"
-}}
-"""
+        pre_check = (
+            _ps_registry_check(det)
+            + 'if (-not $sfInstalled) {\n'
+            + '    Write-Output "Pre-Check: Software nicht in Registry gefunden — moeglicherweise bereits deinstalliert"\n'
+            + '}\n'
+        )
+
+    # Post-Check
+    if det:
+        post_check = (
+            "# Post-Uninstall-Verify\n"
+            "Start-Sleep -Seconds 2\n"
+            + _ps_registry_check(det)
+            + "if ($sfInstalled) {\n"
+            + '    Write-Output "WARNUNG: Software ist nach Uninstall noch in der Registry vorhanden"\n'
+            + '    Write-Output "Moeglicherweise hat der Uninstaller ein /S oder /silent Flag gebraucht, oder ein Dialog wurde nicht bestaetigt."\n'
+            + '    Write-Output "FEHLER: Uninstall fehlgeschlagen — Software noch installiert"\n'
+            + '    cmd /c "exit 1"\n'
+            + "} else {\n"
+            + '    Write-Output "Verify: Software nicht mehr in Registry"\n'
+            + "    Write-Output 'Deinstallation abgeschlossen.'\n"
+            + "}\n"
+        )
+    else:
+        post_check = "Write-Output 'Deinstallation abgeschlossen.'\n"
+
+    event_log = _ps_event_log_query()
+
+    # WICHTIG: kein `exit` — Callback-Wrapper muss danach noch laufen.
+    parts = [
+        "$ErrorActionPreference = 'Continue'\n",
+        pre_check,
+        "$sfBefore = Get-Date\n",
+        f"Write-Output 'Starte Uninstall ({timeout_s}s Timeout)'\n",
+        "try {\n",
+        f"    $proc = Start-Process -FilePath cmd.exe -ArgumentList '/c','{safe}' -PassThru -WindowStyle Hidden\n",
+        f"    if (-not $proc.WaitForExit({timeout_ms})) {{\n",
+        "        Write-Output \"TIMEOUT nach " + str(timeout_s) + "s — Prozess wird beendet\"\n",
+        "        try { $proc.Kill() } catch { }\n",
+        "        Write-Output \"FEHLER: Uninstaller hat nach " + str(timeout_s) + "s nicht geantwortet\"\n",
+        '        cmd /c "exit 1"\n',
+        "    } else {\n",
+        "        $ec = if ($null -eq $proc.ExitCode) { 0 } else { $proc.ExitCode }\n",
+        '        Write-Output "Prozess beendet mit ExitCode $ec"\n',
+        "        if ($ec -ne 0 -and $ec -ne 3010 -and $ec -ne 1605) {\n",
+        '            Write-Output "FEHLER: Uninstaller beendete mit ExitCode $ec"\n',
+        '            cmd /c "exit $ec"\n',
+        "        }\n",
+        "    }\n",
+        "} catch {\n",
+        '    Write-Output "FEHLER: $($_.Exception.Message)"\n',
+        '    cmd /c "exit 1"\n',
+        "}\n",
+        event_log,
+        post_check,
+    ]
+    return "".join(parts)
 
 
 # ── Winget Dispatch ───────────────────────────────────────────────────────────
