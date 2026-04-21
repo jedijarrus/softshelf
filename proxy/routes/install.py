@@ -143,53 +143,25 @@ def _ps_arg_array(args_str: str) -> str:
 
 
 def _ps_registry_check(detection_name: str) -> str:
-    """PS-Snippet: prueft ob Software mit detection_name in der Registry steht.
-    Setzt $sfInstalled (bool) und $sfInstalledVersion (string|null).
-    KEIN f-string — pure string concat, safe fuer beliebige Einbettung."""
+    """PS-Snippet (kompakt): setzt $sfInstalled und $sfInstalledVersion."""
     det = _ps_quote(detection_name)
     return (
-        "$regPaths = @(\n"
-        "    'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',\n"
-        "    'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'\n"
-        ")\n"
-        "$sfInstalled = $false\n"
-        "$sfInstalledVersion = $null\n"
-        "foreach ($rp in $regPaths) {\n"
-        "    $found = Get-ItemProperty $rp -ErrorAction SilentlyContinue |\n"
-        "        Where-Object { $_.DisplayName -like '*" + det + "*' }\n"
-        "    if ($found) {\n"
-        "        $sfInstalled = $true\n"
-        "        $sfInstalledVersion = $found[0].DisplayVersion\n"
-        "        break\n"
-        "    }\n"
+        "$sfInstalled=$false;$sfInstalledVersion=$null\n"
+        "foreach($rp in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*')){\n"
+        "  $f=Get-ItemProperty $rp -EA SilentlyContinue|?{$_.DisplayName -like '*" + det + "*'}\n"
+        "  if($f){$sfInstalled=$true;$sfInstalledVersion=$f[0].DisplayVersion;break}\n"
         "}\n"
     )
 
 
 def _ps_event_log_query() -> str:
-    """PS-Snippet: liest MsiInstaller Events seit $sfBefore.
-    KEIN f-string — pure string concat."""
+    """PS-Snippet (kompakt): MsiInstaller Events seit $sfBefore."""
     return (
-        "$sfEvents = @()\n"
-        "try {\n"
-        "    $sfEvents = Get-WinEvent -FilterHashtable @{\n"
-        "        ProviderName='MsiInstaller'\n"
-        "        StartTime=$sfBefore\n"
-        "    } -MaxEvents 30 -ErrorAction SilentlyContinue |\n"
-        "        Select-Object TimeCreated, Id, Message\n"
-        "} catch { }\n"
-        "if ($sfEvents.Count -gt 0) {\n"
-        '    Write-Output "--- MSI Event Log ---"\n'
-        "    foreach ($ev in $sfEvents) {\n"
-        "        $msg = ($ev.Message -split \"`n\")[0].Trim()\n"
-        "        if ($msg.Length -gt 200) { $msg = $msg.Substring(0, 200) + '...' }\n"
-        '        Write-Output ("  [{0}] Event {1}: {2}" -f $ev.TimeCreated.ToString(\'HH:mm:ss\'), $ev.Id, $msg)\n'
-        "    }\n"
-        "    $failEvents = $sfEvents | Where-Object { $_.Id -eq 11708 -or $_.Id -eq 1023 -or $_.Id -eq 1024 }\n"
-        "    if ($failEvents) {\n"
-        '        Write-Output "FEHLER: MSI meldet fehlgeschlagene Installation (Event 11708/1023/1024)"\n'
-        '        cmd /c "exit 1"\n'
-        "    }\n"
+        "try{$sfEv=Get-WinEvent -FilterHashtable @{ProviderName='MsiInstaller';StartTime=$sfBefore} -MaxEvents 15 -EA SilentlyContinue}catch{$sfEv=@()}\n"
+        "if($sfEv.Count -gt 0){\n"
+        '  Write-Output "--- MSI Events ---"\n'
+        "  $sfEv|%{Write-Output(\"  [{0}] {1}: {2}\"-f $_.TimeCreated.ToString('HH:mm:ss'),$_.Id,($_.Message-split\"`n\")[0].Substring(0,[Math]::Min(($_.Message-split\"`n\")[0].Length,150)))}\n"
+        "  if($sfEv|?{$_.Id-eq 11708-or$_.Id-eq 1023}){Write-Output 'FEHLER: MSI meldet fehlgeschlagene Installation';cmd /c \"exit 1\"}\n"
         "}\n"
     )
 
@@ -225,32 +197,9 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
     install_timeout_s = 120
     install_timeout_ms = install_timeout_s * 1000
 
-    # Pre-Check Block (only if detection_name available)
     pre_check = ""
-    if detection_name:
-        pre_check = _ps_registry_check(detection_name) + """
-if ($sfInstalled) {
-    Write-Output "Pre-Check: Software bereits installiert (Version: $sfInstalledVersion)"
-}
-"""
-
-    # Post-Check Block
     post_check = ""
-    if detection_name:
-        post_check = """
-# Post-Install-Verify
-Start-Sleep -Seconds 2
-""" + _ps_registry_check(detection_name) + """
-if ($sfInstalled) {
-    Write-Output "Post-Verify: Software in Registry gefunden (Version: $sfInstalledVersion)"
-    Write-Output 'Installation erfolgreich verifiziert.'
-} else {
-    Write-Output "WARNUNG: Software nach Install nicht in Registry gefunden"
-    Write-Output "Moeglicherweise verwendet der Installer einen anderen Anzeigenamen oder benoetigt einen Neustart."
-}"""
-
-    # Event-Log Query
-    event_log = _ps_event_log_query()
+    event_log = ""
 
     if archive_type == "archive":
         entry_point = (pkg.get("entry_point") or "").strip()
@@ -393,36 +342,18 @@ def _build_uninstall_command(
     timeout_ms = timeout_s * 1000
     det = (detection_name or "").replace("'", "''")
 
-    # Pre-Check
     pre_check = ""
-    if det:
-        pre_check = (
-            _ps_registry_check(det)
-            + 'if (-not $sfInstalled) {\n'
-            + '    Write-Output "Pre-Check: Software nicht in Registry gefunden — moeglicherweise bereits deinstalliert"\n'
-            + '}\n'
-        )
+    event_log = ""
 
-    # Post-Check
     if det:
         post_check = (
-            "# Post-Uninstall-Verify\n"
             "Start-Sleep -Seconds 2\n"
             + _ps_registry_check(det)
-            + "if ($sfInstalled) {\n"
-            + '    Write-Output "WARNUNG: Software ist nach Uninstall noch in der Registry vorhanden"\n'
-            + '    Write-Output "Moeglicherweise hat der Uninstaller ein /S oder /silent Flag gebraucht, oder ein Dialog wurde nicht bestaetigt."\n'
-            + '    Write-Output "FEHLER: Uninstall fehlgeschlagen — Software noch installiert"\n'
-            + '    cmd /c "exit 1"\n'
-            + "} else {\n"
-            + '    Write-Output "Verify: Software nicht mehr in Registry"\n'
-            + "    Write-Output 'Deinstallation abgeschlossen.'\n"
-            + "}\n"
+            + "if($sfInstalled){Write-Output 'FEHLER: Software noch installiert';cmd /c \"exit 1\"}\n"
+            + "else{Write-Output 'Deinstallation abgeschlossen.'}\n"
         )
     else:
         post_check = "Write-Output 'Deinstallation abgeschlossen.'\n"
-
-    event_log = _ps_event_log_query()
 
     # WICHTIG: kein `exit` — Callback-Wrapper muss danach noch laufen.
     parts = [
