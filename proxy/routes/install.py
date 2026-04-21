@@ -65,10 +65,10 @@ async def _run_custom_command_bg(
         except Exception:
             pass
 
-    # Kurzer Timeout: nur pruefen ob NATS Delivery klappt.
-    # Bei Timeout: Command laeuft trotzdem, Callback kommt spaeter.
+    # Delivery-Timeout: genug fuer langsame Agents (NATS braucht manchmal 10-15s).
+    # Bei ReadTimeout: Command laeuft trotzdem, Callback kommt spaeter.
     try:
-        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=30)
+        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=60)
         if raw_output and raw_output.startswith('"'):
             try:
                 import json as _json
