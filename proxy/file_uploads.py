@@ -16,6 +16,7 @@ import hashlib
 import os
 import re
 import secrets
+import shutil
 import zipfile
 
 from fastapi import UploadFile, HTTPException
@@ -107,25 +108,40 @@ async def save_upload(file: UploadFile, max_size_bytes: int) -> tuple[str, int, 
 
 
 def find_file_path(sha256: str) -> str | None:
-    """Sucht die gespeicherte Datei für einen gegebenen Hash (egal welche Extension)."""
+    """Sucht die gespeicherte Datei fuer einen gegebenen Hash (egal welche Extension).
+    Wenn nur Ordner existiert (ZIP noch nicht fertig), zippt on-demand."""
     if not os.path.isdir(UPLOAD_DIR):
         return None
     for fn in os.listdir(UPLOAD_DIR):
         if fn.startswith(sha256 + "."):
             return os.path.join(UPLOAD_DIR, fn)
+    # Fallback: Ordner existiert, ZIP noch nicht fertig → on-demand zippen
+    folder = os.path.join(UPLOAD_DIR, sha256)
+    if os.path.isdir(folder):
+        zip_folder_background(sha256)
+        zip_path = os.path.join(UPLOAD_DIR, f"{sha256}.zip")
+        if os.path.isfile(zip_path):
+            return zip_path
     return None
 
 
 def delete_file(sha256: str) -> bool:
-    """Löscht die Datei mit diesem Hash. Gibt True zurück wenn erfolgreich."""
+    """Loescht Datei UND Ordner mit diesem Hash. Gibt True zurueck wenn erfolgreich."""
+    deleted = False
+    # ZIP/MSI/EXE loeschen
     path = find_file_path(sha256)
     if path:
         try:
             os.unlink(path)
-            return True
+            deleted = True
         except OSError:
             pass
-    return False
+    # Ordner loeschen (falls folder-upload)
+    folder = os.path.join(UPLOAD_DIR, sha256)
+    if os.path.isdir(folder):
+        shutil.rmtree(folder, ignore_errors=True)
+        deleted = True
+    return deleted
 
 
 async def parse_msi_metadata(path: str) -> dict:
@@ -212,113 +228,131 @@ async def save_folder_upload(
     max_size_bytes: int,
 ) -> tuple[str, int, str, list[str]]:
     """
-    Streamt eine Liste von UploadFiles in einen temporären ZIP, hash't diesen,
-    schiebt nach UPLOAD_DIR/<sha>.zip. Gibt (final_path, total_size, sha256,
-    entries) zurück. `entries` enthält die installer-fähigen Dateien
-    (.exe/.msi/.bat/.cmd) relativ zum ZIP-Root, sortiert.
+    Speichert eine Liste von UploadFiles als Ordner (nicht ZIP).
+    SHA256 ueber alle File-Inhalte (sortiert nach Pfad, deterministisch).
+    Gibt (folder_path, total_size, sha256, entries) zurueck.
 
-    Erwartet: jedes UploadFile.filename enthält den Relativpfad innerhalb des
-    Ordners (z.B. 'MyApp/setup.exe'). Frontend setzt das via
-    `fd.append('files', f, f.webkitRelativePath)`.
+    ZIP wird NICHT hier erstellt — der Caller spawnt zip_folder_background()
+    als async Task damit der Upload sofort responded.
     """
     _ensure_upload_dir()
-
     if not files:
-        raise HTTPException(status_code=400, detail="Keine Dateien übergeben")
+        raise HTTPException(status_code=400, detail="Keine Dateien uebergeben")
 
-    tmp_path = os.path.join(UPLOAD_DIR, f"_tmp_{secrets.token_hex(8)}.zip")
+    nonce = secrets.token_hex(8)
+    tmp_dir = os.path.join(UPLOAD_DIR, f"_tmp_{nonce}")
+    os.makedirs(tmp_dir, exist_ok=True)
     total_size = 0
     entries: list[str] = []
     seen_paths: set[str] = set()
+    written_files: list[tuple[str, str]] = []  # (rel_path, abs_path)
 
     try:
-        with zipfile.ZipFile(
-            tmp_path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True
-        ) as zf:
-            for f in files:
-                raw = (f.filename or "").replace("\\", "/")
-                if not raw or raw.endswith("/"):
-                    continue
-                # Path-Traversal-Schutz: keine absoluten Pfade,
-                # keine .., keine empty segments, keine Drive-Letter
-                rel_raw = raw.lstrip("/")
-                if rel_raw != raw:
-                    raise HTTPException(
-                        status_code=400, detail=f"Absolute Pfade nicht erlaubt: {raw}"
-                    )
-                parts = rel_raw.split("/")
-                if any(p in ("..", "") for p in parts):
-                    raise HTTPException(
-                        status_code=400, detail=f"Ungültiger Pfad: {rel_raw}"
-                    )
-                if any(":" in p for p in parts):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Ungültiger Pfad (Drive-Letter): {rel_raw}",
-                    )
-                rel_path = "/".join(parts)
-                if rel_path in seen_paths:
-                    continue
-                seen_paths.add(rel_path)
+        for f in files:
+            raw = (f.filename or "").replace("\\", "/")
+            if not raw or raw.endswith("/"):
+                continue
+            rel_raw = raw.lstrip("/")
+            if rel_raw != raw:
+                raise HTTPException(
+                    status_code=400, detail=f"Absolute Pfade nicht erlaubt: {raw}"
+                )
+            parts = rel_raw.split("/")
+            if any(p in ("..", "") for p in parts):
+                raise HTTPException(
+                    status_code=400, detail=f"Ungueltiger Pfad: {rel_raw}"
+                )
+            if any(":" in p for p in parts):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Ungueltiger Pfad (Drive-Letter): {rel_raw}",
+                )
+            rel_path = "/".join(parts)
+            if rel_path in seen_paths:
+                continue
+            seen_paths.add(rel_path)
 
-                # Streaming write in den ZIP, chunkweise
-                with zf.open(rel_path, "w", force_zip64=True) as dest:
-                    while True:
-                        chunk = await f.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        total_size += len(chunk)
-                        if total_size > max_size_bytes:
-                            raise HTTPException(
-                                status_code=413,
-                                detail=(
-                                    f"Ordner zu groß "
-                                    f"(max {max_size_bytes // 1024 // 1024} MB)"
-                                ),
-                            )
-                        dest.write(chunk)
+            abs_path = os.path.join(tmp_dir, *parts)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
 
-                ext = os.path.splitext(rel_path)[1].lower()
-                if ext in ARCHIVE_ENTRY_EXTENSIONS:
-                    entries.append(rel_path)
+            with open(abs_path, "wb") as dest:
+                while True:
+                    chunk = await f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total_size += len(chunk)
+                    if total_size > max_size_bytes:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Ordner zu gross (max {max_size_bytes // 1024 // 1024} MB)",
+                        )
+                    dest.write(chunk)
+
+            written_files.append((rel_path, abs_path))
+            ext = os.path.splitext(rel_path)[1].lower()
+            if ext in ARCHIVE_ENTRY_EXTENSIONS:
+                entries.append(rel_path)
+
     except HTTPException:
-        try:
-            os.unlink(tmp_path)
-        except FileNotFoundError:
-            pass
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
     except Exception:
-        try:
-            os.unlink(tmp_path)
-        except FileNotFoundError:
-            pass
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
 
     if not entries:
-        try:
-            os.unlink(tmp_path)
-        except FileNotFoundError:
-            pass
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         raise HTTPException(
             status_code=400,
-            detail="Im Ordner wurde keine .exe/.msi/.bat/.cmd gefunden — kein Entry-Point möglich.",
+            detail="Im Ordner wurde keine .exe/.msi/.bat/.cmd gefunden.",
         )
 
-    # SHA-256 vom finalen ZIP berechnen (sequenziell, schnell)
+    # SHA256 ueber sortierte File-Inhalte (deterministisch)
     h = hashlib.sha256()
-    with open(tmp_path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            h.update(chunk)
+    for rel_path, abs_path in sorted(written_files, key=lambda x: x[0]):
+        h.update(rel_path.encode("utf-8"))
+        with open(abs_path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
     sha256 = h.hexdigest()
 
-    final_path = os.path.join(UPLOAD_DIR, f"{sha256}.zip")
-    if os.path.exists(final_path):
-        os.unlink(tmp_path)  # Dedup-Hit
+    final_dir = os.path.join(UPLOAD_DIR, sha256)
+    if os.path.isdir(final_dir):
+        shutil.rmtree(tmp_dir, ignore_errors=True)  # Dedup-Hit
     else:
-        os.rename(tmp_path, final_path)
+        os.rename(tmp_dir, final_dir)
 
     entries.sort()
-    return final_path, total_size, sha256, entries
+    return final_dir, total_size, sha256, entries
+
+
+def zip_folder_background(sha256: str) -> None:
+    """Erstellt ZIP aus einem Upload-Ordner (synchron, fuer Background-Task).
+    Idempotent: ueberspringt wenn ZIP schon existiert."""
+    folder = os.path.join(UPLOAD_DIR, sha256)
+    zip_path = os.path.join(UPLOAD_DIR, f"{sha256}.zip")
+    if os.path.isfile(zip_path):
+        return
+    if not os.path.isdir(folder):
+        return
+
+    tmp_zip = os.path.join(UPLOAD_DIR, f"_tmp_{sha256}.zip")
+    try:
+        with zipfile.ZipFile(
+            tmp_zip, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True
+        ) as zf:
+            for root, _dirs, filenames in os.walk(folder):
+                for fname in filenames:
+                    abs_path = os.path.join(root, fname)
+                    rel_path = os.path.relpath(abs_path, folder).replace("\\", "/")
+                    zf.write(abs_path, rel_path)
+        os.rename(tmp_zip, zip_path)
+    except Exception:
+        try:
+            os.unlink(tmp_zip)
+        except OSError:
+            pass
+        raise
 
 
 def extract_archive_entries(zip_path: str) -> list[str]:
