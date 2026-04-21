@@ -242,7 +242,7 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
             f"$zipPath = Join-Path $env:TEMP 'kiosk_install_{nonce}.zip'\n",
             f"$extPath = Join-Path $env:TEMP 'kiosk_install_{nonce}'\n",
             "_sfProgress 'Download laeuft...'\n",
-            f"Invoke-WebRequest -Uri '{url_quoted}' -OutFile $zipPath -UseBasicParsing\n",
+            f"(New-Object System.Net.WebClient).DownloadFile('{url_quoted}', $zipPath)\n",
             "_sfProgress 'Download abgeschlossen, entpacke...'\n",
             "Expand-Archive -LiteralPath $zipPath -DestinationPath $extPath -Force\n",
             f"$exe = Join-Path $extPath '{ep_quoted}'\n",
@@ -321,7 +321,7 @@ Remove-Item $logFile -Force -ErrorAction SilentlyContinue"""
         tmp_init + "\n",
         (log_var + "\n") if log_var else "",
         "_sfProgress 'Download laeuft...'\n",
-        f"Invoke-WebRequest -Uri '{url_quoted}' -OutFile {tmp_var} -UseBasicParsing\n",
+        f"(New-Object System.Net.WebClient).DownloadFile('{url_quoted}', {tmp_var})\n",
         f"_sfProgress \"Download abgeschlossen ($([math]::Round((Get-Item {tmp_var}).Length/1MB,1)) MB)\"\n",
         install_line + "\n",
         "_sfProgress 'Installer gestartet...'\n",
@@ -1677,7 +1677,7 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
     bootstrap = (
         f"powershell -ExecutionPolicy Bypass -Command \""
         f"$f=Join-Path $env:TEMP 'sf_{nonce}.ps1';"
-        f"Invoke-WebRequest -Uri '{script_url_safe}' -OutFile $f -UseBasicParsing;"
+        f"(New-Object System.Net.WebClient).DownloadFile('{script_url_safe}', $f);"
         f"& $f;"
         f"Remove-Item $f -Force\""
     )
