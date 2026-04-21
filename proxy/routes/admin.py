@@ -4252,9 +4252,9 @@ async def upload_custom_folder(
     )
 
     # Background-ZIP erstellen (Agent laedt spaeter {sha256}.zip)
-    _spawn_bg(asyncio.get_event_loop().run_in_executor(
+    asyncio.get_event_loop().run_in_executor(
         None, file_uploads.zip_folder_background, sha256
-    ))
+    )
 
     # Entry-Point validieren / ermitteln
     eff_entry = _validate_entry_point(entry_point or "")
