@@ -3182,6 +3182,16 @@ async def get_action_log_detail(log_id: int) -> dict | None:
             return dict(row) if row else None
 
 
+async def update_action_log_output(log_id: int, stdout: str):
+    """Inkrementelles stdout-Update ohne Statusaenderung (fuer Progress-Callbacks)."""
+    async with _db() as db:
+        await db.execute(
+            "UPDATE action_log SET stdout = ? WHERE id = ? AND status IN ('pending', 'running')",
+            (stdout, log_id),
+        )
+        await db.commit()
+
+
 async def get_action_log_by_job_id(job_id: str) -> dict | None:
     async with _db() as db:
         db.row_factory = aiosqlite.Row
