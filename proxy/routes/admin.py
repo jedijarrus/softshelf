@@ -1348,7 +1348,7 @@ async def push_update(name: str, stage: str = "all"):
     Geht durch den shared dispatch_install_for_agent/upgrade-Helper, damit
     scope, version-pin und soft-error-detection konsistent bleiben.
     """
-    from routes.install import dispatch_upgrade_for_agent, _build_install_command, _run_custom_command_bg, _build_callback_wrapper, _generate_job_id
+    from routes.install import dispatch_upgrade_for_agent, _build_install_command, _run_custom_command_bg, _build_script_and_bootstrap, _generate_job_id
 
     # Namens-Check ist fuer winget looser als fuer choco/custom
     pkg = await database.get_package(name)
@@ -1384,7 +1384,7 @@ async def push_update(name: str, stage: str = "all"):
             try:
                 inner_cmd = await _build_install_command(pkg, ag["agent_id"])
                 job_id = _generate_job_id()
-                cmd = await _build_callback_wrapper(inner_cmd, job_id)
+                cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
                 log_id = await database.create_action_log(
                     ag["agent_id"], ag["hostname"], name,
                     pkg["display_name"], "custom", "install", job_id=job_id,
@@ -4247,9 +4247,14 @@ async def upload_custom_folder(
                 status_code=400, detail="Nur custom-Pakete unterstützen Versionen"
             )
 
-    final_path, total_size, sha256, entries = await file_uploads.save_folder_upload(
+    folder_path, total_size, sha256, entries = await file_uploads.save_folder_upload(
         files, max_bytes
     )
+
+    # Background-ZIP erstellen (Agent laedt spaeter {sha256}.zip)
+    _spawn_bg(asyncio.get_event_loop().run_in_executor(
+        None, file_uploads.zip_folder_background, sha256
+    ))
 
     # Entry-Point validieren / ermitteln
     eff_entry = _validate_entry_point(entry_point or "")
@@ -4266,11 +4271,19 @@ async def upload_custom_folder(
                 detail="Konnte keinen Entry-Point ermitteln — bitte manuell angeben",
             )
 
+    # Installer-Metadata direkt vom Entry-Point File (kein 7z auf ZIP noetig)
+    entry_abs = os.path.join(folder_path, eff_entry.replace("/", os.sep))
+    meta = {}
+    if os.path.isfile(entry_abs):
+        meta = await file_uploads.parse_exe_metadata(entry_abs)
+
     # Defaults für Args
     eff_args = _validate_install_args(install_args)
     if not eff_args and not is_new_package:
         eff_args = (existing_pkg.get("install_args") or "").strip()
-    # Kein universeller Default für Archive — der Entry-Point bestimmt die Args.
+    # Falls Metadata Install-Args liefert (z.B. NSIS /S), als Default nehmen
+    if not eff_args and meta.get("install_args"):
+        eff_args = meta["install_args"]
 
     # Uninstall-Cmd
     eff_uninstall = _validate_uninstall_cmd(uninstall_cmd)
@@ -4278,8 +4291,16 @@ async def upload_custom_folder(
         eff_uninstall = (existing_pkg.get("uninstall_cmd") or "").strip()
 
     eff_detection = detection_name.strip()
+    # Detection-Name aus Metadata prefillen wenn nicht gesetzt
+    if not eff_detection and meta.get("ProductName"):
+        company = meta.get("CompanyName") or ""
+        product = meta["ProductName"]
+        if company and company.lower() not in product.lower():
+            eff_detection = f"{company} {product}"
+        else:
+            eff_detection = product
 
-    archive_filename = os.path.basename(final_path)  # <sha>.zip
+    archive_filename = f"{sha256}.zip"  # ZIP wird im Background erstellt
     entries_json = _json.dumps(entries)
 
     # ── Modus 1: Neues Paket ──
@@ -5001,7 +5022,7 @@ async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentR
     benutzt um unerwünschte Software via `winget uninstall --id <ID>` direkt
     aufzuräumen.
     """
-    from routes.install import _build_winget_command, _run_winget_command_bg, _build_callback_wrapper, _generate_job_id
+    from routes.install import _build_winget_command, _run_winget_command_bg, _build_script_and_bootstrap, _generate_job_id
 
     if not _AGENT_ID_RE.fullmatch(agent_id):
         raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
@@ -5010,7 +5031,7 @@ async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentR
     wid = body.winget_id
     inner_cmd = _build_winget_command("uninstall", wid)
     job_id = _generate_job_id()
-    cmd = await _build_callback_wrapper(inner_cmd, job_id)
+    cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
     pkg = await database.get_package(wid)
     display_name = pkg["display_name"] if pkg else wid
     log_id = await database.create_action_log(
