@@ -127,10 +127,10 @@ async def _action_log_cleanup_job():
         async with database._db() as db:
             res = await db.execute(
                 "UPDATE action_log SET status = 'error', "
-                "error_summary = 'Keine Rueckmeldung vom Agent (Timeout nach 4h)', "
+                "error_summary = 'Keine Rueckmeldung vom Agent (Timeout nach 30min)', "
                 "completed_at = datetime('now') "
                 "WHERE status IN ('pending', 'running') "
-                "AND created_at < datetime('now', '-4 hours')"
+                "AND created_at < datetime('now', '-30 minutes')"
             )
             if res.rowcount:
                 logger.info("action_log stuck cleanup: %d Eintraege als error markiert", res.rowcount)
