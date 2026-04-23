@@ -87,7 +87,7 @@ async def _run_custom_command_bg(
     # Delivery-Timeout: genug fuer langsame Agents (NATS braucht manchmal 10-15s).
     # Bei ReadTimeout: Command laeuft trotzdem, Callback kommt spaeter.
     try:
-        raw_output = await TacticalClient().run_command(agent_id, cmd, shell="cmd", timeout=60)
+        raw_output = await TacticalClient().run_command(agent_id, cmd, shell="powershell", timeout=60)
         if raw_output and raw_output.startswith('"'):
             try:
                 import json as _json
@@ -1748,13 +1748,16 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
     nonce = _secrets.token_hex(4)
     script_url_safe = _ps_quote(script_url)
     bootstrap = (
-        f"powershell -ExecutionPolicy Bypass -Command \""
-        f"$f=Join-Path $env:TEMP 'sf_{nonce}.ps1';"
-        f"try{{$wc=New-Object Net.WebClient;"
-        f"$wc.Proxy=[Net.GlobalProxySelection]::GetEmptyWebProxy();"
-        f"$wc.DownloadFile('{script_url_safe}',$f)}}"
-        f"catch{{Start-BitsTransfer -Source '{script_url_safe}' -Destination $f -Priority Foreground}};"
-        f"& $f;"
-        f"Remove-Item $f -Force\""
+        f"Set-ExecutionPolicy Bypass -Scope Process -Force\n"
+        f"$f = Join-Path $env:TEMP 'sf_{nonce}.ps1'\n"
+        f"try {{\n"
+        f"    $wc = New-Object Net.WebClient\n"
+        f"    $wc.Proxy = [Net.GlobalProxySelection]::GetEmptyWebProxy()\n"
+        f"    $wc.DownloadFile('{script_url_safe}', $f)\n"
+        f"}} catch {{\n"
+        f"    Start-BitsTransfer -Source '{script_url_safe}' -Destination $f -Priority Foreground\n"
+        f"}}\n"
+        f"& $f\n"
+        f"Remove-Item $f -Force -ErrorAction SilentlyContinue\n"
     )
     return bootstrap
