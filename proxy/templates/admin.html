@@ -7293,11 +7293,9 @@ function renderPackages() {
            <option value="user" ${pkg.winget_scope==='user'?'selected':''}>user</option>
          </select>`
       : '<span class="dist-outdated-zero">—</span>';
-    const editBtn = isCustom
-      ? `<button class="icon-btn" title="Bearbeiten" onclick="openEditPanel(${jsStr(pkg.name)})">
+    const editBtn = `<button class="icon-btn" title="Bearbeiten" onclick="openEditPanel(${jsStr(pkg.name)})">
            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
-         </button>`
-      : '';
+         </button>`;
     const isRequired = !!pkg.required;
     const isStaged   = !!pkg.staged_rollout;
     const isHidden   = !!pkg.hidden_in_kiosk;
@@ -8962,8 +8960,10 @@ function openEditPanel(name) {
   if (!pkg) return;
   _editingName = name;
   const isArchive = pkg.archive_type === 'archive';
+  const isCustom = (pkg.type || 'choco') === 'custom';
+  const ptype = pkg.type || 'choco';
   document.getElementById('edit-panel-sub').textContent =
-    isArchive ? `Programm-Ordner · Entry: ${pkg.entry_point || '—'}` : (pkg.filename || name);
+    isArchive ? `Programm-Ordner · Entry: ${pkg.entry_point || '\u2014'}` : (ptype !== 'custom' ? ptype : (pkg.filename || name));
   document.querySelector('[data-edit="display_name"]').value   = pkg.display_name || '';
   document.querySelector('[data-edit="category"]').value       = pkg.category || 'Custom';
   document.querySelector('[data-edit="install_args"]').value   = pkg.install_args || '';
@@ -8971,6 +8971,10 @@ function openEditPanel(name) {
   document.querySelector('[data-edit="uninstall_cmd"]').value  = pkg.uninstall_cmd || '';
   document.querySelector('[data-edit="install_timeout"]').value = pkg.install_timeout || 120;
   document.querySelector('[data-edit="check_reboot"]').checked = !!pkg.check_reboot;
+  // Custom-only Felder ausblenden fuer Choco/Winget
+  document.querySelector('[data-edit="install_args"]').closest('.field').style.display = isCustom ? '' : 'none';
+  document.querySelector('[data-edit="detection_name"]').closest('.field').style.display = isCustom ? '' : 'none';
+  document.querySelector('[data-edit="uninstall_cmd"]').closest('.field').style.display = isCustom ? '' : 'none';
   // Entry-Point-Dropdown + Inhalt-verwalten nur bei Archive-Paketen
   document.getElementById('edit-entry-field').style.display = isArchive ? '' : 'none';
   document.getElementById('edit-contents-field').style.display = isArchive ? '' : 'none';
@@ -9535,7 +9539,20 @@ async function saveEdit() {
   btn.disabled = true;
   btn.textContent = 'Speichere…';
   try {
-    await api('PATCH', `/admin/api/custom/${encodeURIComponent(_editingName)}`, body);
+    const pkg = store[_editingName];
+    const isCustom = pkg && (pkg.type || 'choco') === 'custom';
+    if (isCustom) {
+      await api('PATCH', `/admin/api/custom/${encodeURIComponent(_editingName)}`, body);
+    } else {
+      // Choco/Winget: PATCH enable endpoint mit name + display_name + category + timeout + reboot
+      await api('PATCH', `/admin/api/enable/${encodeURIComponent(_editingName)}`, {
+        name: _editingName,
+        display_name: body.display_name,
+        category: body.category,
+        install_timeout: parseInt(body.install_timeout) || 120,
+        check_reboot: body.check_reboot || 0,
+      });
+    }
     toast('Änderungen gespeichert');
     closeAll();
     _editingName = null;
