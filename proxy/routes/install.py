@@ -213,7 +213,7 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
     url_quoted = _ps_quote(url)
 
     nonce = _secrets.token_hex(4)
-    install_timeout_s = 120
+    install_timeout_s = pkg.get("install_timeout") or 120
     install_timeout_ms = install_timeout_s * 1000
 
     # Pre-Check: schon installiert?
@@ -1357,7 +1357,9 @@ async def uninstall_package(
                 detail="Für dieses Paket wurde kein Uninstall-Command hinterlegt.",
             )
         inner_cmd = _build_uninstall_command(
-            uninstall_cmd, detection_name=pkg.get("detection_name") or pkg.get("display_name") or "",
+            uninstall_cmd,
+            timeout_s=pkg.get("install_timeout") or 120,
+            detection_name=pkg.get("detection_name") or pkg.get("display_name") or "",
         )
         job_id = _generate_job_id()
         ps_cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -1530,7 +1532,9 @@ async def dispatch_uninstall_for_agent(
                 detail=f"Paket {package_name!r} hat keinen Uninstall-Command hinterlegt",
             )
         inner_cmd = _build_uninstall_command(
-            uninstall_cmd, detection_name=pkg.get("detection_name") or pkg.get("display_name") or "",
+            uninstall_cmd,
+            timeout_s=pkg.get("install_timeout") or 120,
+            detection_name=pkg.get("detection_name") or pkg.get("display_name") or "",
         )
         job_id = _generate_job_id()
         ps_cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
