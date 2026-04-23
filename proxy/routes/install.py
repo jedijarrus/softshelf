@@ -163,7 +163,8 @@ def _ps_arg_array(args_str: str) -> str:
 
 def _ps_registry_check(detection_name: str) -> str:
     """PS-Snippet (kompakt): setzt $sfInstalled und $sfInstalledVersion."""
-    det = _ps_quote(detection_name)
+    # PS -like Wildcards escapen: [ ] ? sind Meta-Chars
+    det = _ps_quote(detection_name).replace("[", "``[").replace("]", "``]").replace("?", "``?")
     return (
         "$sfInstalled=$false;$sfInstalledVersion=$null\n"
         "foreach($rp in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*')){\n"
