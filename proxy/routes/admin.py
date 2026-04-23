@@ -3689,7 +3689,7 @@ async def delete_profile_endpoint(profile_id: int, request: Request):
 
 
 _PROFILE_POLL_INTERVAL = 5   # Sekunden zwischen Completion-Checks
-_PROFILE_MAX_WAIT = 300      # Max Wartezeit pro Paket bevor naechstes dran kommt
+_PROFILE_MAX_WAIT = 900      # 15min — genug fuer grosse Pakete (Office, SAP)
 
 
 async def _apply_profile_sequential(agent_id: str, hostname: str,
