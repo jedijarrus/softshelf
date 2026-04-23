@@ -5735,6 +5735,12 @@ button.outdated-badge.clickable:disabled {
         <div class="hint">Leer lassen wenn kein Uninstall gewünscht ist. „Aus Tactical holen" scannt die Agents und zieht den Uninstall-String aus der Windows-Registry.</div>
       </div>
 
+      <div class="field">
+        <label>Install-Timeout (Sekunden)</label>
+        <input class="input" data-edit="install_timeout" type="number" min="30" max="3600" placeholder="120">
+        <div class="hint">Wie lange der Installer maximal laufen darf bevor er abgebrochen wird. Standard: 120s. Grosse Pakete (Office, SAP): 600-900s.</div>
+      </div>
+
       <div class="section-divider"><span class="label">Versionen</span></div>
 
       <div class="version-summary" id="version-summary"></div>
@@ -8957,6 +8963,7 @@ function openEditPanel(name) {
   document.querySelector('[data-edit="install_args"]').value   = pkg.install_args || '';
   document.querySelector('[data-edit="detection_name"]').value = pkg.detection_name || '';
   document.querySelector('[data-edit="uninstall_cmd"]').value  = pkg.uninstall_cmd || '';
+  document.querySelector('[data-edit="install_timeout"]').value = pkg.install_timeout || 120;
   // Entry-Point-Dropdown + Inhalt-verwalten nur bei Archive-Paketen
   document.getElementById('edit-entry-field').style.display = isArchive ? '' : 'none';
   document.getElementById('edit-contents-field').style.display = isArchive ? '' : 'none';
