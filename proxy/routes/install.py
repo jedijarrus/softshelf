@@ -206,6 +206,7 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
     install_args = pkg.get("install_args") or ""
     archive_type = pkg.get("archive_type") or "single"
     detection_name = pkg.get("detection_name") or pkg.get("display_name") or ""
+    check_reboot = bool(pkg.get("check_reboot"))
 
     token = create_download_token(sha, agent_id)
     base = await _public_proxy_url()
@@ -216,10 +217,23 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
     install_timeout_s = pkg.get("install_timeout") or 120
     install_timeout_ms = install_timeout_s * 1000
 
-    # Pre-Check: schon installiert?
+    # Pre-Check: Reboot pending?
     pre_check = ""
+    if check_reboot:
+        pre_check += (
+            "$rebootPending = (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') -or "
+            "(Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired') -or "
+            "(Test-Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\PendingFileRenameOperations')\n"
+            "if($rebootPending){\n"
+            "    _sfProgress 'FEHLER: Neustart steht aus — Installation abgebrochen. Bitte zuerst den Rechner neu starten.'\n"
+            "    cmd /c \"exit 1\"\n"
+            "    return\n"
+            "}\n"
+        )
+
+    # Pre-Check: schon installiert?
     if detection_name:
-        pre_check = (
+        pre_check += (
             _ps_registry_check(detection_name)
             + "if($sfInstalled){_sfProgress \"Pre-Check: Bereits installiert (Version: $sfInstalledVersion)\"}\n"
         )
