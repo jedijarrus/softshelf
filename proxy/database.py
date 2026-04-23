@@ -379,6 +379,7 @@ async def init_db():
             ("hidden_in_kiosk",    "INTEGER NOT NULL DEFAULT 0"),
             ("auto_advance",       "INTEGER NOT NULL DEFAULT 0"),
             ("install_timeout",    "INTEGER NOT NULL DEFAULT 120"),
+            ("check_reboot",       "INTEGER NOT NULL DEFAULT 0"),
         ]:
             if col not in pkg_cols:
                 await db.execute(f"ALTER TABLE packages ADD COLUMN {col} {ddl}")
