@@ -5740,6 +5740,12 @@ button.outdated-badge.clickable:disabled {
         <input class="input" data-edit="install_timeout" type="number" min="30" max="3600" placeholder="120">
         <div class="hint">Wie lange der Installer maximal laufen darf bevor er abgebrochen wird. Standard: 120s. Grosse Pakete (Office, SAP): 600-900s.</div>
       </div>
+      <div class="field">
+        <label class="check-label">
+          <input type="checkbox" data-edit="check_reboot"> Reboot-Check vor Installation
+        </label>
+        <div class="hint">Bricht Installation ab wenn ein Neustart aussteht. Sinnvoll bei Paketen die fehlschlagen wenn Reboot pending ist (SAP GUI, .NET-abhaengige Software).</div>
+      </div>
 
       <div class="section-divider"><span class="label">Versionen</span></div>
 
@@ -8964,6 +8970,7 @@ function openEditPanel(name) {
   document.querySelector('[data-edit="detection_name"]').value = pkg.detection_name || '';
   document.querySelector('[data-edit="uninstall_cmd"]').value  = pkg.uninstall_cmd || '';
   document.querySelector('[data-edit="install_timeout"]').value = pkg.install_timeout || 120;
+  document.querySelector('[data-edit="check_reboot"]').checked = !!pkg.check_reboot;
   // Entry-Point-Dropdown + Inhalt-verwalten nur bei Archive-Paketen
   document.getElementById('edit-entry-field').style.display = isArchive ? '' : 'none';
   document.getElementById('edit-contents-field').style.display = isArchive ? '' : 'none';
@@ -9522,7 +9529,7 @@ async function saveEdit() {
       const field = document.getElementById('edit-entry-field');
       if (field && field.style.display === 'none') return;
     }
-    body[i.dataset.edit] = i.value;
+    body[i.dataset.edit] = i.type === 'checkbox' ? (i.checked ? 1 : 0) : i.value;
   });
   const btn = document.getElementById('edit-save-btn');
   btn.disabled = true;

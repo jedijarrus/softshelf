@@ -769,6 +769,7 @@ class CustomUpdateRequest(BaseModel):
     detection_name: str = Field(default="", max_length=200)
     entry_point: str = Field(default="", max_length=500)  # nur für archive
     install_timeout: int = Field(default=120, ge=30, le=3600)
+    check_reboot: int = Field(default=0, ge=0, le=1)
 
     @field_validator("display_name", "category")
     @classmethod
@@ -904,11 +905,11 @@ async def update_custom_package(name: str, body: CustomUpdateRequest):
         archive_type=archive_type,
         entry_point=eff_entry,
     )
-    # install_timeout separat updaten (nicht in upsert_custom_package)
+    # install_timeout + check_reboot separat updaten
     async with database._db() as db:
         await db.execute(
-            "UPDATE packages SET install_timeout = ? WHERE name = ?",
-            (body.install_timeout, name),
+            "UPDATE packages SET install_timeout = ?, check_reboot = ? WHERE name = ?",
+            (body.install_timeout, body.check_reboot, name),
         )
         await db.commit()
     return {"ok": True}
