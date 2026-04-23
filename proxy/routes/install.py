@@ -65,6 +65,25 @@ async def _run_custom_command_bg(
         except Exception:
             pass
 
+    # Pre-Flight: Agent existiert + online?
+    try:
+        status = await TacticalClient().check_agent_status(agent_id)
+        if not status["exists"]:
+            error_msg = f"Agent existiert nicht in Tactical (Status: {status['status']})"
+            logger.warning("custom %s pre-flight failed: %s — %s", action, display_name, error_msg)
+            if log_id:
+                await database.complete_action_log(log_id, "error", error_summary=error_msg)
+            return
+        if status["status"] == "offline":
+            error_msg = "Agent ist offline — Command kann nicht zugestellt werden"
+            logger.warning("custom %s pre-flight: agent offline — %s auf %s", action, display_name, hostname)
+            if log_id:
+                await database.complete_action_log(log_id, "error", error_summary=error_msg)
+            return
+    except Exception as e:
+        # Pre-Flight fehlgeschlagen — trotzdem versuchen
+        logger.warning("pre-flight check failed, proceeding anyway: %s", e)
+
     # Delivery-Timeout: genug fuer langsame Agents (NATS braucht manchmal 10-15s).
     # Bei ReadTimeout: Command laeuft trotzdem, Callback kommt spaeter.
     try:
@@ -242,7 +261,7 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
             f"$zipPath = Join-Path $env:TEMP 'kiosk_install_{nonce}.zip'\n",
             f"$extPath = Join-Path $env:TEMP 'kiosk_install_{nonce}'\n",
             "_sfProgress 'Download laeuft...'\n",
-            f"$wc=New-Object Net.WebClient;$wc.Proxy=[Net.GlobalProxySelection]::GetEmptyWebProxy();$wc.DownloadFile('{url_quoted}', $zipPath)\n",
+            f"_sfDownload '{url_quoted}' $zipPath\n",
             "_sfProgress 'Download abgeschlossen, entpacke...'\n",
             "Expand-Archive -LiteralPath $zipPath -DestinationPath $extPath -Force\n",
             f"$exe = Join-Path $extPath '{ep_quoted}'\n",
@@ -321,7 +340,7 @@ Remove-Item $logFile -Force -ErrorAction SilentlyContinue"""
         tmp_init + "\n",
         (log_var + "\n") if log_var else "",
         "_sfProgress 'Download laeuft...'\n",
-        f"$wc=New-Object Net.WebClient;$wc.Proxy=[Net.GlobalProxySelection]::GetEmptyWebProxy();$wc.DownloadFile('{url_quoted}', {tmp_var})\n",
+        f"_sfDownload '{url_quoted}' {tmp_var}\n",
         f"_sfProgress \"Download abgeschlossen ($([math]::Round((Get-Item {tmp_var}).Length/1MB,1)) MB)\"\n",
         install_line + "\n",
         "_sfProgress 'Installer gestartet...'\n",
@@ -831,6 +850,24 @@ async def _run_choco_command_bg(
         except Exception:
             pass
 
+    # Pre-Flight: Agent existiert + online?
+    try:
+        status = await TacticalClient().check_agent_status(agent_id)
+        if not status["exists"]:
+            error_msg = f"Agent existiert nicht in Tactical (Status: {status['status']})"
+            logger.warning("choco %s pre-flight failed: %s — %s", action, display_name, error_msg)
+            if log_id:
+                await database.complete_action_log(log_id, "error", error_summary=error_msg)
+            return
+        if status["status"] == "offline":
+            error_msg = "Agent ist offline"
+            logger.warning("choco %s pre-flight: agent offline — %s", action, display_name)
+            if log_id:
+                await database.complete_action_log(log_id, "error", error_summary=error_msg)
+            return
+    except Exception:
+        pass  # Pre-Flight fehlgeschlagen — trotzdem versuchen
+
     exit_code, raw_output = await _run_choco_one(agent_id, cmd)
     soft_err = _detect_choco_soft_error(raw_output, exit_code)
     success = exit_code in _CHOCO_SUCCESS_CODES and not soft_err
@@ -997,6 +1034,24 @@ async def _run_winget_command_bg(
             await database.update_action_log_status(log_id, "running")
         except Exception:
             pass
+
+    # Pre-Flight: Agent existiert + online?
+    try:
+        agent_status = await TacticalClient().check_agent_status(agent_id)
+        if not agent_status["exists"]:
+            error_msg = f"Agent existiert nicht in Tactical (Status: {agent_status['status']})"
+            logger.warning("winget %s pre-flight failed: %s — %s", action, display_name, error_msg)
+            if log_id:
+                await database.complete_action_log(log_id, "error", error_summary=error_msg)
+            return
+        if agent_status["status"] == "offline":
+            error_msg = "Agent ist offline"
+            logger.warning("winget %s pre-flight: agent offline — %s", action, display_name)
+            if log_id:
+                await database.complete_action_log(log_id, "error", error_summary=error_msg)
+            return
+    except Exception:
+        pass
 
     scope = (winget_scope or "auto").lower()
     if scope not in ("auto", "machine", "user"):
@@ -1632,17 +1687,34 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
         "    $wc.Headers.Add('Content-Type', 'application/json')\n"
         "    $wc.UploadString($url, $data) | Out-Null\n"
         "}\n"
+        "function _sfPostReliable($url, $data) {\n"
+        "    $delays = @(0, 3, 10, 30)\n"
+        "    foreach ($d in $delays) {\n"
+        "        if ($d -gt 0) { Start-Sleep -Seconds $d }\n"
+        "        try { _sfPost $url $data; return } catch {}\n"
+        "    }\n"
+        "    Write-Output 'WARNUNG: Callback konnte nicht gesendet werden'\n"
+        "}\n"
         "function _sfProgress($msg) {\n"
         "    $_sfOutput.Add($msg); Write-Output $msg\n"
         "    $body = @{output=($_sfOutput -join \"`n\"); final=$false} | ConvertTo-Json -Compress\n"
         "    try { _sfPost $_sfCallbackUrl $body } catch {}\n"
+        "}\n"
+        "function _sfDownload($url, $dest) {\n"
+        "    $wc = New-Object Net.WebClient\n"
+        "    $wc.Proxy = [Net.GlobalProxySelection]::GetEmptyWebProxy()\n"
+        "    try { $wc.DownloadFile($url, $dest) }\n"
+        "    catch {\n"
+        "        _sfProgress \"WebClient fehlgeschlagen, versuche BITS...\"\n"
+        "        Start-BitsTransfer -Source $url -Destination $dest -Priority Foreground\n"
+        "    }\n"
         "}\n"
         "\n"
         "_sfProgress 'Command gestartet'\n"
         "try {\n"
     )
 
-    # Script-Footer mit finalem Callback
+    # Script-Footer mit finalem Callback (exponential backoff)
     footer = (
         "\n"
         "} catch {\n"
@@ -1663,12 +1735,7 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
         "    success   = $_sfSuccess\n"
         "    final     = $true\n"
         "} | ConvertTo-Json -Compress\n"
-        "try {\n"
-        "    _sfPost $_sfCallbackUrl $_sfBody\n"
-        "} catch {\n"
-        "    Start-Sleep -Seconds 3\n"
-        "    try { _sfPost $_sfCallbackUrl $_sfBody } catch {}\n"
-        "}\n"
+        "_sfPostReliable $_sfCallbackUrl $_sfBody\n"
     )
 
     # Script speichern
@@ -1682,10 +1749,11 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
     script_url_safe = _ps_quote(script_url)
     bootstrap = (
         f"powershell -ExecutionPolicy Bypass -Command \""
-        f"$wc=New-Object Net.WebClient;"
-        f"$wc.Proxy=[Net.GlobalProxySelection]::GetEmptyWebProxy();"
         f"$f=Join-Path $env:TEMP 'sf_{nonce}.ps1';"
-        f"$wc.DownloadFile('{script_url_safe}', $f);"
+        f"try{{$wc=New-Object Net.WebClient;"
+        f"$wc.Proxy=[Net.GlobalProxySelection]::GetEmptyWebProxy();"
+        f"$wc.DownloadFile('{script_url_safe}',$f)}}"
+        f"catch{{Start-BitsTransfer -Source '{script_url_safe}' -Destination $f -Priority Foreground}};"
         f"& $f;"
         f"Remove-Item $f -Force\""
     )

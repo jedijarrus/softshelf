@@ -72,6 +72,29 @@ class TacticalClient:
     def _client(self, headers: dict) -> httpx.AsyncClient:
         return httpx.AsyncClient(headers=headers, timeout=30)
 
+    async def check_agent_status(self, agent_id: str) -> dict:
+        """Pre-Flight-Check: Agent existiert + online?
+        Returns dict mit 'exists', 'status', 'hostname'.
+        Wirft keine Exception — gibt immer ein Ergebnis."""
+        _check_agent(agent_id)
+        try:
+            base, headers = await self._connection()
+            async with self._client(headers) as c:
+                r = await c.get(f"{base}/agents/{agent_id}/")
+                if r.status_code == 404:
+                    return {"exists": False, "status": "not_found", "hostname": ""}
+                if r.status_code != 200:
+                    return {"exists": False, "status": f"http_{r.status_code}", "hostname": ""}
+                data = r.json()
+                return {
+                    "exists": True,
+                    "status": data.get("status", "unknown"),
+                    "hostname": data.get("hostname", ""),
+                }
+        except Exception as e:
+            logger.warning("check_agent_status failed for %s: %s", agent_id[:12], e)
+            return {"exists": True, "status": "check_failed", "hostname": ""}
+
     async def get_installed_software(self, agent_id: str) -> list[dict]:
         _check_agent(agent_id)
         base, headers = await self._connection()
