@@ -627,6 +627,7 @@ class EnableRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=80)
     category: str = Field(default="Allgemein", min_length=1, max_length=40)
     install_timeout: int | None = Field(default=None, ge=30, le=3600)
+    check_reboot: int | None = Field(default=None, ge=0, le=1)
 
     @field_validator("name")
     @classmethod
@@ -759,13 +760,17 @@ async def update_package(name: str, body: EnableRequest):
         )
     else:
         await database.upsert_package(name, body.display_name or name, body.category)
-    # install_timeout fuer alle Pakettypen
+    # install_timeout + check_reboot fuer alle Pakettypen
+    updates = {}
     if body.install_timeout is not None:
+        updates["install_timeout"] = body.install_timeout
+    if body.check_reboot is not None:
+        updates["check_reboot"] = body.check_reboot
+    if updates:
         async with database._db() as db:
-            await db.execute(
-                "UPDATE packages SET install_timeout = ? WHERE name = ?",
-                (body.install_timeout, name),
-            )
+            sets = ", ".join(f"{k} = ?" for k in updates)
+            vals = list(updates.values()) + [name]
+            await db.execute(f"UPDATE packages SET {sets} WHERE name = ?", vals)
             await db.commit()
     return {"ok": True}
 
