@@ -3708,9 +3708,11 @@ async def _apply_profile_sequential(agent_id: str, hostname: str,
                 agent_id, pkg.get("name"), e,
             )
             continue
-        # Auf Completion warten — poll action_log bis nicht mehr running
+        # Auf Completion warten — Timeout pro Paket (Default 120s + 60s Puffer)
+        pkg_timeout = (pkg.get("install_timeout") or 120) + 60
+        max_wait = max(pkg_timeout, _PROFILE_MAX_WAIT)
         waited = 0
-        while waited < _PROFILE_MAX_WAIT:
+        while waited < max_wait:
             await asyncio.sleep(_PROFILE_POLL_INTERVAL)
             waited += _PROFILE_POLL_INTERVAL
             entries = await database.get_action_log(
