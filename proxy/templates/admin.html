@@ -7135,6 +7135,8 @@ async function init() {
       hidden_in_kiosk:    p.hidden_in_kiosk ? 1 : 0,
       auto_advance:       p.auto_advance ? 1 : 0,
       notes:              p.notes || '',
+      install_timeout:    p.install_timeout || 120,
+      check_reboot:       p.check_reboot ? 1 : 0,
       _outdated:          0,
     });
     render();
