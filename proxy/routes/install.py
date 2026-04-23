@@ -242,7 +242,7 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
             f"$zipPath = Join-Path $env:TEMP 'kiosk_install_{nonce}.zip'\n",
             f"$extPath = Join-Path $env:TEMP 'kiosk_install_{nonce}'\n",
             "_sfProgress 'Download laeuft...'\n",
-            f"(New-Object System.Net.WebClient).DownloadFile('{url_quoted}', $zipPath)\n",
+            f"$wc=New-Object Net.WebClient;$wc.Proxy=[Net.GlobalProxySelection]::GetEmptyWebProxy();$wc.DownloadFile('{url_quoted}', $zipPath)\n",
             "_sfProgress 'Download abgeschlossen, entpacke...'\n",
             "Expand-Archive -LiteralPath $zipPath -DestinationPath $extPath -Force\n",
             f"$exe = Join-Path $extPath '{ep_quoted}'\n",
@@ -321,7 +321,7 @@ Remove-Item $logFile -Force -ErrorAction SilentlyContinue"""
         tmp_init + "\n",
         (log_var + "\n") if log_var else "",
         "_sfProgress 'Download laeuft...'\n",
-        f"(New-Object System.Net.WebClient).DownloadFile('{url_quoted}', {tmp_var})\n",
+        f"$wc=New-Object Net.WebClient;$wc.Proxy=[Net.GlobalProxySelection]::GetEmptyWebProxy();$wc.DownloadFile('{url_quoted}', {tmp_var})\n",
         f"_sfProgress \"Download abgeschlossen ($([math]::Round((Get-Item {tmp_var}).Length/1MB,1)) MB)\"\n",
         install_line + "\n",
         "_sfProgress 'Installer gestartet...'\n",
@@ -1626,10 +1626,16 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
         "$_sfCallbackUrl = '" + _ps_quote(callback_url) + "'\n"
         "$_sfExitCode = 0\n"
         "$_sfSuccess = $true\n"
+        "function _sfPost($url, $data) {\n"
+        "    $wc = New-Object Net.WebClient\n"
+        "    $wc.Proxy = [Net.GlobalProxySelection]::GetEmptyWebProxy()\n"
+        "    $wc.Headers.Add('Content-Type', 'application/json')\n"
+        "    $wc.UploadString($url, $data) | Out-Null\n"
+        "}\n"
         "function _sfProgress($msg) {\n"
         "    $_sfOutput.Add($msg); Write-Output $msg\n"
         "    $body = @{output=($_sfOutput -join \"`n\"); final=$false} | ConvertTo-Json -Compress\n"
-        "    try { Invoke-WebRequest -Uri $_sfCallbackUrl -Method POST -Body $body -ContentType 'application/json' -UseBasicParsing -TimeoutSec 5 | Out-Null } catch {}\n"
+        "    try { _sfPost $_sfCallbackUrl $body } catch {}\n"
         "}\n"
         "\n"
         "_sfProgress 'Command gestartet'\n"
@@ -1658,10 +1664,10 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
         "    final     = $true\n"
         "} | ConvertTo-Json -Compress\n"
         "try {\n"
-        "    Invoke-WebRequest -Uri $_sfCallbackUrl -Method POST -Body $_sfBody -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null\n"
+        "    _sfPost $_sfCallbackUrl $_sfBody\n"
         "} catch {\n"
         "    Start-Sleep -Seconds 3\n"
-        "    try { Invoke-WebRequest -Uri $_sfCallbackUrl -Method POST -Body $_sfBody -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 | Out-Null } catch {}\n"
+        "    try { _sfPost $_sfCallbackUrl $_sfBody } catch {}\n"
         "}\n"
     )
 
@@ -1676,8 +1682,10 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
     script_url_safe = _ps_quote(script_url)
     bootstrap = (
         f"powershell -ExecutionPolicy Bypass -Command \""
+        f"$wc=New-Object Net.WebClient;"
+        f"$wc.Proxy=[Net.GlobalProxySelection]::GetEmptyWebProxy();"
         f"$f=Join-Path $env:TEMP 'sf_{nonce}.ps1';"
-        f"(New-Object System.Net.WebClient).DownloadFile('{script_url_safe}', $f);"
+        f"$wc.DownloadFile('{script_url_safe}', $f);"
         f"& $f;"
         f"Remove-Item $f -Force\""
     )
