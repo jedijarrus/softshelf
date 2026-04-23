@@ -613,6 +613,8 @@ class EnabledPackage(BaseModel):
     staged_rollout: int = 0
     hidden_in_kiosk: int = 0
     auto_advance: int = 0
+    install_timeout: int = 120
+    check_reboot: int = 0
 
 
 class SearchResult(BaseModel):
