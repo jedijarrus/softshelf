@@ -593,7 +593,8 @@ _PKG_COLS = (
     "name, display_name, category, type, filename, sha256, size_bytes, "
     "install_args, uninstall_cmd, detection_name, current_version_id, "
     "archive_type, entry_point, winget_version, winget_publisher, winget_scope, "
-    "required, notes, staged_rollout, hidden_in_kiosk, auto_advance"
+    "required, notes, staged_rollout, hidden_in_kiosk, auto_advance, "
+    "install_timeout, check_reboot"
 )
 
 
