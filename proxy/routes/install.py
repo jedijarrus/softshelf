@@ -830,7 +830,7 @@ async def _run_choco_one(agent_id: str, cmd: str) -> tuple[int | None, str]:
     und geben sie zusammen mit dem geputzten stdout zurück. Wenn der Marker
     fehlt (z.B. Tactical-Verbindungsfehler), returns (None, error_text)."""
     try:
-        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=600)
+        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=60)
         if raw_output and raw_output.startswith('"'):
             try:
                 import json as _json
@@ -1000,7 +1000,7 @@ async def _run_one_winget(
     """
     try:
         raw_output = await TacticalClient().run_command(
-            agent_id, cmd, timeout=600, run_as_user=run_as_user,
+            agent_id, cmd, timeout=60, run_as_user=run_as_user,
         )
         if raw_output and raw_output.startswith('"'):
             try:
@@ -1761,6 +1761,8 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
         "    final     = $true\n"
         "} | ConvertTo-Json -Compress\n"
         "_sfPostReliable $_sfCallbackUrl $_sfBody\n"
+        "# Self-cleanup\n"
+        "try { Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue } catch {}\n"
     )
 
     # Script speichern
@@ -1782,7 +1784,7 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
         f"}} catch {{\n"
         f"    Start-BitsTransfer -Source '{script_url_safe}' -Destination $f -Priority Foreground\n"
         f"}}\n"
-        f"& $f\n"
-        f"Remove-Item $f -Force -ErrorAction SilentlyContinue\n"
+        f"Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File', $f -WindowStyle Hidden\n"
+        f"Write-Output 'Script gestartet'\n"
     )
     return bootstrap
