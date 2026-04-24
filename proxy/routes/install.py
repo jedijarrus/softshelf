@@ -1318,7 +1318,7 @@ async def receive_callback(job_id: str, body: CallbackPayload):
     return {"ok": True}
 
 
-@router.get("/script/{job_id}")
+@router.api_route("/script/{job_id}", methods=["GET", "HEAD"])
 async def serve_script(job_id: str):
     """Liefert ein generiertes PS-Script aus. job_id ist Auth (256 bit)."""
     if not re.fullmatch(r"[a-f0-9]{64}", job_id):
