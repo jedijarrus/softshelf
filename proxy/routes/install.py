@@ -524,14 +524,12 @@ def _build_winget_command(
 $wingetExe = Find-WingetExe
 if (-not $wingetExe) {{
     Write-Output "winget ist nicht installiert (App Installer fehlt)"
-    Write-Output "===SOFTSHELF_EXIT=== 9009"
-    exit 0
+    cmd /c "exit 9009"
 }}
-$out = (& $wingetExe {winget_args} 2>&1) -join "`n"
-$code = $LASTEXITCODE
-Write-Output $out
-Write-Output "===SOFTSHELF_EXIT=== $code"
-exit 0
+if ($wingetExe) {{
+    $out = (& $wingetExe {winget_args} 2>&1) -join "`n"
+    Write-Output $out
+}}
 """
 
 
@@ -760,14 +758,12 @@ if (-not $choco) {{
 }}
 if (-not $choco) {{
     Write-Output "choco ist nicht installiert (Chocolatey fehlt auf dem Agent)"
-    Write-Output "===SOFTSHELF_EXIT=== 9009"
-    exit 0
+    cmd /c "exit 9009"
 }}
-$out = (& $choco {choco_args} 2>&1) -join "`n"
-$code = $LASTEXITCODE
-Write-Output $out
-Write-Output "===SOFTSHELF_EXIT=== $code"
-exit 0
+if ($choco) {{
+    $out = (& $choco {choco_args} 2>&1) -join "`n"
+    Write-Output $out
+}}
 """
 
 
