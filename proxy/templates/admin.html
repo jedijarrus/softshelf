@@ -5476,6 +5476,7 @@ button.outdated-badge.clickable:disabled {
         <h1 class="section-title">Aktionen</h1>
         <div class="section-sub">Install-, Uninstall- und Upgrade-Aktionen mit Ergebnis und Output.</div>
       </div>
+      <button class="btn btn-ghost btn-sm" onclick="alDeleteAllErrors()" style="color:var(--red)">Alle Fehler loeschen</button>
       <button class="btn btn-ghost btn-sm" onclick="loadActionLog(true)">Aktualisieren</button>
     </div>
     <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
@@ -13013,7 +13014,10 @@ async function alShowDetail(logId) {
     </div>
     ${entry.error_summary ? `<div class="al-error-banner"><strong>Fehler:</strong> ${esc(entry.error_summary)}</div>` : ''}
     ${entry.stdout ? `<details><summary style="cursor:pointer;margin-bottom:8px;font-size:13px;color:var(--fg-3)">Vollstaendiger Output</summary><div class="al-stdout">${esc(entry.stdout)}</div></details>` : ''}
-    ${entry.status === 'error' ? `<div style="margin-top:16px;text-align:right"><button class="btn btn-sm" style="background:var(--red);color:#fff" onclick="alRetry(${entry.id});closeActionDetailModal()">Nochmal versuchen</button></div>` : ''}
+    ${entry.status === 'error' ? `<div style="margin-top:16px;text-align:right;display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-sm btn-ghost" onclick="alDelete(${entry.id});closeActionDetailModal()">Eintrag loeschen</button>
+      <button class="btn btn-sm" style="background:var(--red);color:#fff" onclick="alRetry(${entry.id});closeActionDetailModal()">Nochmal versuchen</button>
+    </div>` : `<div style="margin-top:16px;text-align:right"><button class="btn btn-sm btn-ghost" onclick="alDelete(${entry.id});closeActionDetailModal()">Eintrag loeschen</button></div>`}
   `;
   document.getElementById('action-detail-modal').classList.add('open');
 }
@@ -13031,6 +13035,26 @@ async function alRetry(logId) {
     }
   } catch (e) {
     toast('Retry fehlgeschlagen', true);
+  }
+}
+
+async function alDelete(logId) {
+  try {
+    await api('DELETE', '/admin/api/action-log/' + logId);
+    toast('Eintrag geloescht');
+    loadActionLog();
+  } catch (e) {
+    toast('Loeschen fehlgeschlagen', true);
+  }
+}
+
+async function alDeleteAllErrors() {
+  try {
+    const r = await api('DELETE', '/admin/api/action-log?status=error');
+    toast(r.deleted + ' Fehler-Eintraege geloescht');
+    loadActionLog();
+  } catch (e) {
+    toast('Loeschen fehlgeschlagen', true);
   }
 }
 
