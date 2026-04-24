@@ -4337,6 +4337,10 @@ button.outdated-badge.clickable:disabled {
 }
 .profile-pkg-row:last-child { border-bottom: 0; }
 .profile-pkg-row:hover { background: var(--bg-hover); }
+.profile-pkg-row[draggable="true"] { cursor: grab; }
+.profile-pkg-row.drag-over { border-top: 2px solid var(--blue); margin-top: -1px; }
+.profile-pkg-row.dragging { opacity: 0.4; }
+.profile-pkg-grip { color: var(--fg-5); font-size: 14px; cursor: grab; user-select: none; flex-shrink: 0; width: 18px; text-align: center; }
 .profile-pkg-name {
   font-family: var(--mono);
   font-size: 12px;
@@ -6713,6 +6717,35 @@ function moveProfileEditorPkg(pkgName, dir) {
   renderProfileEditorPackages();
 }
 
+// Drag & Drop fuer Profil-Paket-Reihenfolge
+let _pfDragIdx = -1;
+function _pfDragStart(e) {
+  _pfDragIdx = parseInt(e.currentTarget.dataset.pkgIdx);
+  e.currentTarget.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+}
+function _pfDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  // Visual feedback
+  document.querySelectorAll('.profile-pkg-row.drag-over').forEach(el => el.classList.remove('drag-over'));
+  e.currentTarget.classList.add('drag-over');
+}
+function _pfDrop(e) {
+  e.preventDefault();
+  const targetIdx = parseInt(e.currentTarget.dataset.pkgIdx);
+  if (_pfDragIdx < 0 || _pfDragIdx === targetIdx) return;
+  // Move item
+  const [item] = _profileEditorPackages.splice(_pfDragIdx, 1);
+  _profileEditorPackages.splice(targetIdx, 0, item);
+  renderProfileEditorPackages();
+}
+function _pfDragEnd(e) {
+  _pfDragIdx = -1;
+  document.querySelectorAll('.profile-pkg-row.dragging,.profile-pkg-row.drag-over')
+    .forEach(el => { el.classList.remove('dragging'); el.classList.remove('drag-over'); });
+}
+
 function setProfileEditorPin(pkgName, pin) {
   const p = _profileEditorPackages.find(p => p.package_name === pkgName);
   if (p) p.version_pin = pin;
@@ -6788,11 +6821,9 @@ async function renderProfileEditorPackages() {
     return;
   }
   listEl.innerHTML = _profileEditorPackages.map((p, idx) => `
-    <div class="profile-pkg-row">
-      <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">
-        <button class="btn btn-ghost btn-sm" onclick="moveProfileEditorPkg(${jsStr(p.package_name)},-1)" ${idx===0?'disabled':''}>↑</button>
-        <button class="btn btn-ghost btn-sm" onclick="moveProfileEditorPkg(${jsStr(p.package_name)},1)" ${idx===_profileEditorPackages.length-1?'disabled':''}>↓</button>
-      </div>
+    <div class="profile-pkg-row" draggable="true" data-pkg-idx="${idx}" data-pkg-name="${esc(p.package_name)}"
+         ondragstart="_pfDragStart(event)" ondragover="_pfDragOver(event)" ondrop="_pfDrop(event)" ondragend="_pfDragEnd(event)">
+      <div class="profile-pkg-grip" title="Drag zum Sortieren">&#9776;</div>
       ${_typePillHtml(p.type)}
       <div style="flex:1;min-width:0;">
         <div class="profile-pkg-name">${esc(p.package_name)}</div>
@@ -6801,7 +6832,7 @@ async function renderProfileEditorPackages() {
       <input class="input" style="width:120px;font-size:11px" type="text" placeholder="Version (optional)"
              value="${esc(p.version_pin || '')}"
              oninput="setProfileEditorPin(${jsStr(p.package_name)}, this.value)">
-      <button class="btn btn-ghost btn-sm" onclick="removePackageFromProfileEditor(${jsStr(p.package_name)})">×</button>
+      <button class="btn btn-ghost btn-sm" onclick="removePackageFromProfileEditor(${jsStr(p.package_name)})">&#215;</button>
     </div>
   `).join('');
 }
