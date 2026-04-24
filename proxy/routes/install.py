@@ -1398,8 +1398,7 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
     footer = (
         "\n"
         "} catch {\n"
-        "    $_sfExitCode = 1\n"
-        "    $_sfSuccess = $false\n"
+        "    if ($_sfSuccess -ne 'skipped') { $_sfExitCode = 1; $_sfSuccess = $false }\n"
         "    $_sfOutput.Add(\"FEHLER: $($_.Exception.Message)\")\n"
         "}\n"
         "\n"
