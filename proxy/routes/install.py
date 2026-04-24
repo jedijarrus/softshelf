@@ -680,6 +680,9 @@ def _detect_choco_soft_error(output: str, exit_code: int | None) -> str | None:
             return f"Nur {done} von {total} Choco-Paketen erledigt — siehe Choco-Log auf dem Agent."
 
     if "0/1 packages" in lower or "1/1 packages failed" in lower:
+        # "already installed" ist kein Fehler — Software ist da
+        if "already installed" in lower:
+            return None
         for needle, message in _CHOCO_SOFT_ERROR_PATTERNS:
             if needle in lower:
                 return message
