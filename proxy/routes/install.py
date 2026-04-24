@@ -669,6 +669,10 @@ def _detect_choco_soft_error(output: str, exit_code: int | None) -> str | None:
     # Partial success: „Chocolatey uninstalled 1/2 packages" — exit ist 0
     # weil mindestens eines erfolgreich war, aber wir wollen den User
     # informieren dass nicht alles weg ist.
+    # "already installed" ist kein Fehler — Software ist da
+    if "already installed" in lower:
+        return None
+
     m = _CHOCO_PARTIAL_RE.search(lower)
     if m:
         done = int(m.group(1))
@@ -680,9 +684,6 @@ def _detect_choco_soft_error(output: str, exit_code: int | None) -> str | None:
             return f"Nur {done} von {total} Choco-Paketen erledigt — siehe Choco-Log auf dem Agent."
 
     if "0/1 packages" in lower or "1/1 packages failed" in lower:
-        # "already installed" ist kein Fehler — Software ist da
-        if "already installed" in lower:
-            return None
         for needle, message in _CHOCO_SOFT_ERROR_PATTERNS:
             if needle in lower:
                 return message
@@ -1186,8 +1187,12 @@ async def receive_callback(job_id: str, body: CallbackPayload):
             status = "error"
             error_summary = f"winget beendete mit ExitCode {ec}"
         elif pkg_type == "custom" and ec not in (0, 3010):
-            status = "error"
-            error_summary = f"Installer beendete mit ExitCode {ec}"
+            # 1603 bei already-installed + Post-Verify OK → nicht als Fehler werten
+            if ec == 1603 and "Post-Verify: OK" in (body.output or ""):
+                pass  # success bleibt
+            else:
+                status = "error"
+                error_summary = f"Installer beendete mit ExitCode {ec}"
         if status == "error":
             await database.complete_action_log(
                 entry["id"], "error", exit_code=ec,
