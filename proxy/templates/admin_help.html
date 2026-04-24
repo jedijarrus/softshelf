@@ -3,7 +3,7 @@
 <div class="doc-hero">
   <div class="doc-hero-title">Softshelf · Admin-Handbuch</div>
   <div class="doc-hero-sub">Software-Verteilung für Windows-Flotten mit optionalem Self-Service. Integriert mit Tactical RMM.</div>
-  <div class="doc-hero-meta">Version 2.0 · Stand April 2026</div>
+  <div class="doc-hero-meta">Version 2.0.3 &middot; Stand 24. April 2026</div>
 </div>
 
 <div class="doc-toc">
@@ -30,7 +30,8 @@
     </li>
     <li><a href="#compliance">Compliance</a></li>
     <li><a href="#verteilung">Verteilung & Updates</a></li>
-    <li><a href="#fehler">Fehler & Acknowledgement</a></li>
+    <li><a href="#fehler">Fehler &amp; Acknowledgement</a></li>
+    <li><a href="#aktionen">Aktionen-Log</a></li>
     <li><a href="#scheduled">Wartungsfensters (Geplant)</a></li>
     <li><a href="#clients">Clients & Agent-Detail</a></li>
     <li><a href="#deployment">Deployment & Updates</a>
@@ -106,8 +107,9 @@
     <tr><td><b>Rollouts</b></td><td>Phased Rollouts starten + Historie + Policy-Einstellungen.</td></tr>
     <tr><td rowspan="2" class="doc-td-group">Flotte</td><td><b>Clients</b></td><td>Agent-Liste, pro-Agent Detail-Page mit Software-Inventur.</td></tr>
     <tr><td><b>Compliance</b></td><td>Required-Pakete: wer hat's nicht?</td></tr>
-    <tr><td rowspan="3" class="doc-td-group">Operations</td><td><b>Fehler</b></td><td>Install-Fehler flottenweit, Erneut + Bestätigen.</td></tr>
-    <tr><td><b>Geplant</b></td><td>Wartungsfensters (zeitgesteuerte Aktionen).</td></tr>
+    <tr><td rowspan="4" class="doc-td-group">Operations</td><td><b>Fehler</b></td><td>Install-Fehler flottenweit, Erneut + Best&auml;tigen.</td></tr>
+    <tr><td><b>Aktionen</b></td><td>Chronologisches Log aller Install/Uninstall/Upgrade-Aktionen mit Status, Exit-Code und vollem Output.</td></tr>
+    <tr><td><b>Geplant</b></td><td>Wartungsfenster (zeitgesteuerte Aktionen).</td></tr>
     <tr><td><b>Audit-Log</b></td><td>HTTP-Request-Log, Auto-Pruning nach 90 Tagen.</td></tr>
     <tr><td rowspan="3" class="doc-td-group">System</td><td><b>Benutzer</b></td><td>Admin-Accounts + Rollen-Zuweisung.</td></tr>
     <tr><td><b>Einstellungen</b></td><td>Runtime-Konfig, ohne Container-Restart.</td></tr>
@@ -485,7 +487,51 @@
 </ul>
 
 <div class="doc-callout info">
-  <b>Agent-Detail-Banner:</b> Solange ein Fehler nicht acked ist, erscheint er als rotes Banner oben im Agent-Detail mit <code>Voller Output</code> und <code>Bestätigen</code> Buttons.
+  <b>Agent-Detail-Banner:</b> Solange ein Fehler nicht acked ist, erscheint er als rotes Banner oben im Agent-Detail mit <code>Voller Output</code> und <code>Best&auml;tigen</code> Buttons.
+</div>
+</section>
+
+<section id="aktionen">
+<h1>Aktionen-Log</h1>
+
+<p>Tab <b>Aktionen</b> zeigt alle Install-, Uninstall- und Upgrade-Aktionen chronologisch mit Live-Fortschritt.</p>
+
+<h3>Status-Lifecycle</h3>
+<table class="doc-table">
+  <tbody>
+    <tr><td><b>Ausstehend</b></td><td>Aktion angelegt, Bootstrap noch nicht gesendet.</td></tr>
+    <tr><td><b>L&auml;uft</b></td><td>Bootstrap gesendet, Script l&auml;uft auf dem Agent. Progressive Output-Updates erscheinen live.</td></tr>
+    <tr><td><b>Erfolg</b></td><td>Callback empfangen, Exit-Code OK, keine Soft-Errors.</td></tr>
+    <tr><td><b>Fehler</b></td><td>Callback empfangen mit Fehler, oder Delivery fehlgeschlagen, oder Timeout.</td></tr>
+    <tr><td><b>&Uuml;bersprungen</b></td><td>Pre-Check hat Installation verhindert (z.B. Neustart steht aus).</td></tr>
+  </tbody>
+</table>
+
+<h3>Wie Installationen ablaufen</h3>
+<ol>
+  <li><b>Pre-Flight-Check:</b> Ist der Agent in Tactical online? Wenn nicht &rarr; sofort <code>Fehler</code>.</li>
+  <li><b>Bootstrap:</b> Ein ~250-Byte PowerShell-Command wird via Tactical an den Agent gesendet. Dieser l&auml;dt das eigentliche Install-Script per HTTP vom Proxy und startet es im Hintergrund.</li>
+  <li><b>Script-Ausf&uuml;hrung:</b> Das Script l&auml;uft auf dem Agent (Download, Install, Post-Verify). Nach jedem Schritt wird ein <b>Progress-Callback</b> an den Proxy gesendet &mdash; der Output erscheint live im Detail-Modal.</li>
+  <li><b>Finaler Callback:</b> Am Ende sendet das Script Exit-Code + Output. Der Proxy erkennt Soft-Errors, aktualisiert die DB und startet Re-Scans.</li>
+</ol>
+
+<h3>Auto-Retry</h3>
+<ul>
+  <li><b>Choco <code>.install</code>-Variante:</b> Wenn ein Choco-Uninstall mit &bdquo;is not installed&ldquo; scheitert, wird automatisch die <code>.install</code>-Variante versucht (behebt Metapaket-Orphans wie <code>vlc</code> vs <code>vlc.install</code>).</li>
+  <li><b>Winget per-user-Fallback:</b> Wenn <code>--scope machine</code> mit &bdquo;No applicable installer&ldquo; scheitert und Scope auf <code>auto</code> steht, wird automatisch im User-Kontext wiederholt.</li>
+</ul>
+
+<h3>Timeout &amp; Reboot-Check</h3>
+<ul>
+  <li><b>Install-Timeout</b> ist pro Paket konfigurierbar (Edit-Panel &rarr; &bdquo;Install-Timeout&ldquo;). Standard: 120s. Grosse Pakete (Office, SAP): 600&ndash;900s.</li>
+  <li><b>Reboot-Check:</b> Wenn aktiviert, pr&uuml;ft das Script vor der Installation ob ein Neustart aussteht. Falls ja &rarr; Status <code>&Uuml;bersprungen</code> statt Fehler.</li>
+</ul>
+
+<h3>Manueller Retry</h3>
+<p>Bei <code>Fehler</code>-Status: Klick auf <code>&#8635;</code> (Retry-Button) in der Aktions-Zeile oder im Detail-Modal. Erstellt eine neue Aktion mit gleichen Parametern.</p>
+
+<div class="doc-callout info">
+  <b>Detail-Modal:</b> Klick auf eine Zeile im Aktionen-Tab &ouml;ffnet ein Modal mit: Agent, Paket, Typ, Exit-Code, Dauer, Fehlermeldung und aufklappbarem vollem PowerShell-Output.
 </div>
 </section>
 
