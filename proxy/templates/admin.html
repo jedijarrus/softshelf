@@ -4870,6 +4870,7 @@ button.outdated-badge.clickable:disabled {
 .al-badge.running  { background: var(--blue-bg); color: var(--blue); }
 .al-badge.success  { background: var(--green-bg); color: var(--green); }
 .al-badge.error    { background: var(--red-bg); color: var(--red); }
+.al-badge.skipped  { background: var(--amber-bg); color: var(--amber); }
 
 .al-badge.running::before {
   content: ''; width: 6px; height: 6px; border-radius: 50%;
@@ -5480,6 +5481,7 @@ button.outdated-badge.clickable:disabled {
         <option value="running">Laeuft</option>
         <option value="success">Erfolg</option>
         <option value="error">Fehler</option>
+        <option value="skipped">Uebersprungen</option>
       </select>
       <select id="al-filter-type" class="input input-sm" onchange="loadActionLog(true)" style="width:140px">
         <option value="">Alle Typen</option>
@@ -12886,7 +12888,7 @@ function alFilterDebounce() {
   _alFilterTimer = setTimeout(() => loadActionLog(true), 300);
 }
 
-const _alStatusLabel = { pending: 'Ausstehend', running: 'Laeuft', success: 'Erfolg', error: 'Fehler' };
+const _alStatusLabel = { pending: 'Ausstehend', running: 'Laeuft', success: 'Erfolg', error: 'Fehler', skipped: 'Uebersprungen' };
 
 function _alDuration(start, end) {
   if (!start || !end) return '';
