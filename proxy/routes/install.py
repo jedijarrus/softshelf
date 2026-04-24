@@ -523,12 +523,13 @@ def _build_winget_command(
 {_PS_FIND_WINGET}
 $wingetExe = Find-WingetExe
 if (-not $wingetExe) {{
-    Write-Output "winget ist nicht installiert (App Installer fehlt)"
+    _sfProgress "winget ist nicht installiert (App Installer fehlt)"
     cmd /c "exit 9009"
 }}
 if ($wingetExe) {{
+    _sfProgress "Starte winget {winget_args.split()[0]}..."
     $out = (& $wingetExe {winget_args} 2>&1) -join "`n"
-    Write-Output $out
+    _sfProgress $out
 }}
 """
 
@@ -757,12 +758,13 @@ if (-not $choco) {{
     if (Test-Path -LiteralPath $candidate) {{ $choco = $candidate }}
 }}
 if (-not $choco) {{
-    Write-Output "choco ist nicht installiert (Chocolatey fehlt auf dem Agent)"
+    _sfProgress "choco ist nicht installiert (Chocolatey fehlt auf dem Agent)"
     cmd /c "exit 9009"
 }}
 if ($choco) {{
+    _sfProgress "Starte choco {choco_args.split()[0]}..."
     $out = (& $choco {choco_args} 2>&1) -join "`n"
-    Write-Output $out
+    _sfProgress $out
 }}
 """
 
@@ -1170,11 +1172,29 @@ async def receive_callback(job_id: str, body: CallbackPayload):
         stdout=body.output or None,
     )
 
-    # ── Soft-Error-Detection ──────────────────────────────────────────
+    # ── Exit-Code Klassifikation ─────────────────────────────────────
     pkg_type = entry["pkg_type"]
+    ec = body.exit_code
+    if status == "success" and ec and ec != 0:
+        if pkg_type == "choco" and ec not in _CHOCO_SUCCESS_CODES:
+            status = "error"
+            error_summary = f"choco beendete mit ExitCode {ec}"
+        elif pkg_type == "winget" and ec not in _WINGET_SUCCESS_CODES:
+            status = "error"
+            error_summary = f"winget beendete mit ExitCode {ec}"
+        elif pkg_type == "custom" and ec not in (0, 3010):
+            status = "error"
+            error_summary = f"Installer beendete mit ExitCode {ec}"
+        if status == "error":
+            await database.complete_action_log(
+                entry["id"], "error", exit_code=ec,
+                error_summary=error_summary, stdout=body.output or None,
+            )
+
+    # ── Soft-Error-Detection ──────────────────────────────────────────
     soft_err = None
     if status == "success" and pkg_type == "choco":
-        soft_err = _detect_choco_soft_error(body.output or "", body.exit_code)
+        soft_err = _detect_choco_soft_error(body.output or "", ec)
     elif status == "success" and pkg_type == "winget":
         soft_err = _detect_winget_soft_error(body.output or "")
     if soft_err:
@@ -1370,10 +1390,7 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
         "    $_sfOutput.Add(\"FEHLER: $($_.Exception.Message)\")\n"
         "}\n"
         "\n"
-        "if ($LASTEXITCODE -and $LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010 -and $LASTEXITCODE -ne 1605) {\n"
-        "    $_sfExitCode = $LASTEXITCODE\n"
-        "    $_sfSuccess = $false\n"
-        "}\n"
+        "if ($LASTEXITCODE) { $_sfExitCode = $LASTEXITCODE }\n"
         "\n"
         "_sfProgress 'Sende Ergebnis...'\n"
         "$_sfBody = @{\n"
