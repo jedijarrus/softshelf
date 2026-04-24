@@ -227,8 +227,7 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
             "(Test-Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\PendingFileRenameOperations')\n"
             "if($rebootPending){\n"
             "    _sfProgress 'FEHLER: Neustart steht aus — Installation abgebrochen. Bitte zuerst den Rechner neu starten.'\n"
-            "    cmd /c \"exit 1\"\n"
-            "    return\n"
+            "    throw 'Reboot pending'\n"
             "}\n"
         )
 
