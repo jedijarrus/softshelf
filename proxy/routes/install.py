@@ -226,7 +226,9 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
             "(Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired') -or "
             "(Test-Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\PendingFileRenameOperations')\n"
             "if($rebootPending){\n"
-            "    _sfProgress 'FEHLER: Neustart steht aus — Installation abgebrochen. Bitte zuerst den Rechner neu starten.'\n"
+            "    $_sfOutput.Add('Uebersprungen: Neustart steht aus')\n"
+            "    $_sfExitCode = 0\n"
+            "    $_sfSuccess = 'skipped'\n"
             "    throw 'Reboot pending'\n"
             "}\n"
         )
@@ -1590,7 +1592,7 @@ _SCRIPTS_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "data
 class CallbackPayload(BaseModel):
     exit_code: int = 0
     output: str = ""
-    success: bool = True
+    success: bool | str = True  # True/False oder "skipped"
     final: bool = True  # False = Progress-Update, True = Endergebnis
 
 
@@ -1614,7 +1616,12 @@ async def receive_callback(job_id: str, body: CallbackPayload):
         return {"ok": True, "progress": True}
 
     # Final: action_log abschliessen
-    status = "success" if body.success else "error"
+    if body.success == "skipped" or body.success == "Skipped":
+        status = "skipped"
+    elif body.success:
+        status = "success"
+    else:
+        status = "error"
     error_summary = None
     if not body.success:
         lines = (body.output or "").strip().splitlines()
@@ -1627,7 +1634,7 @@ async def receive_callback(job_id: str, body: CallbackPayload):
         stdout=body.output or None,
     )
 
-    if body.success:
+    if body.success is True:
         if entry["action"] in ("install", "upgrade"):
             await database.set_agent_installation(
                 entry["agent_id"], entry["package_name"], None
