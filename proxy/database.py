@@ -304,7 +304,8 @@ async def init_db():
                 stdout       TEXT,
                 created_at   TEXT NOT NULL DEFAULT (datetime('now')),
                 completed_at TEXT,
-                job_id       TEXT
+                job_id       TEXT,
+                metadata     TEXT
             )
         """)
         await db.execute(
@@ -330,6 +331,10 @@ async def init_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_action_log_job "
             "ON action_log(job_id) WHERE job_id IS NOT NULL"
         )
+        if "metadata" not in al_cols_now:
+            await db.execute(
+                "ALTER TABLE action_log ADD COLUMN metadata TEXT"
+            )
 
         # Migration: role-Spalte auf admin_users fuer RBAC
         async with db.execute("PRAGMA table_info(admin_users)") as cur:
@@ -3103,15 +3108,15 @@ async def get_event_log(
 async def create_action_log(
     agent_id: str, hostname: str, package_name: str,
     display_name: str, pkg_type: str, action: str,
-    job_id: str | None = None,
+    job_id: str | None = None, metadata: str | None = None,
 ) -> int:
     """INSERT pending action, returns id. Dual-write in install_log."""
     async with _db() as db:
         cur = await db.execute(
             "INSERT INTO action_log "
-            "(agent_id, hostname, package_name, display_name, pkg_type, action, job_id) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (agent_id, hostname, package_name, display_name, pkg_type, action, job_id),
+            "(agent_id, hostname, package_name, display_name, pkg_type, action, job_id, metadata) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (agent_id, hostname, package_name, display_name, pkg_type, action, job_id, metadata),
         )
         log_id = cur.lastrowid
         await db.execute(

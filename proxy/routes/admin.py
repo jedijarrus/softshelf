@@ -1373,7 +1373,7 @@ async def push_update(name: str, stage: str = "all"):
     Geht durch den shared dispatch_install_for_agent/upgrade-Helper, damit
     scope, version-pin und soft-error-detection konsistent bleiben.
     """
-    from routes.install import dispatch_upgrade_for_agent, _build_install_command, _run_custom_command_bg, _build_script_and_bootstrap, _generate_job_id
+    from routes.install import dispatch_upgrade_for_agent, _build_install_command, _deliver_command_bg, _build_script_and_bootstrap, _generate_job_id
 
     # Namens-Check ist fuer winget looser als fuer choco/custom
     pkg = await database.get_package(name)
@@ -1414,9 +1414,9 @@ async def push_update(name: str, stage: str = "all"):
                     ag["agent_id"], ag["hostname"], name,
                     pkg["display_name"], "custom", "install", job_id=job_id,
                 )
-                _spawn_bg(_run_custom_command_bg(
+                _spawn_bg(_deliver_command_bg(
                     ag["agent_id"], ag["hostname"], name, pkg["display_name"],
-                    cmd, "install", current_vid, log_id=log_id,
+                    cmd, "install", "custom", log_id=log_id,
                 ))
                 dispatched += 1
             except Exception as e:
@@ -5049,7 +5049,7 @@ async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentR
     benutzt um unerwünschte Software via `winget uninstall --id <ID>` direkt
     aufzuräumen.
     """
-    from routes.install import _build_winget_command, _run_winget_command_bg, _build_script_and_bootstrap, _generate_job_id
+    from routes.install import _build_winget_command, _deliver_command_bg, _build_script_and_bootstrap, _generate_job_id
 
     if not _AGENT_ID_RE.fullmatch(agent_id):
         raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
@@ -5065,8 +5065,8 @@ async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentR
         agent_id, agent["hostname"], wid,
         display_name, "winget", "uninstall", job_id=job_id,
     )
-    _spawn_bg(_run_winget_command_bg(
-        agent_id, agent["hostname"], wid, display_name, cmd, "uninstall", wid,
-        log_id=log_id,
+    _spawn_bg(_deliver_command_bg(
+        agent_id, agent["hostname"], wid, display_name,
+        cmd, "uninstall", "winget", log_id=log_id,
     ))
     return {"ok": True, "agent": agent["hostname"]}

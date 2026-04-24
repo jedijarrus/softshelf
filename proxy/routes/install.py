@@ -42,23 +42,19 @@ def _spawn_bg(coro) -> asyncio.Task:
     return t
 
 
-async def _run_custom_command_bg(
+async def _deliver_command_bg(
     agent_id: str,
     hostname: str,
     package_name: str,
     display_name: str,
     cmd: str,
     action: str,
-    version_id: int | None = None,
+    pkg_type: str,
     log_id: int | None = None,
 ):
-    """
-    Background-Task fuer custom install/uninstall via Tactical run-cmd.
-    Verwendet Callback-Pattern: Tactical-Timeout auf 30s (nur Delivery-Check),
-    Ergebnis kommt asynchron via POST /api/v1/callback/{job_id}.
-    Falls Tactical sofort 200 + Output liefert (schnelle Commands), wird das
-    Ergebnis direkt verarbeitet. Falls Timeout/502 → Callback wird erwartet.
-    """
+    """Unified delivery for all package types. Fire-and-forget.
+    Pre-Flight → Bootstrap senden → FERTIG.
+    Result comes via callback endpoint — no output parsing here."""
     if log_id:
         try:
             await database.update_action_log_status(log_id, "running")
@@ -70,63 +66,33 @@ async def _run_custom_command_bg(
         status = await TacticalClient().check_agent_status(agent_id)
         if not status["exists"]:
             error_msg = f"Agent existiert nicht in Tactical (Status: {status['status']})"
-            logger.warning("custom %s pre-flight failed: %s — %s", action, display_name, error_msg)
+            logger.warning("%s %s pre-flight failed: %s — %s", pkg_type, action, display_name, error_msg)
             if log_id:
                 await database.complete_action_log(log_id, "error", error_summary=error_msg)
             return
         if status["status"] == "offline":
             error_msg = "Agent ist offline — Command kann nicht zugestellt werden"
-            logger.warning("custom %s pre-flight: agent offline — %s auf %s", action, display_name, hostname)
+            logger.warning("%s %s pre-flight: agent offline — %s", pkg_type, action, display_name)
             if log_id:
                 await database.complete_action_log(log_id, "error", error_summary=error_msg)
             return
     except Exception as e:
-        # Pre-Flight fehlgeschlagen — trotzdem versuchen
         logger.warning("pre-flight check failed, proceeding anyway: %s", e)
 
-    # Delivery-Timeout: genug fuer langsame Agents (NATS braucht manchmal 10-15s).
-    # Bei ReadTimeout: Command laeuft trotzdem, Callback kommt spaeter.
+    # Bootstrap senden — fire-and-forget
     try:
-        raw_output = await TacticalClient().run_command(agent_id, cmd, shell="powershell", timeout=60)
-        if raw_output and raw_output.startswith('"'):
-            try:
-                import json as _json
-                raw_output = _json.loads(raw_output)
-            except Exception:
-                pass
-        # Tactical hat synchron geantwortet (schneller Command).
-        # Callback wird trotzdem kommen, aber wir loggen schon mal.
-        logger.info("custom %s delivered+returned: %s auf %s", action, display_name, hostname)
+        await TacticalClient().run_command(agent_id, cmd, shell="powershell", timeout=60)
+        logger.info("%s %s delivered: %s auf %s", pkg_type, action, display_name, hostname)
     except httpx.ReadTimeout:
-        # Timeout — normal bei langen Commands. Command laeuft auf Agent,
-        # Callback kommt spaeter.
-        logger.info(
-            "custom %s delivered (async, callback pending): %s auf %s",
-            action, display_name, hostname,
-        )
-        return
+        logger.info("%s %s delivered (async): %s auf %s", pkg_type, action, display_name, hostname)
     except Exception as e:
-        # HTTP-Fehler (400/502/504) — Command wurde NICHT an Agent geschickt.
-        # Sofort als error markieren, Callback kommt nie.
         error_msg = str(e)[:300]
-        logger.warning(
-            "custom %s delivery failed: %s auf %s — %s",
-            action, display_name, hostname, error_msg,
-        )
+        logger.warning("%s %s delivery failed: %s auf %s — %s", pkg_type, action, display_name, hostname, error_msg)
         if log_id:
             try:
-                await database.complete_action_log(
-                    log_id, "error", exit_code=None,
-                    error_summary=error_msg,
-                )
+                await database.complete_action_log(log_id, "error", error_summary=error_msg)
             except Exception:
                 pass
-        return
-
-    # Falls wir hier ankommen: Tactical hat synchron geantwortet.
-    # Das passiert nur bei sehr schnellen Commands (<30s).
-    # Callback wird trotzdem kommen und das Ergebnis ueberschreiben,
-    # daher hier nichts weiter tun — Callback handled alles.
 
 
 class SoftwareRequest(BaseModel):
@@ -729,24 +695,8 @@ def _detect_choco_soft_error(output: str, exit_code: int | None) -> str | None:
 
 _CHOCO_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,99}$")
 
-# Marker den unsere PowerShell-Wrapper am Ende des stdout schreiben damit
-# wir den echten ExitCode kennen ohne dass wir uns auf nicht-200-Responses
-# von Tactical verlassen müssen
-_EXIT_MARKER_RE = re.compile(r"===SOFTSHELF_EXIT===\s*(-?\d+)")
-
-
-def _extract_exit_marker(output: str) -> tuple[int | None, str]:
-    """Sucht im stdout den Marker `===SOFTSHELF_EXIT=== <code>` und
-    entfernt die Marker-Zeile aus dem Output. Returns (code, cleaned_output).
-    Wenn kein Marker gefunden wird, returns (None, original_output)."""
-    if not output:
-        return None, output
-    m = _EXIT_MARKER_RE.search(output)
-    if not m:
-        return None, output
-    code = int(m.group(1))
-    cleaned = output[:m.start()] + output[m.end():]
-    return code, cleaned.rstrip()
+# winget ExitCode fuer "kein Installer fuer machine scope"
+_WINGET_NO_APPLICABLE_INSTALLER = -1978335216
 
 
 _CHOCO_VERSION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-+]{0,49}$")
@@ -821,418 +771,8 @@ exit 0
 """
 
 
-async def _run_choco_one(agent_id: str, cmd: str) -> tuple[int | None, str]:
-    """Einzelner Tactical run_command-Aufruf für eine fertige choco-Powershell.
-    Returns (real_exit_code_or_None, cleaned_output).
-
-    Der Wrapper exitiert immer mit 0 und kodiert den echten ExitCode in einer
-    `===SOFTSHELF_EXIT=== <code>` Marker-Zeile am Ende. Wir extrahieren die
-    und geben sie zusammen mit dem geputzten stdout zurück. Wenn der Marker
-    fehlt (z.B. Tactical-Verbindungsfehler), returns (None, error_text)."""
-    try:
-        raw_output = await TacticalClient().run_command(agent_id, cmd, timeout=60)
-        if raw_output and raw_output.startswith('"'):
-            try:
-                import json as _json
-                raw_output = _json.loads(raw_output)
-            except Exception:
-                pass
-    except Exception as e:
-        return None, str(e)
-    code, cleaned = _extract_exit_marker(raw_output or "")
-    return code, cleaned
-
-
-async def _run_choco_command_bg(
-    agent_id: str,
-    hostname: str,
-    package_name: str,
-    display_name: str,
-    cmd: str,
-    action: str,
-    log_id: int | None = None,
-):
-    """Background-Task für choco install/uninstall via Tactical run-cmd. Spiegelt
-    `_run_winget_command_bg`: capture output, detect soft errors, persist
-    last_action_error in scan_meta, chain targeted re-scan.
-
-    Spezialfall für uninstall: wenn das Metapackage nicht installiert ist,
-    aber die `<name>.install`-Variante existiert (z.B. 'vlc' weg, 'vlc.install'
-    noch da), retry mit dem .install-Namen. Behebt Orphans aus früheren
-    halb-fehlgeschlagenen Uninstalls."""
-    if log_id:
-        try:
-            await database.update_action_log_status(log_id, "running")
-        except Exception:
-            pass
-
-    # Pre-Flight: Agent existiert + online?
-    try:
-        status = await TacticalClient().check_agent_status(agent_id)
-        if not status["exists"]:
-            error_msg = f"Agent existiert nicht in Tactical (Status: {status['status']})"
-            logger.warning("choco %s pre-flight failed: %s — %s", action, display_name, error_msg)
-            if log_id:
-                await database.complete_action_log(log_id, "error", error_summary=error_msg)
-            return
-        if status["status"] == "offline":
-            error_msg = "Agent ist offline"
-            logger.warning("choco %s pre-flight: agent offline — %s", action, display_name)
-            if log_id:
-                await database.complete_action_log(log_id, "error", error_summary=error_msg)
-            return
-    except Exception:
-        pass  # Pre-Flight fehlgeschlagen — trotzdem versuchen
-
-    exit_code, raw_output = await _run_choco_one(agent_id, cmd)
-    soft_err = _detect_choco_soft_error(raw_output, exit_code)
-    success = exit_code in _CHOCO_SUCCESS_CODES and not soft_err
-
-    # Auto-Retry: wenn uninstall fehlschlägt UND der stdout sagt
-    # „is not installed" UND der Paket-Name endet nicht schon auf .install,
-    # versuche `<name>.install` als Fallback. Behebt Orphans aus früheren
-    # halb-fehlgeschlagenen Uninstalls (z.B. vlc weg, vlc.install noch da).
-    retried_name: str | None = None
-    if (
-        action == "uninstall"
-        and not success
-        and "is not installed" in (raw_output or "").lower()
-        and not package_name.endswith(".install")
-        and _CHOCO_NAME_RE.fullmatch(f"{package_name}.install")
-    ):
-        retry_target = f"{package_name}.install"
-        logger.info(
-            "choco uninstall: %s nicht installiert, retry mit %s",
-            package_name, retry_target,
-        )
-        retry_cmd = _build_choco_command("uninstall", retry_target)
-        retry_exit, retry_output = await _run_choco_one(agent_id, retry_cmd)
-        retry_soft_err = _detect_choco_soft_error(retry_output, retry_exit)
-        if retry_exit in _CHOCO_SUCCESS_CODES and not retry_soft_err:
-            success = True
-            raw_output = retry_output
-            soft_err = None
-            retried_name = retry_target
-        else:
-            success = False
-            soft_err = (
-                f"Weder '{package_name}' noch '{retry_target}' konnten "
-                f"deinstalliert werden. "
-                f"{retry_soft_err or (retry_output or '')[:200]}"
-            )
-
-    error_msg = soft_err if soft_err else None
-    if error_msg:
-        logger.warning(
-            "choco %s soft-error für %s auf %s: %s",
-            action, display_name, hostname, error_msg,
-        )
-    elif not success:
-        error_msg = f"choco beendete unerwartet (ExitCode {exit_code})"
-        logger.warning(
-            "choco %s fehlgeschlagen: %s auf %s — exit=%s",
-            action, display_name, hostname, exit_code,
-        )
-    else:
-        logger.info(
-            "choco %s ok: %s auf %s%s",
-            action, display_name, hostname,
-            f" (via {retried_name})" if retried_name else "",
-        )
-
-    # Tracking nur updaten wenn alles sauber durch ist
-    if success and not error_msg:
-        try:
-            if action == "install":
-                await database.set_agent_installation(agent_id, package_name, None)
-            else:
-                await database.delete_agent_installation(agent_id, package_name)
-        except Exception as e:
-            logger.warning("agent_installations update failed: %s", e)
-
-    try:
-        # Voller Output fuer das Fehler-Detail-Modal mitspeichern. Mit dem
-        # ExitCode-Tag im Header damit der Admin sofort sieht was los war.
-        full_out = (
-            f"=== choco {action} {package_name} ===\n"
-            f"ExitCode: {exit_code}\n\n"
-            f"{raw_output or '(kein Output)'}"
-        )
-        await database.upsert_action_result(
-            agent_id, package_name, error_msg,
-            full_output=full_out, action=action,
-        )
-    except Exception as e:
-        logger.warning("upsert_action_result choco failed: %s", e)
-
-    # Targeted Re-Scan via choco_scanner — refresht agent_choco_state
-    try:
-        await choco_scanner.scan_agent(agent_id)
-    except Exception as e:
-        logger.warning("post-action choco rescan failed for %s: %s", agent_id, e)
-
-    if log_id:
-        try:
-            # Nur schreiben wenn Callback nicht schon da war
-            entry = await database.get_action_log_detail(log_id)
-            if entry and entry["status"] in ("pending", "running"):
-                al_status = "error" if error_msg else "success"
-                await database.complete_action_log(
-                    log_id, al_status, exit_code=exit_code,
-                    error_summary=error_msg,
-                    stdout=raw_output or None,
-                )
-        except Exception as e:
-            logger.warning("complete_action_log choco failed: %s", e)
-
-
-# winget ExitCode der "kein Installer fuer dieses System / scope" meint.
-# Tritt auf wenn wir --scope machine erzwingen, das Paket aber nur per-user
-# installierbar ist (LastPass, Bitwarden, Firefox-per-user, 1Password-Store).
-_WINGET_NO_APPLICABLE_INSTALLER = -1978335216
-
-
-async def _run_one_winget(
-    agent_id: str, cmd: str, run_as_user: bool
-) -> tuple[int | None, str, str | None]:
-    """Einzelner Tactical run_command-Aufruf fuer eine fertige winget-
-    PowerShell. Returns (exit_code, cleaned_output, exception_msg_or_none).
-    """
-    try:
-        raw_output = await TacticalClient().run_command(
-            agent_id, cmd, timeout=60, run_as_user=run_as_user,
-        )
-        if raw_output and raw_output.startswith('"'):
-            try:
-                import json as _json
-                raw_output = _json.loads(raw_output)
-            except Exception:
-                pass
-    except Exception as e:
-        return None, "", str(e)[:300]
-    code, cleaned = _extract_exit_marker(raw_output or "")
-    return code, cleaned, None
-
-
-async def _run_winget_command_bg(
-    agent_id: str,
-    hostname: str,
-    package_name: str,
-    display_name: str,
-    cmd: str,
-    action: str,
-    winget_id: str,
-    winget_scope: str = "auto",
-    version: str | None = None,
-    log_id: int | None = None,
-):
-    """
-    Background-Task für winget install/upgrade/uninstall via Tactical run-cmd.
-    Nach Completion (egal ob ok oder Fehler) wird ein targeted Re-Scan
-    getriggert damit der Kiosk-State frisch ist — bei Fehler dokumentiert
-    der Re-Scan dass das Paket NICHT installiert ist. Bei „Soft-Errors"
-    (winget exited mit Success-Code aber druckt einen Fehler in stdout)
-    wird die Meldung in agent_scan_meta.last_action_error persistiert
-    damit das Admin-UI sie als Banner anzeigen kann.
-
-    Layer-2-Fallback:
-      winget_scope == 'auto'    → erst --scope machine (als SYSTEM), bei
-                                   ExitCode -1978335216 retry OHNE --scope
-                                   machine im User-Kontext (run_as_user).
-      winget_scope == 'machine' → nur --scope machine, kein Fallback.
-      winget_scope == 'user'    → direkt ohne --scope machine im User-Kontext.
-
-    Der uebergebene `cmd` ist der initial gebaute Wrapper. Fuer den Fallback-
-    Pfad bauen wir den user-scope-Wrapper selbst hier um Parameter zu behalten.
-    """
-    if log_id:
-        try:
-            await database.update_action_log_status(log_id, "running")
-        except Exception:
-            pass
-
-    # Pre-Flight: Agent existiert + online?
-    try:
-        agent_status = await TacticalClient().check_agent_status(agent_id)
-        if not agent_status["exists"]:
-            error_msg = f"Agent existiert nicht in Tactical (Status: {agent_status['status']})"
-            logger.warning("winget %s pre-flight failed: %s — %s", action, display_name, error_msg)
-            if log_id:
-                await database.complete_action_log(log_id, "error", error_summary=error_msg)
-            return
-        if agent_status["status"] == "offline":
-            error_msg = "Agent ist offline"
-            logger.warning("winget %s pre-flight: agent offline — %s", action, display_name)
-            if log_id:
-                await database.complete_action_log(log_id, "error", error_summary=error_msg)
-            return
-    except Exception:
-        pass
-
-    scope = (winget_scope or "auto").lower()
-    if scope not in ("auto", "machine", "user"):
-        scope = "auto"
-
-    # Uninstall ignoriert scope komplett (der Uninstall-Wrapper haengt kein
-    # --scope an; per-user ARP-Eintraege muss der User selber uninstallieren
-    # — wenn das bei uns als SYSTEM nicht geht, liefert winget
-    # NO_UNINSTALL_INFO_FOUND und der Fallback-Retry als User ist hier
-    # ebenfalls sinnvoll.)
-    if action == "uninstall":
-        # SYSTEM-Versuch zuerst, bei per-user-Fehler im User-Kontext retry.
-        first_as_user = False
-    elif scope == "user":
-        first_as_user = True
-        # Command neu bauen ohne --scope machine
-        cmd = _build_winget_command(action, winget_id, version, include_scope_machine=False)
-    else:
-        first_as_user = False
-
-    error_msg: str | None = None
-    raw_output = ""
-    exit_code, raw_output, exc = await _run_one_winget(agent_id, cmd, first_as_user)
-    if exc:
-        error_msg = exc
-
-    fallback_used = False
-
-    # Layer-2 Fallback: auto-scope + NO_APPLICABLE_INSTALLER → retry als User
-    should_fallback = (
-        scope == "auto"
-        and action in ("install", "upgrade")
-        and exit_code == _WINGET_NO_APPLICABLE_INSTALLER
-    )
-    # Uninstall-Retry: bei NO_UNINSTALL_INFO_FOUND als User versuchen
-    uninstall_fallback = (
-        action == "uninstall"
-        and exit_code is not None
-        and exit_code not in _WINGET_SUCCESS_CODES
-        and ("no uninstall information found" in (raw_output or "").lower()
-             or exit_code in (-1978335162, _WINGET_NO_APPLICABLE_INSTALLER))
-    )
-
-    if should_fallback or uninstall_fallback:
-        logger.info(
-            "winget %s per-user fallback: %s auf %s (exit=%s)",
-            action, display_name, hostname, exit_code,
-        )
-        user_cmd = (
-            _build_winget_command(action, winget_id, version, include_scope_machine=False)
-            if action != "uninstall"
-            else cmd  # uninstall-cmd ist schon scope-frei
-        )
-        retry_exit, retry_output, retry_exc = await _run_one_winget(
-            agent_id, user_cmd, run_as_user=True,
-        )
-        if retry_exc:
-            # Erster Versuch hatte vermutlich den useful output — den
-            # Retry-Exc-Text nur anhaengen als Zusatzinfo.
-            raw_output = (
-                f"{raw_output}\n"
-                f"--- per-user Retry fehlgeschlagen ---\n"
-                f"{retry_exc}"
-            )
-        else:
-            # Retry hat klare Antwort — das nehmen wir als Wahrheit.
-            fallback_used = True
-            raw_output = (
-                f"=== machine scope Versuch ===\n{raw_output}\n\n"
-                f"=== per-user fallback (run_as_user) ===\n{retry_output}"
-            )
-            exit_code = retry_exit
-
-    # Analyse Phase
-    if error_msg is None:
-        soft_err = _detect_winget_soft_error(raw_output)
-        if soft_err:
-            error_msg = soft_err
-            logger.warning(
-                "winget %s soft-error für %s auf %s (exit=%s): %s",
-                action, display_name, hostname, exit_code, soft_err,
-            )
-        elif exit_code is not None and exit_code not in _WINGET_SUCCESS_CODES:
-            # Special-Case fuer per-user-uninstall die als SYSTEM gar nicht
-            # sichtbar sind — ueberlappt mit dem uninstall_fallback oben,
-            # aber falls der Fallback auch keinen Erfolg hatte, geben wir
-            # eine hilfreiche Meldung.
-            if (
-                action == "uninstall"
-                and exit_code == -1978335162
-            ):
-                error_msg = (
-                    "winget hat keine Uninstall-Information gefunden. "
-                    "Vermutlich ein per-user Install der fuer SYSTEM nicht "
-                    "sichtbar ist — ein interaktiver User muss eingeloggt "
-                    "sein, oder das Paket ueber die Windows Apps-Liste "
-                    "entfernen."
-                )
-            else:
-                error_msg = f"winget {action} beendete mit ExitCode {exit_code}"
-            logger.warning(
-                "winget %s unhandled exit für %s auf %s: %s",
-                action, display_name, hostname, exit_code,
-            )
-        else:
-            logger.info(
-                "winget %s ok: %s auf %s%s",
-                action, display_name, hostname,
-                " (per-user fallback)" if fallback_used else "",
-            )
-
-    # Erfolg ODER „bereits vorhanden" → in agent_installations tracken.
-    # Hintergrund: winget kennt manche ARP-Pakete nur heuristisch (z.B.
-    # 1Password installiert via .exe vom Hersteller — winget findet's
-    # via DisplayName-Match, aber `winget list --id` und `winget export`
-    # zeigen es nicht). agent_winget_state bleibt dann leer und der
-    # Kiosk-Client sieht das Paket als „nicht installiert" obwohl es da
-    # ist. agent_installations dient als zweite Tracking-Quelle.
-    if not error_msg and action in ("install", "upgrade"):
-        try:
-            await database.set_agent_installation(agent_id, package_name, None)
-        except Exception as e:
-            logger.warning("agent_installations winget update failed: %s", e)
-    elif not error_msg and action == "uninstall":
-        try:
-            await database.delete_agent_installation(agent_id, package_name)
-        except Exception as e:
-            logger.warning("agent_installations winget delete failed: %s", e)
-
-    # Action-Result in scan_meta persistieren (auch bei Erfolg, dann mit error=None,
-    # damit der vorherige Fehler-Banner weggeht)
-    try:
-        scope_tag = f" scope={scope}" + (" +fallback" if fallback_used else "")
-        full_out = (
-            f"=== winget {action} {winget_id}{scope_tag} ===\n"
-            f"ExitCode: {exit_code}\n\n"
-            f"{raw_output or '(kein Output)'}"
-        )
-        await database.upsert_action_result(
-            agent_id, package_name, error_msg,
-            full_output=full_out, action=action,
-        )
-    except Exception as e:
-        logger.warning("upsert_action_result failed for %s: %s", agent_id, e)
-
-    # Targeted Re-Scan — egal ob Erfolg oder Fehler, damit DB-State korrekt ist
-    try:
-        await winget_scanner.scan_agent(agent_id)
-    except Exception as e:
-        logger.warning("post-action winget rescan failed for %s: %s", agent_id, e)
-
-    if log_id:
-        try:
-            entry = await database.get_action_log_detail(log_id)
-            if entry and entry["status"] in ("pending", "running"):
-                al_status = "error" if error_msg else "success"
-                await database.complete_action_log(
-                    log_id, al_status, exit_code=exit_code,
-                    error_summary=error_msg,
-                    stdout=raw_output or None,
-                )
-        except Exception as e:
-            logger.warning("complete_action_log winget failed: %s", e)
-
-
+# _run_choco_one, _run_choco_command_bg, _run_one_winget, _run_winget_command_bg
+# entfernt — alle Pakettypen nutzen jetzt _deliver_command_bg + Callback.
 @router.post("/install", response_model=SoftwareResponse)
 async def install_package(
     body: SoftwareRequest,
@@ -1267,14 +807,15 @@ async def install_package(
         )
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+        import json as _json
+        meta = _json.dumps({"winget_scope": scope, "winget_id": body.package_name, "version": ver})
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
-            pkg["display_name"], "winget", action, job_id=job_id,
+            pkg["display_name"], "winget", action, job_id=job_id, metadata=meta,
         )
-        _spawn_bg(_run_winget_command_bg(
+        _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, action, body.package_name,
-            winget_scope=scope, version=ver, log_id=log_id,
+            cmd, action, "winget", log_id=log_id,
         ))
         verb = "Aktualisierung" if action == "upgrade" else "Installation"
         msg = (
@@ -1296,9 +837,9 @@ async def install_package(
             agent_id, hostname, body.package_name,
             pkg["display_name"], "custom", "install", job_id=job_id,
         )
-        _spawn_bg(_run_custom_command_bg(
-            agent_id, hostname, body.package_name, pkg["display_name"], cmd, "install",
-            pkg.get("current_version_id"), log_id=log_id,
+        _spawn_bg(_deliver_command_bg(
+            agent_id, hostname, body.package_name, pkg["display_name"],
+            cmd, "install", "custom", log_id=log_id,
         ))
         msg = (
             f"Installation von '{pkg['display_name']}' auf {hostname} gestartet. "
@@ -1312,9 +853,9 @@ async def install_package(
             agent_id, hostname, body.package_name,
             pkg["display_name"], "choco", "install", job_id=job_id,
         )
-        _spawn_bg(_run_choco_command_bg(
+        _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, "install", log_id=log_id,
+            cmd, "install", "choco", log_id=log_id,
         ))
         msg = (
             f"Installation von '{pkg['display_name']}' auf {hostname} gestartet. "
@@ -1351,10 +892,9 @@ async def uninstall_package(
             agent_id, hostname, body.package_name,
             pkg["display_name"], "winget", "uninstall", job_id=job_id,
         )
-        _spawn_bg(_run_winget_command_bg(
+        _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, "uninstall", body.package_name,
-            winget_scope=scope, log_id=log_id,
+            cmd, "uninstall", "winget", log_id=log_id,
         ))
         msg = (
             f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
@@ -1383,9 +923,9 @@ async def uninstall_package(
             agent_id, hostname, body.package_name,
             pkg["display_name"], "custom", "uninstall", job_id=job_id,
         )
-        _spawn_bg(_run_custom_command_bg(
-            agent_id, hostname, body.package_name, pkg["display_name"], ps_cmd, "uninstall",
-            pkg.get("current_version_id"), log_id=log_id,
+        _spawn_bg(_deliver_command_bg(
+            agent_id, hostname, body.package_name, pkg["display_name"],
+            ps_cmd, "uninstall", "custom", log_id=log_id,
         ))
         msg = (
             f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
@@ -1399,9 +939,9 @@ async def uninstall_package(
             agent_id, hostname, body.package_name,
             pkg["display_name"], "choco", "uninstall", job_id=job_id,
         )
-        _spawn_bg(_run_choco_command_bg(
+        _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, "uninstall", log_id=log_id,
+            cmd, "uninstall", "choco", log_id=log_id,
         ))
         msg = (
             f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
@@ -1450,14 +990,15 @@ async def dispatch_install_for_agent(
         )
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+        import json as _json
+        meta = _json.dumps({"winget_scope": scope, "winget_id": package_name, "version": ver})
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
-            pkg["display_name"], "winget", action, job_id=job_id,
+            pkg["display_name"], "winget", action, job_id=job_id, metadata=meta,
         )
-        _spawn_bg(_run_winget_command_bg(
+        _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
-            cmd, action, package_name,
-            winget_scope=scope, version=ver, log_id=log_id,
+            cmd, action, "winget", log_id=log_id,
         ))
 
     elif ptype == "custom":
@@ -1472,9 +1013,9 @@ async def dispatch_install_for_agent(
             agent_id, hostname, package_name,
             pkg["display_name"], "custom", "install", job_id=job_id,
         )
-        _spawn_bg(_run_custom_command_bg(
+        _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
-            cmd, "install", pkg.get("current_version_id"), log_id=log_id,
+            cmd, "install", "custom", log_id=log_id,
         ))
         action = "install"
 
@@ -1488,9 +1029,9 @@ async def dispatch_install_for_agent(
             agent_id, hostname, package_name,
             pkg["display_name"], "choco", "install", job_id=job_id,
         )
-        _spawn_bg(_run_choco_command_bg(
+        _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
-            cmd, "install", log_id=log_id,
+            cmd, "install", "choco", log_id=log_id,
         ))
         action = "install"
 
@@ -1532,10 +1073,9 @@ async def dispatch_uninstall_for_agent(
             agent_id, hostname, package_name,
             pkg["display_name"], "winget", "uninstall", job_id=job_id,
         )
-        _spawn_bg(_run_winget_command_bg(
+        _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
-            cmd, "uninstall", package_name,
-            winget_scope=scope, log_id=log_id,
+            cmd, "uninstall", "winget", log_id=log_id,
         ))
 
     elif ptype == "custom":
@@ -1558,9 +1098,9 @@ async def dispatch_uninstall_for_agent(
             agent_id, hostname, package_name,
             pkg["display_name"], "custom", "uninstall", job_id=job_id,
         )
-        _spawn_bg(_run_custom_command_bg(
+        _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
-            ps_cmd, "uninstall", pkg.get("current_version_id"), log_id=log_id,
+            ps_cmd, "uninstall", "custom", log_id=log_id,
         ))
 
     else:
@@ -1573,9 +1113,9 @@ async def dispatch_uninstall_for_agent(
             agent_id, hostname, package_name,
             pkg["display_name"], "choco", "uninstall", job_id=job_id,
         )
-        _spawn_bg(_run_choco_command_bg(
+        _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
-            cmd, "uninstall", log_id=log_id,
+            cmd, "uninstall", "choco", log_id=log_id,
         ))
     return {"action": "uninstall", "package_name": package_name, "type": ptype}
 
@@ -1634,7 +1174,34 @@ async def receive_callback(job_id: str, body: CallbackPayload):
         stdout=body.output or None,
     )
 
-    if body.success is True:
+    # ── Soft-Error-Detection ──────────────────────────────────────────
+    pkg_type = entry["pkg_type"]
+    soft_err = None
+    if status == "success" and pkg_type == "choco":
+        soft_err = _detect_choco_soft_error(body.output or "", body.exit_code)
+    elif status == "success" and pkg_type == "winget":
+        soft_err = _detect_winget_soft_error(body.output or "")
+    if soft_err:
+        status = "error"
+        error_summary = soft_err
+        await database.complete_action_log(
+            entry["id"], "error",
+            exit_code=body.exit_code, error_summary=soft_err,
+            stdout=body.output or None,
+        )
+
+    # ── Error-Banner in scan_meta ──────────────────────────────────
+    try:
+        await database.upsert_action_result(
+            entry["agent_id"], entry["package_name"],
+            soft_err if status == "error" else None,
+            full_output=body.output or "(kein Output)", action=entry["action"],
+        )
+    except Exception as e:
+        logger.warning("upsert_action_result in callback: %s", e)
+
+    # ── Installation-Tracking ──────────────────────────────────────
+    if body.success is True and not soft_err:
         if entry["action"] in ("install", "upgrade"):
             await database.set_agent_installation(
                 entry["agent_id"], entry["package_name"], None
@@ -1644,8 +1211,67 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                 entry["agent_id"], entry["package_name"]
             )
 
+    # ── Choco .install Retry ───────────────────────────────────────
+    if (status == "error"
+        and pkg_type == "choco"
+        and entry["action"] == "uninstall"
+        and "is not installed" in (body.output or "").lower()
+        and not entry["package_name"].endswith(".install")):
+        retry_name = entry["package_name"] + ".install"
+        if _CHOCO_NAME_RE.fullmatch(retry_name):
+            logger.info("choco .install retry: %s auf %s", retry_name, entry["hostname"])
+            inner_cmd = _build_choco_command("uninstall", retry_name)
+            retry_job = _generate_job_id()
+            retry_cmd = await _build_script_and_bootstrap(inner_cmd, retry_job)
+            retry_lid = await database.create_action_log(
+                entry["agent_id"], entry["hostname"], retry_name,
+                entry["display_name"], "choco", "uninstall", job_id=retry_job,
+            )
+            _spawn_bg(_deliver_command_bg(
+                entry["agent_id"], entry["hostname"], retry_name,
+                entry["display_name"], retry_cmd, "uninstall", "choco",
+                log_id=retry_lid,
+            ))
+
+    # ── Winget per-user Retry ──────────────────────────────────────
+    if (status == "error"
+        and pkg_type == "winget"
+        and body.exit_code == _WINGET_NO_APPLICABLE_INSTALLER
+        and entry["action"] in ("install", "upgrade")):
+        import json as _json
+        meta = {}
+        try:
+            meta = _json.loads(entry.get("metadata") or "{}")
+        except Exception:
+            pass
+        if meta.get("winget_scope") == "auto" and not meta.get("is_retry"):
+            winget_id = meta.get("winget_id", entry["package_name"])
+            ver = meta.get("version")
+            logger.info("winget per-user retry: %s auf %s", winget_id, entry["hostname"])
+            inner_cmd = _build_winget_command(
+                entry["action"], winget_id, ver, include_scope_machine=False,
+            )
+            retry_job = _generate_job_id()
+            retry_cmd = await _build_script_and_bootstrap(inner_cmd, retry_job)
+            retry_meta = _json.dumps({"winget_scope": "user", "winget_id": winget_id, "is_retry": True})
+            retry_lid = await database.create_action_log(
+                entry["agent_id"], entry["hostname"], entry["package_name"],
+                entry["display_name"], "winget", entry["action"],
+                job_id=retry_job, metadata=retry_meta,
+            )
+            try:
+                await TacticalClient().run_command(
+                    entry["agent_id"], retry_cmd,
+                    shell="powershell", timeout=60, run_as_user=True,
+                )
+                await database.update_action_log_status(retry_lid, "running")
+                logger.info("winget per-user retry delivered: %s", winget_id)
+            except Exception as e:
+                logger.warning("winget per-user retry failed: %s", e)
+                await database.complete_action_log(retry_lid, "error", error_summary=str(e)[:300])
+
+    # ── Targeted Re-Scan ───────────────────────────────────────────
     try:
-        pkg_type = entry["pkg_type"]
         if pkg_type == "winget":
             await winget_scanner.scan_agent(entry["agent_id"])
         elif pkg_type == "choco":
