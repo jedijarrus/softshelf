@@ -1227,8 +1227,16 @@ async def receive_callback(job_id: str, body: CallbackPayload):
     # ── Installation-Tracking ──────────────────────────────────────
     if body.success is True and not soft_err:
         if entry["action"] in ("install", "upgrade"):
+            # current_version_id aus Paket holen damit Update-Tracking funktioniert
+            version_id = None
+            try:
+                pkg = await database.get_package(entry["package_name"])
+                if pkg:
+                    version_id = pkg.get("current_version_id")
+            except Exception:
+                pass
             await database.set_agent_installation(
-                entry["agent_id"], entry["package_name"], None
+                entry["agent_id"], entry["package_name"], version_id
             )
         elif entry["action"] == "uninstall":
             await database.delete_agent_installation(
