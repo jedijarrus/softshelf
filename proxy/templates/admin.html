@@ -5756,8 +5756,14 @@ button.outdated-badge.clickable:disabled {
 
       <div class="field" id="edit-version-pin-field" style="display:none">
         <label>Version-Pin</label>
-        <input class="input" id="edit-version-pin" placeholder="z. B. 115.0.1 — leer = immer latest" maxlength="50" style="font-family:var(--mono)">
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="input" id="edit-version-pin" placeholder="z. B. 115.0.1 — leer = immer latest" maxlength="50" style="font-family:var(--mono);flex:1">
+          <button type="button" class="btn btn-ghost btn-sm" id="edit-version-pin-toggle" onclick="toggleVersionList()" style="white-space:nowrap;font-size:12px">Versionen ▾</button>
+        </div>
         <div class="hint" id="edit-version-pin-hint">Wenn gesetzt: immer diese Version installieren, kein Auto-Upgrade.</div>
+        <div id="edit-version-list" style="display:none;max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:6px;background:var(--bg)">
+          <div style="padding:8px 12px;color:var(--fg-muted);font-size:12px">Lade…</div>
+        </div>
       </div>
 
       <div class="section-divider" id="edit-versions-divider"><span class="label">Versionen</span></div>
@@ -7859,6 +7865,40 @@ async function savePkgDetail() {
   } catch (e) {}
 }
 
+// ── Version-Picker im Edit-Panel ────────────────────────────────────────────
+let _versionListLoaded = false;
+async function toggleVersionList() {
+  const el = document.getElementById('edit-version-list');
+  const btn = document.getElementById('edit-version-pin-toggle');
+  if (el.style.display !== 'none') {
+    el.style.display = 'none';
+    btn.textContent = 'Versionen \u25be';
+    return;
+  }
+  el.style.display = '';
+  btn.textContent = 'Versionen \u25b4';
+  if (!_editingName) return;
+  el.innerHTML = '<div style="padding:8px 12px;color:var(--fg-muted);font-size:12px">Lade\u2026</div>';
+  try {
+    const r = await api('GET', `/admin/api/packages/${encodeURIComponent(_editingName)}/available-versions`);
+    const vs = r.versions || [];
+    if (!vs.length) {
+      el.innerHTML = '<div style="padding:8px 12px;color:var(--fg-muted);font-size:12px">Keine Versionen bekannt.</div>';
+      return;
+    }
+    el.innerHTML = vs.map(v =>
+      `<div style="padding:4px 12px;cursor:pointer;font-family:var(--mono);font-size:13px" class="version-pick-row" onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background=''" onclick="pickVersion(${jsStr(v)})">${esc(v)}</div>`
+    ).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="padding:8px 12px;color:var(--danger);font-size:12px">Fehler beim Laden.</div>';
+  }
+}
+function pickVersion(v) {
+  document.getElementById('edit-version-pin').value = v;
+  document.getElementById('edit-version-list').style.display = 'none';
+  document.getElementById('edit-version-pin-toggle').textContent = 'Versionen \u25be';
+}
+
 // ── Cmd+K Quick-Jump ────────────────────────────────────────────────────────
 let _qjumpIdx = 0;
 let _qjumpItems = [];
@@ -9039,6 +9079,8 @@ function openEditPanel(name) {
       ptype === 'winget'
         ? 'Wenn gesetzt: winget installiert immer diese Version, kein Auto-Upgrade.'
         : 'Wenn gesetzt: choco installiert immer diese Version via --version.';
+    document.getElementById('edit-version-list').style.display = 'none';
+    document.getElementById('edit-version-pin-toggle').textContent = 'Versionen \u25be';
   }
   // Versionen-Block fuer winget/choco ausblenden (nur custom hat Upload)
   document.getElementById('edit-versions-divider').style.display = isCustom ? '' : 'none';

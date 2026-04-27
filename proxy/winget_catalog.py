@@ -355,3 +355,40 @@ async def get_details(package_id: str) -> dict[str, Any] | None:
     if not ok:
         return None
     return await asyncio.to_thread(_query_details, pid)
+
+
+def _query_versions(package_id: str) -> list[str]:
+    if not _CACHE_DB.exists():
+        return []
+    conn = sqlite3.connect(str(_CACHE_DB))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT v.version
+            FROM manifest m
+            JOIN ids i ON i.rowid = m.id
+            JOIN versions v ON v.rowid = m.version
+            WHERE LOWER(i.id) = LOWER(?)
+            """,
+            (package_id,),
+        )
+        versions = [r[0] for r in cur.fetchall() if r[0]]
+    finally:
+        conn.close()
+    try:
+        versions.sort(key=_version_key, reverse=True)
+    except Exception:
+        versions.sort(reverse=True)
+    return versions
+
+
+async def get_versions(package_id: str) -> list[str]:
+    """Alle verfuegbaren Versionen eines winget-Pakets, absteigend sortiert."""
+    pid = (package_id or "").strip()
+    if not pid:
+        return []
+    ok = await _ensure_cache()
+    if not ok:
+        return []
+    return await asyncio.to_thread(_query_versions, pid)
