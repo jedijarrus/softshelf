@@ -190,11 +190,7 @@ class KioskTray(QObject):
             return
         if dlg.result in ("now", "auto"):
             self._api.workflow_reboot_now(run_id)
-            import subprocess
-            subprocess.Popen(
-                ["shutdown", "/r", "/t", "0"],
-                creationflags=0x08000000,  # CREATE_NO_WINDOW
-            )
+            # Server triggert shutdown via Tactical — kein lokaler shutdown noetig
         elif dlg.result == "defer":
             self._api.workflow_defer(run_id)
             # run_id aus der gesehenen Menge entfernen, damit er beim
