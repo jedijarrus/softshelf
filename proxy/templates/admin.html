@@ -13338,10 +13338,10 @@ function renderWfSteps() {
     const typeColor = s.type === 'reboot' ? 'var(--warning)' : s.type === 'script' ? 'var(--blue)' : 'var(--fg-muted)';
     let payloadFields = '';
     if (s.type === 'install') {
-      const opts = Object.values(store).filter(p => p.type !== 'custom' || p.filename).map(p =>
-        '<option value="' + esc(p.name) + '"' + (p.name === (s.payload||{}).package_name ? ' selected' : '') + '>' + esc(p.display_name) + ' (' + p.type + ')</option>'
+      const opts = Object.entries(store).filter(([,p]) => p.type !== 'custom' || p.filename).map(([key,p]) =>
+        '<option value="' + esc(key) + '"' + (key === (s.payload||{}).package_name ? ' selected' : '') + '>' + esc(p.display_name) + ' (' + p.type + ')</option>'
       ).join('');
-      payloadFields = '<select class="input" style="font-size:12px" onchange="_wfSteps[' + i + '].payload.package_name=this.value"><option value="">\u2014 Paket wählen \u2014</option>' + opts + '</select>';
+      payloadFields = '<select class="input" data-wf="package" style="font-size:12px" onchange="_wfSteps[' + i + '].payload.package_name=this.value"><option value="">\u2014 Paket wählen \u2014</option>' + opts + '</select>';
     } else if (s.type === 'script') {
       payloadFields = '<textarea class="input" rows="4" style="font-family:var(--mono);font-size:12px" placeholder="PowerShell-Code\u2026" oninput="_wfSteps[' + i + '].payload.code=this.value">' + esc((s.payload||{}).code || '') + '</textarea>';
     } else if (s.type === 'reboot') {
@@ -13357,8 +13357,8 @@ function renderWfSteps() {
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
         '<span style="cursor:grab;color:var(--fg-muted)">\u2807</span>' +
         '<span style="font-size:11px;font-weight:600;color:' + typeColor + ';text-transform:uppercase">' + esc(s.type) + '</span>' +
-        '<input class="input" style="flex:1;font-size:12px;padding:2px 6px" value="' + esc(s.label||'') + '" oninput="_wfSteps[' + i + '].label=this.value" placeholder="Step-Label\u2026">' +
-        '<select class="input" style="width:auto;font-size:11px;padding:2px 4px" onchange="_wfSteps[' + i + '].on_failure=this.value">' +
+        '<input class="input" data-wf="label" style="flex:1;font-size:12px;padding:2px 6px" value="' + esc(s.label||'') + '" oninput="_wfSteps[' + i + '].label=this.value" placeholder="Step-Label\u2026">' +
+        '<select class="input" data-wf="on_failure" style="width:auto;font-size:11px;padding:2px 4px" onchange="_wfSteps[' + i + '].on_failure=this.value">' +
           '<option value="abort"' + (s.on_failure==='abort'?' selected':'') + '>Bei Fehler: Abbruch</option>' +
           '<option value="skip"' + (s.on_failure==='skip'?' selected':'') + '>Bei Fehler: Überspringen</option>' +
           '<option value="retry:1"' + (s.on_failure==='retry:1'?' selected':'') + '>Retry 1x</option>' +
@@ -13393,28 +13393,25 @@ function _syncWfStepsFromDOM() {
   cards.forEach((card, i) => {
     if (i >= _wfSteps.length) return;
     const s = _wfSteps[i];
-    // Label
-    const labelEl = card.querySelector('input[placeholder*="Label"]');
+    const q = (sel) => card.querySelector(sel);
+    // Common fields (tagged with data-wf)
+    const labelEl = q('[data-wf="label"]');
     if (labelEl) s.label = labelEl.value;
-    // on_failure
-    const failEl = card.querySelector('select');
-    if (failEl && !failEl.classList.contains('input')) { /* skip package select */ }
-    const selects = card.querySelectorAll('select');
-    selects.forEach(sel => {
-      const opts = [...sel.options];
-      if (opts.some(o => o.value === 'abort')) s.on_failure = sel.value;
-      else if (s.type === 'install') s.payload.package_name = sel.value;
-    });
+    const failEl = q('[data-wf="on_failure"]');
+    if (failEl) s.on_failure = failEl.value;
     // Type-specific
-    if (s.type === 'script') {
-      const ta = card.querySelector('textarea');
+    if (s.type === 'install') {
+      const pkgEl = q('[data-wf="package"]');
+      if (pkgEl) s.payload.package_name = pkgEl.value;
+    } else if (s.type === 'script') {
+      const ta = q('textarea');
       if (ta) s.payload.code = ta.value;
     } else if (s.type === 'reboot') {
       const nums = card.querySelectorAll('input[type="number"]');
       if (nums[0]) s.payload.countdown = +nums[0].value;
       if (nums[1]) s.payload.max_deferrals = +nums[1].value;
       if (nums[2]) s.payload.force_after_hours = +nums[2].value;
-      const msgEl = card.querySelector('input[placeholder*="Neustart"]');
+      const msgEl = q('input[placeholder*="Neustart"]');
       if (msgEl) s.payload.message = msgEl.value;
     }
   });
