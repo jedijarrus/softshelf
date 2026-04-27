@@ -13343,21 +13343,21 @@ function renderWfSteps() {
       ).join('');
       payloadFields = '<select class="input" style="font-size:12px" onchange="_wfSteps[' + i + '].payload.package_name=this.value"><option value="">\u2014 Paket wählen \u2014</option>' + opts + '</select>';
     } else if (s.type === 'script') {
-      payloadFields = '<textarea class="input" rows="4" style="font-family:var(--mono);font-size:12px" placeholder="PowerShell-Code\u2026" onchange="_wfSteps[' + i + '].payload.code=this.value">' + esc((s.payload||{}).code || '') + '</textarea>';
+      payloadFields = '<textarea class="input" rows="4" style="font-family:var(--mono);font-size:12px" placeholder="PowerShell-Code\u2026" oninput="_wfSteps[' + i + '].payload.code=this.value">' + esc((s.payload||{}).code || '') + '</textarea>';
     } else if (s.type === 'reboot') {
       const p = s.payload || {};
       payloadFields = '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-        '<div class="field" style="flex:1;min-width:120px"><label style="font-size:11px">Countdown (s)</label><input class="input" type="number" value="' + (p.countdown||300) + '" min="60" max="86400" style="font-size:12px" onchange="_wfSteps[' + i + '].payload.countdown=+this.value"></div>' +
-        '<div class="field" style="flex:1;min-width:120px"><label style="font-size:11px">Max Verschieben</label><input class="input" type="number" value="' + (p.max_deferrals||3) + '" min="0" max="10" style="font-size:12px" onchange="_wfSteps[' + i + '].payload.max_deferrals=+this.value"></div>' +
-        '<div class="field" style="flex:1;min-width:120px"><label style="font-size:11px">Force nach (h)</label><input class="input" type="number" value="' + (p.force_after_hours||8) + '" min="1" max="72" style="font-size:12px" onchange="_wfSteps[' + i + '].payload.force_after_hours=+this.value"></div>' +
+        '<div class="field" style="flex:1;min-width:120px"><label style="font-size:11px">Countdown (s)</label><input class="input" type="number" value="' + (p.countdown||300) + '" min="60" max="86400" style="font-size:12px" oninput="_wfSteps[' + i + '].payload.countdown=+this.value"></div>' +
+        '<div class="field" style="flex:1;min-width:120px"><label style="font-size:11px">Max Verschieben</label><input class="input" type="number" value="' + (p.max_deferrals||3) + '" min="0" max="10" style="font-size:12px" oninput="_wfSteps[' + i + '].payload.max_deferrals=+this.value"></div>' +
+        '<div class="field" style="flex:1;min-width:120px"><label style="font-size:11px">Force nach (h)</label><input class="input" type="number" value="' + (p.force_after_hours||8) + '" min="1" max="72" style="font-size:12px" oninput="_wfSteps[' + i + '].payload.force_after_hours=+this.value"></div>' +
       '</div>' +
-      '<div class="field" style="margin-top:6px"><label style="font-size:11px">Meldung</label><input class="input" style="font-size:12px" value="' + esc(p.message||'') + '" onchange="_wfSteps[' + i + '].payload.message=this.value" placeholder="Neustart erforderlich\u2026"></div>';
+      '<div class="field" style="margin-top:6px"><label style="font-size:11px">Meldung</label><input class="input" style="font-size:12px" value="' + esc(p.message||'') + '" oninput="_wfSteps[' + i + '].payload.message=this.value" placeholder="Neustart erforderlich\u2026"></div>';
     }
     return '<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;position:relative" draggable="true" ondragstart="_wfDragStart(event,' + i + ')" ondragover="_wfDragOver(event,' + i + ')" ondrop="_wfDrop(event,' + i + ')">' +
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
         '<span style="cursor:grab;color:var(--fg-muted)">\u2807</span>' +
         '<span style="font-size:11px;font-weight:600;color:' + typeColor + ';text-transform:uppercase">' + esc(s.type) + '</span>' +
-        '<input class="input" style="flex:1;font-size:12px;padding:2px 6px" value="' + esc(s.label||'') + '" onchange="_wfSteps[' + i + '].label=this.value" placeholder="Step-Label\u2026">' +
+        '<input class="input" style="flex:1;font-size:12px;padding:2px 6px" value="' + esc(s.label||'') + '" oninput="_wfSteps[' + i + '].label=this.value" placeholder="Step-Label\u2026">' +
         '<select class="input" style="width:auto;font-size:11px;padding:2px 4px" onchange="_wfSteps[' + i + '].on_failure=this.value">' +
           '<option value="abort"' + (s.on_failure==='abort'?' selected':'') + '>Bei Fehler: Abbruch</option>' +
           '<option value="skip"' + (s.on_failure==='skip'?' selected':'') + '>Bei Fehler: Überspringen</option>' +
