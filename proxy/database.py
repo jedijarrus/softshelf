@@ -320,6 +320,62 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_action_log_created "
             "ON action_log(created_at)"
         )
+
+        # Workflow-Tabellen (Schritt-basierte Agent-Automatisierung)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS workflows (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                description TEXT NOT NULL DEFAULT '',
+                steps       TEXT NOT NULL DEFAULT '[]',
+                created_at  TEXT DEFAULT (datetime('now')),
+                updated_at  TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS workflow_runs (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                workflow_id      INTEGER NOT NULL REFERENCES workflows(id),
+                agent_id         TEXT NOT NULL,
+                hostname         TEXT NOT NULL DEFAULT '',
+                step_snapshot    TEXT NOT NULL,
+                current_step     INTEGER NOT NULL DEFAULT 0,
+                status           TEXT NOT NULL DEFAULT 'pending'
+                                 CHECK(status IN ('pending','running','completed','failed','timed_out','cancelled')),
+                step_state       TEXT DEFAULT '{}',
+                step_deadline_at TEXT,
+                started_at       TEXT,
+                updated_at       TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_active_run "
+            "ON workflow_runs(agent_id) WHERE status IN ('pending', 'running')"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workflow_runs_status "
+            "ON workflow_runs(status)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workflow_runs_agent "
+            "ON workflow_runs(agent_id, id DESC)"
+        )
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS agent_workflows (
+                agent_id    TEXT NOT NULL,
+                workflow_id INTEGER NOT NULL,
+                assigned_at TEXT DEFAULT (datetime('now')),
+                assigned_by TEXT,
+                PRIMARY KEY (agent_id, workflow_id),
+                FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
+                FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_workflows_wf "
+            "ON agent_workflows(workflow_id)"
+        )
+
         # Migration: job_id Spalte fuer Callback-Pattern
         async with db.execute("PRAGMA table_info(action_log)") as cur:
             al_cols_now = {row[1] for row in await cur.fetchall()}
@@ -334,6 +390,11 @@ async def init_db():
         if "metadata" not in al_cols_now:
             await db.execute(
                 "ALTER TABLE action_log ADD COLUMN metadata TEXT"
+            )
+        if "workflow_run_id" not in al_cols_now:
+            await db.execute(
+                "ALTER TABLE action_log ADD COLUMN workflow_run_id INTEGER "
+                "REFERENCES workflow_runs(id)"
             )
 
         # Migration: role-Spalte auf admin_users fuer RBAC
@@ -3144,14 +3205,17 @@ async def create_action_log(
     agent_id: str, hostname: str, package_name: str,
     display_name: str, pkg_type: str, action: str,
     job_id: str | None = None, metadata: str | None = None,
+    workflow_run_id: int | None = None,
 ) -> int:
     """INSERT pending action, returns id. Dual-write in install_log."""
     async with _db() as db:
         cur = await db.execute(
             "INSERT INTO action_log "
-            "(agent_id, hostname, package_name, display_name, pkg_type, action, job_id, metadata) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (agent_id, hostname, package_name, display_name, pkg_type, action, job_id, metadata),
+            "(agent_id, hostname, package_name, display_name, pkg_type, action, "
+            " job_id, metadata, workflow_run_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (agent_id, hostname, package_name, display_name, pkg_type, action,
+             job_id, metadata, workflow_run_id),
         )
         log_id = cur.lastrowid
         await db.execute(
@@ -3281,3 +3345,332 @@ async def cleanup_action_logs(days: int = 30) -> int:
         )
         await db.commit()
         return cur.rowcount
+
+
+# ── Workflows ─────────────────────────────────────────────────────────────────
+
+
+async def get_workflows() -> list[dict]:
+    """Alle Workflows, alphabetisch sortiert."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, name, description, steps, created_at, updated_at "
+            "FROM workflows ORDER BY name COLLATE NOCASE"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_workflow(workflow_id: int) -> dict | None:
+    """Einzelner Workflow per ID."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, name, description, steps, created_at, updated_at "
+            "FROM workflows WHERE id = ?",
+            (workflow_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def create_workflow(name: str, description: str, steps: str) -> int:
+    """Neuen Workflow anlegen. `steps` ist ein JSON-String (Liste von Step-Objekten).
+    Wirft IntegrityError bei doppeltem Name. Gibt die neue ID zurueck."""
+    async with _db() as db:
+        cur = await db.execute(
+            "INSERT INTO workflows (name, description, steps) VALUES (?, ?, ?)",
+            (name, description or "", steps or "[]"),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def update_workflow(
+    workflow_id: int, name: str, description: str, steps: str
+):
+    """Workflow-Metadaten + Steps aktualisieren. updated_at wird gesetzt."""
+    async with _db() as db:
+        await db.execute(
+            "UPDATE workflows "
+            "SET name = ?, description = ?, steps = ?, updated_at = datetime('now') "
+            "WHERE id = ?",
+            (name, description or "", steps or "[]", workflow_id),
+        )
+        await db.commit()
+
+
+async def delete_workflow(workflow_id: int):
+    """Loescht einen Workflow inkl. agent_workflows und abgeschlossener Runs.
+    Wirft ValueError wenn noch aktive (pending/running) Runs vorhanden sind."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM workflow_runs "
+            "WHERE workflow_id = ? AND status IN ('pending', 'running')",
+            (workflow_id,),
+        ) as cur:
+            active = (await cur.fetchone())[0]
+        if active:
+            raise ValueError(
+                f"Workflow hat noch {active} aktive Run(s) — erst abbrechen."
+            )
+        # workflow_runs FK auf workflows — explizit loeschen (kein ON DELETE CASCADE
+        # in der DDL, SQLite erlaubt kein nachtraegliches ALTER FOREIGN KEY).
+        # action_log.workflow_run_id wird auf NULL gesetzt damit die Logs erhalten bleiben.
+        await db.execute(
+            "UPDATE action_log SET workflow_run_id = NULL "
+            "WHERE workflow_run_id IN ("
+            "  SELECT id FROM workflow_runs WHERE workflow_id = ?"
+            ")",
+            (workflow_id,),
+        )
+        await db.execute(
+            "DELETE FROM workflow_runs WHERE workflow_id = ?", (workflow_id,)
+        )
+        await db.execute(
+            "DELETE FROM agent_workflows WHERE workflow_id = ?", (workflow_id,)
+        )
+        await db.execute("DELETE FROM workflows WHERE id = ?", (workflow_id,))
+        await db.commit()
+
+
+# ── Workflow Assignments ──────────────────────────────────────────────────────
+
+
+async def assign_workflow_to_agent(
+    agent_id: str, workflow_id: int, assigned_by: str | None = None
+) -> bool:
+    """Weist einem Agent einen Workflow zu (idempotent).
+    Gibt True zurueck wenn neu angelegt, False wenn schon vorhanden."""
+    async with _db() as db:
+        try:
+            await db.execute(
+                "INSERT INTO agent_workflows (agent_id, workflow_id, assigned_by) "
+                "VALUES (?, ?, ?)",
+                (agent_id, workflow_id, assigned_by),
+            )
+            await db.commit()
+            return True
+        except Exception:
+            return False
+
+
+async def unassign_workflow_from_agent(agent_id: str, workflow_id: int) -> bool:
+    """Entfernt Workflow-Zuweisung fuer einen Agent. True wenn vorhanden war."""
+    async with _db() as db:
+        cur = await db.execute(
+            "DELETE FROM agent_workflows WHERE agent_id = ? AND workflow_id = ?",
+            (agent_id, workflow_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def list_agent_workflows(agent_id: str) -> list[dict]:
+    """Alle Workflows die einem Agent zugewiesen sind (mit Workflow-Meta)."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT w.id, w.name, w.description, w.steps, "
+            "       aw.assigned_at, aw.assigned_by "
+            "FROM agent_workflows aw "
+            "JOIN workflows w ON w.id = aw.workflow_id "
+            "WHERE aw.agent_id = ? "
+            "ORDER BY w.name COLLATE NOCASE",
+            (agent_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_agents_for_workflow(workflow_id: int) -> list[dict]:
+    """Alle Agents denen ein bestimmter Workflow zugewiesen ist."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT a.agent_id, a.hostname, a.last_seen, aw.assigned_at "
+            "FROM agent_workflows aw "
+            "JOIN agents a ON a.agent_id = aw.agent_id "
+            "WHERE aw.workflow_id = ? "
+            "ORDER BY a.hostname",
+            (workflow_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+# ── Workflow Runs ──────────────────────────────────────────────────────────────
+
+
+async def create_workflow_run(
+    workflow_id: int, agent_id: str, hostname: str, step_snapshot: str
+) -> int:
+    """Neuen Workflow-Run anlegen. Status=running, started_at=now.
+    `step_snapshot` ist ein JSON-String (Kopie der Steps zum Zeitpunkt des Starts).
+    Gibt die neue Run-ID zurueck."""
+    async with _db() as db:
+        cur = await db.execute(
+            "INSERT INTO workflow_runs "
+            "(workflow_id, agent_id, hostname, step_snapshot, "
+            " current_step, status, started_at) "
+            "VALUES (?, ?, ?, ?, 0, 'running', datetime('now'))",
+            (workflow_id, agent_id, hostname, step_snapshot),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_workflow_run(run_id: int) -> dict | None:
+    """Einzelner Workflow-Run per ID."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, workflow_id, agent_id, hostname, step_snapshot, "
+            "       current_step, status, step_state, step_deadline_at, "
+            "       started_at, updated_at "
+            "FROM workflow_runs WHERE id = ?",
+            (run_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def get_active_run_for_agent(agent_id: str) -> dict | None:
+    """Aktiver (pending oder running) Workflow-Run fuer einen Agent.
+    Pro Agent darf es laut UNIQUE-Index nur einen geben."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, workflow_id, agent_id, hostname, step_snapshot, "
+            "       current_step, status, step_state, step_deadline_at, "
+            "       started_at, updated_at "
+            "FROM workflow_runs "
+            "WHERE agent_id = ? AND status IN ('pending', 'running')",
+            (agent_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def update_workflow_run(run_id: int, **kwargs):
+    """Flexibles Update fuer workflow_runs. updated_at wird immer gesetzt.
+
+    Unterstuetzte kwargs: status, current_step, step_state, step_deadline_at,
+    started_at. Der spezielle Sentinel-String 'SQL:datetime(now)' wird als
+    nackter SQL-Ausdruck eingefuegt statt als gebundener Parameter."""
+    if not kwargs:
+        return
+    fields: list[str] = []
+    params: list = []
+    # Spezielle SQL-Ausdruecke die nicht als Parameter gebunden werden sollen
+    _SQL_EXPRS = {"datetime('now')"}
+    for key, val in kwargs.items():
+        if isinstance(val, str) and val in _SQL_EXPRS:
+            fields.append(f"{key} = {val}")
+        else:
+            fields.append(f"{key} = ?")
+            params.append(val)
+    fields.append("updated_at = datetime('now')")
+    params.append(run_id)
+    async with _db() as db:
+        await db.execute(
+            f"UPDATE workflow_runs SET {', '.join(fields)} WHERE id = ?",
+            params,
+        )
+        await db.commit()
+
+
+async def get_workflow_runs_for_agent(
+    agent_id: str, limit: int = 20
+) -> list[dict]:
+    """Letzte Workflow-Runs eines Agents, neueste zuerst, mit Workflow-Name."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT r.id, r.workflow_id, r.agent_id, r.hostname, "
+            "       r.current_step, r.status, r.step_state, "
+            "       r.step_deadline_at, r.started_at, r.updated_at, "
+            "       w.name AS workflow_name "
+            "FROM workflow_runs r "
+            "JOIN workflows w ON w.id = r.workflow_id "
+            "WHERE r.agent_id = ? "
+            "ORDER BY r.id DESC LIMIT ?",
+            (agent_id, limit),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_overdue_workflow_runs() -> list[dict]:
+    """Laufende Runs deren step_deadline_at in der Vergangenheit liegt.
+    Wird vom Scheduler-Job fuer Timeout-Handling aufgerufen."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, workflow_id, agent_id, hostname, "
+            "       current_step, status, step_state, step_deadline_at, "
+            "       started_at, updated_at "
+            "FROM workflow_runs "
+            "WHERE status = 'running' "
+            "  AND step_deadline_at IS NOT NULL "
+            "  AND step_deadline_at < datetime('now')"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_running_workflow_runs() -> list[dict]:
+    """Alle aktuell laufenden Workflow-Runs (status=running)."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT r.id, r.workflow_id, r.agent_id, r.hostname, "
+            "       r.current_step, r.status, r.step_state, "
+            "       r.step_deadline_at, r.started_at, r.updated_at, "
+            "       w.name AS workflow_name "
+            "FROM workflow_runs r "
+            "JOIN workflows w ON w.id = r.workflow_id "
+            "WHERE r.status = 'running' "
+            "ORDER BY r.started_at"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_pending_actions_for_agent(agent_id: str) -> list[dict]:
+    """Liefert Reboot-Pending-Aktionen fuer einen Agent — aus dem aktuell
+    laufenden Workflow-Run.
+
+    Gibt eine Liste von Action-Dicts zurueck. Jedes Dict hat mindestens:
+      {type, message, countdown, can_defer}
+
+    Aktuell werden nur Schritte vom Typ 'reboot' ausgewertet, bei denen
+    der Run auf diesen Schritt wartet (current_step zeigt auf einen
+    reboot-Step der noch nicht abgeschlossen ist)."""
+    run = await get_active_run_for_agent(agent_id)
+    if not run or run["status"] != "running":
+        return []
+
+    try:
+        steps = json.loads(run["step_snapshot"] or "[]")
+    except Exception:
+        return []
+
+    step_idx = run.get("current_step", 0)
+    if step_idx < 0 or step_idx >= len(steps):
+        return []
+
+    current = steps[step_idx]
+    if current.get("type") != "reboot":
+        return []
+
+    try:
+        state = json.loads(run.get("step_state") or "{}")
+    except Exception:
+        state = {}
+
+    action = {
+        "type": "reboot",
+        "message": current.get("message", "Ein Neustart ist erforderlich."),
+        "countdown": current.get("countdown", 300),
+        "can_defer": bool(current.get("can_defer", True)),
+        "run_id": run["id"],
+        "step": step_idx,
+        "deferred_until": state.get("deferred_until"),
+    }
+    return [action]

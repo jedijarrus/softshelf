@@ -93,6 +93,39 @@ class KioskApiClient:
         except Exception:
             return False
 
+    def health_check_full(self) -> dict:
+        """Health-Check mit vollem Response-Body (pending_actions etc.)."""
+        try:
+            with self._client() as c:
+                r = c.get(f"{self._base}/api/v1/health", timeout=5)
+                if r.status_code == 200:
+                    return r.json()
+        except Exception:
+            pass
+        return {"status": "error"}
+
+    def workflow_reboot_now(self, run_id: int) -> bool:
+        try:
+            with self._client() as c:
+                r = c.post(
+                    f"{self._base}/api/v1/workflow/reboot-now/{run_id}",
+                    timeout=5,
+                )
+                return r.status_code == 200
+        except Exception:
+            return False
+
+    def workflow_defer(self, run_id: int) -> bool:
+        try:
+            with self._client() as c:
+                r = c.post(
+                    f"{self._base}/api/v1/workflow/defer/{run_id}",
+                    timeout=5,
+                )
+                return r.status_code == 200
+        except Exception:
+            return False
+
     def get_icon(self) -> bytes | None:
         """Branding-Icon vom Server laden (ICO). None wenn nicht vorhanden."""
         try:

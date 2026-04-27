@@ -963,6 +963,7 @@ async def dispatch_install_for_agent(
     hostname: str,
     pkg: dict,
     version_pin: str | None = None,
+    workflow_run_id: int | None = None,
 ) -> dict:
     """Spawned einen install (oder upgrade fuer winget) für genau ein
     (Agent, Paket)-Pair und logged in install_log.
@@ -997,6 +998,7 @@ async def dispatch_install_for_agent(
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
             pkg["display_name"], "winget", action, job_id=job_id, metadata=meta,
+            workflow_run_id=workflow_run_id,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1014,6 +1016,7 @@ async def dispatch_install_for_agent(
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
             pkg["display_name"], "custom", "install", job_id=job_id,
+            workflow_run_id=workflow_run_id,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1030,6 +1033,7 @@ async def dispatch_install_for_agent(
         log_id = await database.create_action_log(
             agent_id, hostname, package_name,
             pkg["display_name"], "choco", "install", job_id=job_id,
+            workflow_run_id=workflow_run_id,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1323,6 +1327,17 @@ async def receive_callback(job_id: str, body: CallbackPayload):
         status, entry["action"], entry["display_name"],
         entry["hostname"], body.exit_code,
     )
+
+    # ── Workflow advancement ────────────────────────────────────────
+    if entry.get("workflow_run_id"):
+        try:
+            import workflow_engine
+            await workflow_engine.advance(
+                entry["workflow_run_id"], entry["id"], status
+            )
+        except Exception:
+            logger.exception("workflow advance failed for run %s", entry.get("workflow_run_id"))
+
     return {"ok": True}
 
 
