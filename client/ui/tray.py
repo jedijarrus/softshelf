@@ -178,10 +178,22 @@ class KioskTray(QObject):
     def _on_reboot_request(self, action: dict):
         """Qt-Slot: zeigt den Reboot-Dialog und handhabt das Ergebnis."""
         from ui.reboot_dialog import RebootDialog
+        # Icon-Daten fuer den Dialog (falls Custom-Icon vom Server geladen)
+        icon_bytes = None
+        if self._custom_icon:
+            try:
+                import io
+                buf = io.BytesIO()
+                self._custom_icon.save(buf, format="PNG")
+                icon_bytes = buf.getvalue()
+            except Exception:
+                pass
         dlg = RebootDialog(
             message=action.get("message", "Neustart erforderlich."),
             countdown=action.get("countdown", 300),
             can_defer=action.get("can_defer", True),
+            app_name=self._app_name,
+            icon_data=icon_bytes,
             parent=None,
         )
         dlg.exec_()
