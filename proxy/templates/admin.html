@@ -13365,7 +13365,7 @@ function renderWfSteps() {
           '<option value="retry:2"' + (s.on_failure==='retry:2'?' selected':'') + '>Retry 2x</option>' +
           '<option value="retry:3"' + (s.on_failure==='retry:3'?' selected':'') + '>Retry 3x</option>' +
         '</select>' +
-        '<button class="icon-btn" title="Entfernen" onclick="_wfSteps.splice(' + i + ',1);renderWfSteps()">' +
+        '<button class="icon-btn" title="Entfernen" onclick="_syncWfStepsFromDOM();_wfSteps.splice(' + i + ',1);renderWfSteps()">' +
           '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>' +
         '</button>' +
       '</div>' +
@@ -13381,23 +13381,58 @@ function _wfDragOver(e, idx) { e.preventDefault(); e.dataTransfer.dropEffect = '
 function _wfDrop(e, idx) {
   e.preventDefault();
   if (_wfDragIdx < 0 || _wfDragIdx === idx) return;
+  _syncWfStepsFromDOM();
   const item = _wfSteps.splice(_wfDragIdx, 1)[0];
   _wfSteps.splice(idx, 0, item);
   _wfDragIdx = -1;
   renderWfSteps();
 }
 
+function _syncWfStepsFromDOM() {
+  const cards = document.querySelectorAll('#wf-steps-list > div[draggable]');
+  cards.forEach((card, i) => {
+    if (i >= _wfSteps.length) return;
+    const s = _wfSteps[i];
+    // Label
+    const labelEl = card.querySelector('input[placeholder*="Label"]');
+    if (labelEl) s.label = labelEl.value;
+    // on_failure
+    const failEl = card.querySelector('select');
+    if (failEl && !failEl.classList.contains('input')) { /* skip package select */ }
+    const selects = card.querySelectorAll('select');
+    selects.forEach(sel => {
+      const opts = [...sel.options];
+      if (opts.some(o => o.value === 'abort')) s.on_failure = sel.value;
+      else if (s.type === 'install') s.payload.package_name = sel.value;
+    });
+    // Type-specific
+    if (s.type === 'script') {
+      const ta = card.querySelector('textarea');
+      if (ta) s.payload.code = ta.value;
+    } else if (s.type === 'reboot') {
+      const nums = card.querySelectorAll('input[type="number"]');
+      if (nums[0]) s.payload.countdown = +nums[0].value;
+      if (nums[1]) s.payload.max_deferrals = +nums[1].value;
+      if (nums[2]) s.payload.force_after_hours = +nums[2].value;
+      const msgEl = card.querySelector('input[placeholder*="Neustart"]');
+      if (msgEl) s.payload.message = msgEl.value;
+    }
+  });
+}
+
 function addWorkflowStep(type) {
+  _syncWfStepsFromDOM();
   const defaults = {
     install: { type: 'install', label: '', payload: { package_name: '' }, on_failure: 'abort', timeout: 300 },
     script:  { type: 'script',  label: '', payload: { code: '', timeout: 120 }, on_failure: 'abort', timeout: 300 },
     reboot:  { type: 'reboot',  label: '', payload: { countdown: 300, message: '', max_deferrals: 3, force_after_hours: 8 }, on_failure: 'abort', timeout: 86400 },
   };
-  _wfSteps.push({...defaults[type]});
+  _wfSteps.push(JSON.parse(JSON.stringify(defaults[type])));
   renderWfSteps();
 }
 
 async function saveWorkflow() {
+  _syncWfStepsFromDOM();
   const name = document.getElementById('wf-name').value.trim();
   if (!name) { toast('Name ist Pflichtfeld'); return; }
   if (!_wfSteps.length) { toast('Mindestens ein Step erforderlich'); return; }
