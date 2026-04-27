@@ -1982,6 +1982,23 @@ async def set_version_pin(name: str, version: str | None):
         await db.commit()
 
 
+async def get_choco_known_versions(choco_name: str) -> list[str]:
+    """Alle bekannten Versionen eines choco-Pakets aus Fleet-Scan-Daten."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT DISTINCT installed_version FROM agent_choco_state "
+            "WHERE choco_name = ? AND installed_version IS NOT NULL "
+            "UNION "
+            "SELECT DISTINCT available_version FROM agent_choco_state "
+            "WHERE choco_name = ? AND available_version IS NOT NULL",
+            (choco_name, choco_name),
+        ) as cur:
+            rows = await cur.fetchall()
+    versions = [r[0] for r in rows if r[0]]
+    versions.sort(reverse=True)
+    return versions
+
+
 async def get_whitelisted_winget_ids() -> set[str]:
     """Set aller winget PackageIdentifier in der Whitelist — für Discovery-
     Filtering (zeige nur das was *nicht* whitelisted ist)."""
