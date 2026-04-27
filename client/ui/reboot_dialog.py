@@ -1,98 +1,229 @@
 """Reboot-Dialog mit Countdown.
 
 Wird vom Tray angezeigt wenn der Proxy einen pending Reboot meldet.
+Zeigt App-Icon, Meldung, visuellen Countdown mit Progressbar, und
+Jetzt/Verschieben Buttons.
 """
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout,
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QProgressBar,
+    QFrame,
 )
-from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtCore import QTimer, Qt, QSize
+from PyQt5.QtGui import QPixmap, QIcon
+
+
+_STYLE = """
+QDialog {
+    background: #fafafa;
+}
+QLabel#title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #18181b;
+    letter-spacing: -0.3px;
+}
+QLabel#message {
+    font-size: 13px;
+    color: #3f3f46;
+    line-height: 1.5;
+}
+QLabel#countdown {
+    font-size: 36px;
+    font-weight: 700;
+    color: #18181b;
+    font-family: 'Segoe UI', 'Consolas', monospace;
+}
+QLabel#hint {
+    font-size: 11px;
+    color: #a1a1aa;
+}
+QProgressBar {
+    border: none;
+    background: #e4e4e7;
+    border-radius: 3px;
+    height: 6px;
+    text-align: center;
+}
+QProgressBar::chunk {
+    background: #ef4444;
+    border-radius: 3px;
+}
+QPushButton#now_btn {
+    background: #18181b;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-size: 13px;
+    font-weight: 600;
+}
+QPushButton#now_btn:hover {
+    background: #27272a;
+}
+QPushButton#defer_btn {
+    background: white;
+    color: #3f3f46;
+    border: 1px solid #e4e4e7;
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-size: 13px;
+    font-weight: 500;
+}
+QPushButton#defer_btn:hover {
+    background: #f4f4f5;
+    border-color: #d4d4d8;
+}
+QFrame#separator {
+    background: #e4e4e7;
+    max-height: 1px;
+}
+"""
 
 
 class RebootDialog(QDialog):
-    """Modaler Dialog: 'Neustart erforderlich' mit Countdown."""
+    """Modaler Dialog: Neustart erforderlich mit visuellem Countdown."""
 
     def __init__(self, message: str, countdown: int, can_defer: bool,
+                 app_name: str = "", icon_data: bytes | None = None,
                  parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Neustart erforderlich")
+        self._app_name = app_name or "Software-Update"
+        self.setWindowTitle(f"{self._app_name} \u2014 Neustart")
         self.setWindowFlags(
-            self.windowFlags()
+            Qt.Dialog
             | Qt.WindowStaysOnTopHint
             | Qt.CustomizeWindowHint
             | Qt.WindowTitleHint
         )
-        self.setMinimumWidth(420)
-        self.setMaximumWidth(500)
-        self._remaining = max(countdown, 10)
-        self._result = None  # "now" | "defer" | "auto"
+        self.setFixedWidth(440)
+        self.setStyleSheet(_STYLE)
+        self._total = max(countdown, 10)
+        self._remaining = self._total
+        self._result = None
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(28, 24, 28, 24)
+        root.setSpacing(0)
 
-        # Titel
+        # -- Icon + Title Row --
+        header = QHBoxLayout()
+        header.setSpacing(14)
+
+        if icon_data:
+            try:
+                pm = QPixmap()
+                pm.loadFromData(icon_data)
+                icon_label = QLabel()
+                icon_label.setPixmap(pm.scaled(
+                    QSize(36, 36), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                ))
+                icon_label.setFixedSize(36, 36)
+                header.addWidget(icon_label)
+            except Exception:
+                pass
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(2)
         title = QLabel("Neustart erforderlich")
-        title.setFont(QFont("Segoe UI", 14, QFont.Bold))
-        layout.addWidget(title)
+        title.setObjectName("title")
+        title_col.addWidget(title)
 
-        # Meldung
-        msg_label = QLabel(
-            message or "Es wurden Updates installiert die einen Neustart erfordern."
-        )
-        msg_label.setWordWrap(True)
-        msg_label.setFont(QFont("Segoe UI", 10))
-        layout.addWidget(msg_label)
+        subtitle = QLabel(self._app_name)
+        subtitle.setStyleSheet("font-size: 11px; color: #71717a;")
+        title_col.addWidget(subtitle)
 
-        # Countdown-Anzeige
+        header.addLayout(title_col)
+        header.addStretch()
+        root.addLayout(header)
+
+        # -- Separator --
+        root.addSpacing(16)
+        sep = QFrame()
+        sep.setObjectName("separator")
+        sep.setFrameShape(QFrame.HLine)
+        root.addWidget(sep)
+        root.addSpacing(16)
+
+        # -- Message --
+        msg = QLabel(message or "Es wurden Updates installiert die einen Neustart erfordern.")
+        msg.setObjectName("message")
+        msg.setWordWrap(True)
+        root.addWidget(msg)
+
+        root.addSpacing(20)
+
+        # -- Countdown --
         self._countdown_label = QLabel()
+        self._countdown_label.setObjectName("countdown")
         self._countdown_label.setAlignment(Qt.AlignCenter)
-        self._countdown_label.setFont(QFont("Segoe UI", 28, QFont.Bold))
-        self._countdown_label.setStyleSheet("color: #e74c3c; margin: 12px 0;")
-        layout.addWidget(self._countdown_label)
+        root.addWidget(self._countdown_label)
 
-        # Hinweis-Text
-        hint = QLabel(
-            "Der Rechner wird automatisch neu gestartet\n"
-            "wenn der Countdown ablauft."
-        )
+        root.addSpacing(8)
+
+        # -- Progress Bar --
+        self._progress = QProgressBar()
+        self._progress.setRange(0, self._total)
+        self._progress.setValue(self._total)
+        self._progress.setTextVisible(False)
+        self._progress.setFixedHeight(6)
+        root.addWidget(self._progress)
+
+        root.addSpacing(6)
+
+        hint = QLabel("Automatischer Neustart wenn der Countdown abgelaufen ist")
+        hint.setObjectName("hint")
         hint.setAlignment(Qt.AlignCenter)
-        hint.setFont(QFont("Segoe UI", 9))
-        hint.setStyleSheet("color: #888;")
-        layout.addWidget(hint)
+        root.addWidget(hint)
 
-        # Buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(8)
+        root.addSpacing(20)
+
+        # -- Separator --
+        sep2 = QFrame()
+        sep2.setObjectName("separator")
+        sep2.setFrameShape(QFrame.HLine)
+        root.addWidget(sep2)
+        root.addSpacing(16)
+
+        # -- Buttons --
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
 
         if can_defer:
-            defer_btn = QPushButton("Spater")
-            defer_btn.setFont(QFont("Segoe UI", 10))
-            defer_btn.setMinimumHeight(36)
+            defer_btn = QPushButton("Verschieben")
+            defer_btn.setObjectName("defer_btn")
+            defer_btn.setCursor(Qt.PointingHandCursor)
+            defer_btn.setMinimumHeight(40)
             defer_btn.clicked.connect(self._on_defer)
-            btn_layout.addWidget(defer_btn)
+            btn_row.addWidget(defer_btn)
 
         now_btn = QPushButton("Jetzt neustarten")
-        now_btn.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        now_btn.setMinimumHeight(36)
-        now_btn.setStyleSheet(
-            "QPushButton { background: #e74c3c; color: white; border: none; "
-            "border-radius: 6px; padding: 0 20px; }"
-            "QPushButton:hover { background: #c0392b; }"
-        )
+        now_btn.setObjectName("now_btn")
+        now_btn.setCursor(Qt.PointingHandCursor)
+        now_btn.setMinimumHeight(40)
         now_btn.clicked.connect(self._on_now)
-        btn_layout.addWidget(now_btn)
+        btn_row.addWidget(now_btn)
 
-        layout.addLayout(btn_layout)
+        root.addLayout(btn_row)
 
-        # Timer
+        # -- Timer --
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(1000)
         self._update_display()
 
+        # Window icon
+        if icon_data:
+            try:
+                pm = QPixmap()
+                pm.loadFromData(icon_data)
+                self.setWindowIcon(QIcon(pm))
+            except Exception:
+                pass
+
     def _update_display(self):
         m, s = divmod(self._remaining, 60)
         self._countdown_label.setText(f"{m:02d}:{s:02d}")
+        self._progress.setValue(self._remaining)
 
     def _tick(self):
         self._remaining -= 1
@@ -114,7 +245,6 @@ class RebootDialog(QDialog):
         return self._result
 
     def closeEvent(self, event):
-        # X-Button sperren — Nutzer muss eine Wahl treffen
         if self._result is None:
             event.ignore()
         else:
