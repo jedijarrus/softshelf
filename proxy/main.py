@@ -7,7 +7,7 @@ import logging
 import os
 import re
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -30,7 +30,7 @@ from routes import packages, install, admin, register
 
 logger = logging.getLogger("softshelf")
 
-VERSION = "2.1.0"
+VERSION = "2.0.2"
 
 # /app/downloads — shared volume mit dem builder-Container
 DOWNLOADS_DIR = "/app/downloads"
@@ -366,6 +366,11 @@ async def _profile_autoupdate_job():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.init_db()
+    import workflow_engine as _workflow_engine
+    try:
+        await _workflow_engine.recover_after_restart()
+    except Exception as e:
+        logger.warning("workflow recover_after_restart fehlgeschlagen: %s", e)
     await _seed_settings_from_env()
     await admin_auth.ensure_bootstrap_admin()
     try:
@@ -486,6 +491,16 @@ async def lifespan(app: FastAPI):
         coalesce=True,
         misfire_grace_time=900,
     )
+    # Minuetlicher Timeout-Check fuer laufende Workflow-Runs.
+    scheduler.add_job(
+        _workflow_engine.check_timeouts,
+        IntervalTrigger(seconds=60),
+        id="_workflow_timeout_check",
+        name="_workflow_timeout_check",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=120,
+    )
     scheduler.start()
     app.state.scheduler = scheduler
     logger.info("APScheduler started with %d job(s)", len(scheduler.get_jobs()))
@@ -540,12 +555,29 @@ async def public_icon():
 
 
 @app.get("/api/v1/health")
-async def health():
+async def health(request: Request):
     try:
         await database.health_ping()
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"DB nicht erreichbar: {e}")
-    return {"status": "ok", "version": VERSION}
+    result: dict = {"status": "ok", "version": VERSION}
+    # Optional: wenn ein gueltiges Bearer-Token mitkommt, pending_actions mitsenden
+    try:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            import jwt as _jwt
+            from config import get_settings as _get_settings
+            token = auth_header[7:]
+            cfg = _get_settings()
+            payload = _jwt.decode(token, cfg.secret_key, algorithms=["HS256"])
+            agent_id = payload.get("agent_id")
+            if agent_id:
+                pending = await database.get_pending_actions_for_agent(agent_id)
+                if pending:
+                    result["pending_actions"] = pending
+    except Exception:
+        pass  # kein gueltiges Token — kein pending_actions, das ist ok
+    return result
 
 
 @app.get("/download/{filename}")
@@ -595,3 +627,53 @@ async def download_custom_file(sha256: str, token: str = Query(...)):
         media_type="application/octet-stream",
         filename=pkg.get("filename") or os.path.basename(path),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Workflow-Client-Endpoints (Bearer-Auth, kein Admin-Session)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_agent_from_bearer(request: Request) -> str | None:
+    """Extrahiert agent_id aus Bearer-Token ohne FastAPI-Dependency-Stack.
+    Gibt None zurueck wenn kein gueltiges Token vorhanden (statt Exception)."""
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+    try:
+        import jwt as _jwt
+        from config import get_settings as _get_settings
+        token = auth_header[7:]
+        cfg = _get_settings()
+        payload = _jwt.decode(token, cfg.secret_key, algorithms=["HS256"])
+        return payload.get("agent_id")
+    except Exception:
+        return None
+
+
+@app.post("/api/v1/workflow/reboot-now/{run_id}")
+async def workflow_reboot_now(run_id: int, request: Request):
+    """Client bestaetigt sofortigen Reboot. Prueft Bearer-Token + Run-Ownership."""
+    agent_id = _extract_agent_from_bearer(request)
+    if not agent_id:
+        raise HTTPException(status_code=401, detail="Authentifizierung erforderlich")
+    run = await database.get_workflow_run(run_id)
+    if not run or run["agent_id"] != agent_id:
+        raise HTTPException(status_code=404)
+    return {"ok": True, "action": "reboot_now"}
+
+
+@app.post("/api/v1/workflow/defer/{run_id}")
+async def workflow_defer_reboot(run_id: int, request: Request):
+    """Client verschiebt den Reboot. Inkrementiert Deferral-Zaehler im Run-State."""
+    agent_id = _extract_agent_from_bearer(request)
+    if not agent_id:
+        raise HTTPException(status_code=401, detail="Authentifizierung erforderlich")
+    run = await database.get_workflow_run(run_id)
+    if not run or run["agent_id"] != agent_id:
+        raise HTTPException(status_code=404)
+    import json as _json
+    state = _json.loads(run.get("step_state") or "{}")
+    state["deferrals"] = state.get("deferrals", 0) + 1
+    state["reboot_pending"] = False  # dismiss bis naechster Health-Poll
+    await database.update_workflow_run(run_id, step_state=_json.dumps(state))
+    return {"ok": True, "deferrals": state["deferrals"]}
