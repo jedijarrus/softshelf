@@ -48,7 +48,8 @@ def _tint_icon_red(img: Image.Image) -> Image.Image:
 class KioskTray(QObject):
     _show_signal = pyqtSignal()
     _quit_signal = pyqtSignal()
-    _health_signal = pyqtSignal(bool)  # True = online, False = offline
+    _health_signal = pyqtSignal(bool)   # True = online, False = offline
+    _reboot_signal = pyqtSignal(dict)   # pending reboot action vom Proxy
 
     def __init__(self, api: KioskApiClient, app_name: str = "Softshelf"):
         super().__init__()
@@ -65,6 +66,8 @@ class KioskTray(QObject):
         self._show_signal.connect(self._on_show)
         self._quit_signal.connect(self._on_quit)
         self._health_signal.connect(self._on_health_changed)
+        self._reboot_signal.connect(self._on_reboot_request)
+        self._shown_reboot_runs: set = set()
 
     def start(self):
         """Startet pystray im Hintergrund-Thread (blockiert NICHT)."""
@@ -103,7 +106,14 @@ class KioskTray(QObject):
         def loop():
             while not self._stop_health.is_set():
                 try:
-                    ok = self._api.health_check()
+                    data = self._api.health_check_full()
+                    ok = data.get("status") == "ok"
+                    for action in data.get("pending_actions", []):
+                        if action.get("type") == "reboot":
+                            rid = action.get("run_id")
+                            if rid and rid not in self._shown_reboot_runs:
+                                self._shown_reboot_runs.add(rid)
+                                self._reboot_signal.emit(action)
                 except Exception:
                     ok = False
                 self._health_signal.emit(ok)
@@ -164,6 +174,32 @@ class KioskTray(QObject):
 
     def _on_window_closed(self):
         self._window = None
+
+    def _on_reboot_request(self, action: dict):
+        """Qt-Slot: zeigt den Reboot-Dialog und handhabt das Ergebnis."""
+        from ui.reboot_dialog import RebootDialog
+        dlg = RebootDialog(
+            message=action.get("message", "Neustart erforderlich."),
+            countdown=action.get("countdown", 300),
+            can_defer=action.get("can_defer", True),
+            parent=None,
+        )
+        dlg.exec_()
+        run_id = action.get("run_id")
+        if not run_id:
+            return
+        if dlg.result in ("now", "auto"):
+            self._api.workflow_reboot_now(run_id)
+            import subprocess
+            subprocess.Popen(
+                ["shutdown", "/r", "/t", "0"],
+                creationflags=0x08000000,  # CREATE_NO_WINDOW
+            )
+        elif dlg.result == "defer":
+            self._api.workflow_defer(run_id)
+            # run_id aus der gesehenen Menge entfernen, damit er beim
+            # naechsten Health-Poll wieder angezeigt werden kann
+            self._shown_reboot_runs.discard(run_id)
 
     def _on_quit(self):
         parent = self._window
