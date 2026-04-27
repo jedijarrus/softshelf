@@ -309,7 +309,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
   overflow-y: auto;
   background: var(--bg-soft);
   border-right: 1px solid var(--border);
-  padding: 14px 10px;
+  padding: 16px 14px 24px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -5004,12 +5004,13 @@ button.outdated-badge.clickable:disabled {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
     Verteilung
   </button>
+  <div class="sidebar-group-label">Verwaltung</div>
   <button class="tab" data-tab="profiles" onclick="switchTab('profiles',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
     Profile
   </button>
   <button class="tab" data-tab="workflows" onclick="switchTab('workflows',this)">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
     Workflows
   </button>
   <button class="tab" data-tab="rollouts" onclick="switchTab('rollouts',this)">
@@ -13279,19 +13280,18 @@ function renderWorkflows() {
   }
   el.innerHTML = _workflows.map(wf => {
     const steps = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []);
-    const badges = steps.map(s => {
-      const cls = s.type === 'reboot' ? ' wf-reboot' : s.type === 'script' ? ' wf-script' : '';
-      return '<span class="wf-chip' + cls + '">' + esc(s.type) + '</span>';
-    }).join(' ');
+    const stepSummary = steps.map(s => s.label || s.type).join(' → ');
     return '<div class="pkg-card" style="cursor:pointer" onclick="openWorkflowEditor(' + wf.id + ')">' +
-      '<div class="pkg-card-head">' +
-        '<div class="pkg-name">' + esc(wf.name) + '</div>' +
-        '<button class="icon-btn" title="Löschen" onclick="event.stopPropagation(); deleteWorkflow(' + wf.id + ')">' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start">' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="pkg-name">' + esc(wf.name) + '</div>' +
+          (wf.description ? '<div style="font-size:12px;color:var(--fg-muted);margin-top:2px">' + esc(wf.description) + '</div>' : '') +
+        '</div>' +
+        '<button class="icon-btn" title="Löschen" onclick="event.stopPropagation(); deleteWorkflow(' + wf.id + ')" style="flex-shrink:0;margin-left:8px">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>' +
         '</button>' +
       '</div>' +
-      '<div style="font-size:12px;color:var(--fg-muted);margin-top:4px">' + esc(wf.description || '\u2014') + '</div>' +
-      '<div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap">' + badges + '</div>' +
+      '<div style="font-size:12px;color:var(--fg-muted);margin-top:6px;font-family:var(--mono)">' + esc(steps.length + ' Steps: ' + stepSummary) + '</div>' +
     '</div>';
   }).join('');
 }
