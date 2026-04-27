@@ -1444,12 +1444,21 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str, skip_final
 
     # Script speichern
     if skip_final_callback:
-        # Reboot-Steps: kein finaler Callback — der kommt erst nach dem
-        # Reboot von der Scheduled Task. Nur try/catch-Wrapper behalten.
+        # Reboot-Steps: kein finaler Callback am Ende — der kommt erst
+        # nach dem Reboot von der Scheduled Task. Aber bei FEHLER muss
+        # trotzdem ein Error-Callback gesendet werden damit der Workflow
+        # nicht ewig auf running bleibt.
         footer = (
             "\n"
             "} catch {\n"
             "    $_sfOutput.Add(\"FEHLER: $($_.Exception.Message)\")\n"
+            "    $_sfBody = @{\n"
+            "        exit_code = 1\n"
+            "        output    = ($_sfOutput -join \"`n\")\n"
+            "        success   = $false\n"
+            "        final     = $true\n"
+            "    } | ConvertTo-Json -Compress\n"
+            "    _sfPostReliable $_sfCallbackUrl $_sfBody\n"
             "}\n"
         )
     script_content = header + inner_script + footer
