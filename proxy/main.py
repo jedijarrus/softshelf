@@ -652,13 +652,25 @@ def _extract_agent_from_bearer(request: Request) -> str | None:
 
 @app.post("/api/v1/workflow/reboot-now/{run_id}")
 async def workflow_reboot_now(run_id: int, request: Request):
-    """Client bestaetigt sofortigen Reboot. Prueft Bearer-Token + Run-Ownership."""
+    """Client bestaetigt sofortigen Reboot. Triggert shutdown auf Agent via Tactical."""
     agent_id = _extract_agent_from_bearer(request)
     if not agent_id:
         raise HTTPException(status_code=401, detail="Authentifizierung erforderlich")
     run = await database.get_workflow_run(run_id)
     if not run or run["agent_id"] != agent_id:
         raise HTTPException(status_code=404)
+    # Shutdown via Tactical dispatchen
+    try:
+        from tactical_client import TacticalClient
+        tc = TacticalClient()
+        await tc.run_command(agent_id, 'shutdown /r /t 5 /d p:4:1', timeout=10)
+    except Exception as e:
+        logger.warning("reboot-now: shutdown dispatch failed: %s", e)
+    # reboot_pending entfernen damit Client Dialog nicht nochmal zeigt
+    import json
+    state = json.loads(run.get("step_state") or "{}")
+    state["reboot_triggered"] = True
+    await database.update_workflow_run(run_id, step_state=json.dumps(state))
     return {"ok": True, "action": "reboot_now"}
 
 

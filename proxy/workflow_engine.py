@@ -270,17 +270,47 @@ async def check_timeouts():
 
     Wird minuetlich aufgerufen. Overdue = status=running und
     step_deadline_at liegt in der Vergangenheit.
+
+    Zusaetzlich: Force-Reboot fuer Reboot-Steps die zu lange pending sind
+    (force_after_hours abgelaufen, kein Client hat reagiert).
     """
     try:
         overdue = await database.get_overdue_workflow_runs()
         if not overdue:
             return
         for run in overdue:
-            logger.warning(
-                "workflow run %d timeout: step=%d, deadline=%s — markiere als timed_out",
-                run["id"], run.get("current_step", 0), run.get("step_deadline_at"),
-            )
-            await database.update_workflow_run(run["id"], status="timed_out")
+            # Pruefen ob es ein Reboot-Step ist der force-reboot braucht
+            state = _parse_json(run.get("step_state"), {})
+            if state.get("reboot_pending") and not state.get("reboot_triggered"):
+                # Force-Reboot: Client hat nicht reagiert, Deadline abgelaufen
+                logger.warning(
+                    "workflow run %d: reboot force-trigger (deadline abgelaufen)",
+                    run["id"],
+                )
+                try:
+                    from tactical_client import TacticalClient
+                    tc = TacticalClient()
+                    await tc.run_command(
+                        run["agent_id"],
+                        'shutdown /r /t 60 /c "Softshelf: Erzwungener Neustart" /d p:4:1',
+                        timeout=10,
+                    )
+                    state["reboot_triggered"] = True
+                    await database.update_workflow_run(
+                        run["id"], step_state=json.dumps(state),
+                        step_deadline_at=(
+                            datetime.now(timezone.utc) + timedelta(hours=1)
+                        ).strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                except Exception as e:
+                    logger.exception("force-reboot dispatch failed for run %d: %s", run["id"], e)
+                    await database.update_workflow_run(run["id"], status="timed_out")
+            else:
+                logger.warning(
+                    "workflow run %d timeout: step=%d, deadline=%s — markiere als timed_out",
+                    run["id"], run.get("current_step", 0), run.get("step_deadline_at"),
+                )
+                await database.update_workflow_run(run["id"], status="timed_out")
     except Exception as e:
         logger.exception("check_timeouts crashed: %s", e)
 
@@ -534,10 +564,7 @@ Register-ScheduledTask -TaskName '{ps_task_name}' `
     -Settings $settings -Principal $principal -Force | Out-Null
 
 Write-Output "AtStartup Task registriert: {task_name}"
-
-# Neustart initiieren
-Write-Output "Starte Neustart in {countdown} Sekunden..."
-& shutdown /r /t {countdown} /c "{ps_shutdown_msg}" /d p:4:1
+Write-Output "Warte auf Reboot-Trigger vom Client oder Force-Timeout..."
 """
 
     try:
