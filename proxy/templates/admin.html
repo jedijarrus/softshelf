@@ -2359,6 +2359,31 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   cursor: help;
 }
 
+/* Workflow step-type chips */
+.wf-chip {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 3px;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: #525252;
+  background: #f5f5f5;
+  border: 1px solid #e5e5e5;
+}
+.wf-chip.wf-reboot {
+  color: #92400e;
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
+.wf-chip.wf-script {
+  color: #1e3a8a;
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
 .action-error-banner {
   display: flex;
   align-items: flex-start;
@@ -4983,6 +5008,10 @@ button.outdated-badge.clickable:disabled {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
     Profile
   </button>
+  <button class="tab" data-tab="workflows" onclick="switchTab('workflows',this)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    Workflows
+  </button>
   <button class="tab" data-tab="rollouts" onclick="switchTab('rollouts',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
     Rollouts
@@ -5080,6 +5109,21 @@ button.outdated-badge.clickable:disabled {
     </div>
     <div id="main-rollouts">
       <div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Lade</span></div>
+    </div>
+  </section>
+
+  <!-- WORKFLOWS -->
+  <section class="tab-pane" id="tab-workflows">
+    <div class="section-head">
+      <div><h1 class="section-title">Workflows</h1>
+        <div class="section-sub" id="wf-count">&mdash;</div></div>
+      <div class="section-actions">
+        <button class="btn btn-ghost btn-sm" onclick="loadWorkflows()">Aktualisieren</button>
+        <button class="btn btn-primary btn-sm" onclick="openWorkflowEditor(null)">Workflow erstellen</button>
+      </div>
+    </div>
+    <div id="wf-list" class="pkg-grid" style="margin-top:16px">
+      <div class="empty-state">Noch keine Workflows.</div>
     </div>
   </section>
 
@@ -5956,6 +6000,40 @@ button.outdated-badge.clickable:disabled {
   </div>
 </aside>
 
+<!-- WORKFLOW EDITOR PANEL -->
+<aside class="panel" id="wf-editor-panel">
+  <div class="panel-head">
+    <div>
+      <h2 class="panel-title" id="wf-editor-title">Workflow erstellen</h2>
+      <div class="panel-sub" id="wf-editor-sub">&mdash;</div>
+    </div>
+    <button class="panel-close" onclick="closeWorkflowEditor()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div class="panel-body">
+    <div class="field">
+      <label>Name</label>
+      <input class="input" type="text" id="wf-name" maxlength="100">
+    </div>
+    <div class="field">
+      <label>Beschreibung</label>
+      <input class="input" type="text" id="wf-desc" maxlength="500" placeholder="optional">
+    </div>
+    <div class="section-divider" style="margin-top:20px"><span class="label">Steps</span></div>
+    <div id="wf-steps-list" style="margin-bottom:12px"></div>
+    <div style="display:flex;gap:6px;margin-bottom:20px">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="addWorkflowStep('install')">+ Install</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="addWorkflowStep('script')">+ Script</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="addWorkflowStep('reboot')">+ Reboot</button>
+    </div>
+  </div>
+  <div class="panel-foot">
+    <button class="btn btn-ghost" onclick="closeWorkflowEditor()">Abbrechen</button>
+    <button class="btn btn-primary" id="wf-save-btn" onclick="saveWorkflow()">Speichern</button>
+  </div>
+</aside>
+
 <!-- PASSWORD CHANGE MODAL -->
 <div class="modal" id="password-modal">
   <div class="modal-card">
@@ -6419,6 +6497,7 @@ function switchTab(name, btn) {
   if (name === 'compliance')   loadCompliance();
   if (name === 'scheduled')    loadScheduled();
   if (name === 'rollouts')     loadRollouts();
+  if (name === 'workflows')    loadWorkflows();
   if (name === 'audit')        loadAudit();
   if (name === 'actions')      loadActionLog(true);
   if (name === 'users')        loadUsers();
@@ -10736,8 +10815,19 @@ function renderAgentDetail(softwareData, log) {
       <span class="agent-section-count">${log.length} Einträge</span>
     </div>
     <div>${logBlock}</div>
+    <div class="section-divider" style="margin-top:24px"><span class="label">Workflows</span></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+      <select class="input" id="agent-wf-select" style="flex:1;font-size:13px">
+        <option value="">— Workflow wählen —</option>
+      </select>
+      <button class="btn btn-primary btn-sm" onclick="startWorkflowOnAgent()">Starten</button>
+    </div>
+    <div id="agent-wf-runs" style="margin-bottom:16px">
+      <div class="empty-mini">Lade…</div>
+    </div>
   `;
   _applySoftwareFilter();
+  loadAgentWorkflows(_currentAgent.agent_id);
 }
 
 function _onSoftwareFilterInput() {
@@ -13166,6 +13256,251 @@ async function pollActionResult(logId, displayName) {
       }
     } catch { /* weiter pollen */ }
   }, 3000);
+}
+
+// ── Workflows ───────────────────────────────────────────────────────────
+let _workflows = [];
+let _wfEditing = null; // null = new, number = editing ID
+let _wfSteps = [];     // current editor steps
+
+async function loadWorkflows() {
+  try {
+    _workflows = await api('GET', '/admin/api/workflows');
+  } catch(e) { _workflows = []; }
+  renderWorkflows();
+}
+
+function renderWorkflows() {
+  const el = document.getElementById('wf-list');
+  document.getElementById('wf-count').textContent = _workflows.length + ' Workflow' + (_workflows.length !== 1 ? 's' : '');
+  if (!_workflows.length) {
+    el.innerHTML = '<div class="empty-state">Noch keine Workflows erstellt.</div>';
+    return;
+  }
+  el.innerHTML = _workflows.map(wf => {
+    const steps = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []);
+    const badges = steps.map(s => {
+      const cls = s.type === 'reboot' ? ' wf-reboot' : s.type === 'script' ? ' wf-script' : '';
+      return '<span class="wf-chip' + cls + '">' + esc(s.type) + '</span>';
+    }).join(' ');
+    return '<div class="pkg-card" style="cursor:pointer" onclick="openWorkflowEditor(' + wf.id + ')">' +
+      '<div class="pkg-card-head">' +
+        '<div class="pkg-name">' + esc(wf.name) + '</div>' +
+        '<button class="icon-btn" title="Löschen" onclick="event.stopPropagation(); deleteWorkflow(' + wf.id + ')">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>' +
+        '</button>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--fg-muted);margin-top:4px">' + esc(wf.description || '\u2014') + '</div>' +
+      '<div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap">' + badges + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function openWorkflowEditor(id) {
+  if (id) {
+    const wf = _workflows.find(w => w.id === id);
+    if (!wf) return;
+    _wfEditing = id;
+    document.getElementById('wf-name').value = wf.name;
+    document.getElementById('wf-desc').value = wf.description || '';
+    _wfSteps = (typeof wf.steps === 'string' ? JSON.parse(wf.steps) : wf.steps || []).map(s => ({...s}));
+    document.getElementById('wf-editor-title').textContent = 'Workflow bearbeiten';
+    document.getElementById('wf-editor-sub').textContent = 'ID ' + id;
+  } else {
+    _wfEditing = null;
+    document.getElementById('wf-name').value = '';
+    document.getElementById('wf-desc').value = '';
+    _wfSteps = [];
+    document.getElementById('wf-editor-title').textContent = 'Workflow erstellen';
+    document.getElementById('wf-editor-sub').textContent = '\u2014';
+  }
+  renderWfSteps();
+  document.getElementById('overlay').classList.add('open');
+  document.getElementById('wf-editor-panel').classList.add('open');
+}
+
+function closeWorkflowEditor() {
+  _wfEditing = null;
+  _wfSteps = [];
+  document.getElementById('wf-editor-panel').classList.remove('open');
+  document.getElementById('overlay').classList.remove('open');
+}
+
+function renderWfSteps() {
+  const el = document.getElementById('wf-steps-list');
+  if (!_wfSteps.length) {
+    el.innerHTML = '<div class="empty-mini" style="padding:12px 0">Keine Steps. Füge unten welche hinzu.</div>';
+    return;
+  }
+  el.innerHTML = _wfSteps.map((s, i) => {
+    const typeColor = s.type === 'reboot' ? 'var(--warning)' : s.type === 'script' ? 'var(--blue)' : 'var(--fg-muted)';
+    let payloadFields = '';
+    if (s.type === 'install') {
+      const opts = Object.values(store).filter(p => p.type !== 'custom' || p.filename).map(p =>
+        '<option value="' + esc(p.name) + '"' + (p.name === (s.payload||{}).package_name ? ' selected' : '') + '>' + esc(p.display_name) + ' (' + p.type + ')</option>'
+      ).join('');
+      payloadFields = '<select class="input" style="font-size:12px" onchange="_wfSteps[' + i + '].payload.package_name=this.value"><option value="">\u2014 Paket wählen \u2014</option>' + opts + '</select>';
+    } else if (s.type === 'script') {
+      payloadFields = '<textarea class="input" rows="4" style="font-family:var(--mono);font-size:12px" placeholder="PowerShell-Code\u2026" onchange="_wfSteps[' + i + '].payload.code=this.value">' + esc((s.payload||{}).code || '') + '</textarea>';
+    } else if (s.type === 'reboot') {
+      const p = s.payload || {};
+      payloadFields = '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        '<div class="field" style="flex:1;min-width:120px"><label style="font-size:11px">Countdown (s)</label><input class="input" type="number" value="' + (p.countdown||300) + '" min="60" max="86400" style="font-size:12px" onchange="_wfSteps[' + i + '].payload.countdown=+this.value"></div>' +
+        '<div class="field" style="flex:1;min-width:120px"><label style="font-size:11px">Max Verschieben</label><input class="input" type="number" value="' + (p.max_deferrals||3) + '" min="0" max="10" style="font-size:12px" onchange="_wfSteps[' + i + '].payload.max_deferrals=+this.value"></div>' +
+        '<div class="field" style="flex:1;min-width:120px"><label style="font-size:11px">Force nach (h)</label><input class="input" type="number" value="' + (p.force_after_hours||8) + '" min="1" max="72" style="font-size:12px" onchange="_wfSteps[' + i + '].payload.force_after_hours=+this.value"></div>' +
+      '</div>' +
+      '<div class="field" style="margin-top:6px"><label style="font-size:11px">Meldung</label><input class="input" style="font-size:12px" value="' + esc(p.message||'') + '" onchange="_wfSteps[' + i + '].payload.message=this.value" placeholder="Neustart erforderlich\u2026"></div>';
+    }
+    return '<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;position:relative" draggable="true" ondragstart="_wfDragStart(event,' + i + ')" ondragover="_wfDragOver(event,' + i + ')" ondrop="_wfDrop(event,' + i + ')">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+        '<span style="cursor:grab;color:var(--fg-muted)">\u2807</span>' +
+        '<span style="font-size:11px;font-weight:600;color:' + typeColor + ';text-transform:uppercase">' + esc(s.type) + '</span>' +
+        '<input class="input" style="flex:1;font-size:12px;padding:2px 6px" value="' + esc(s.label||'') + '" onchange="_wfSteps[' + i + '].label=this.value" placeholder="Step-Label\u2026">' +
+        '<select class="input" style="width:auto;font-size:11px;padding:2px 4px" onchange="_wfSteps[' + i + '].on_failure=this.value">' +
+          '<option value="abort"' + (s.on_failure==='abort'?' selected':'') + '>Bei Fehler: Abbruch</option>' +
+          '<option value="skip"' + (s.on_failure==='skip'?' selected':'') + '>Bei Fehler: Überspringen</option>' +
+          '<option value="retry:1"' + (s.on_failure==='retry:1'?' selected':'') + '>Retry 1x</option>' +
+          '<option value="retry:2"' + (s.on_failure==='retry:2'?' selected':'') + '>Retry 2x</option>' +
+          '<option value="retry:3"' + (s.on_failure==='retry:3'?' selected':'') + '>Retry 3x</option>' +
+        '</select>' +
+        '<button class="icon-btn" title="Entfernen" onclick="_wfSteps.splice(' + i + ',1);renderWfSteps()">' +
+          '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>' +
+        '</button>' +
+      '</div>' +
+      payloadFields +
+    '</div>';
+  }).join('');
+}
+
+// Drag-drop for step reordering
+let _wfDragIdx = -1;
+function _wfDragStart(e, idx) { _wfDragIdx = idx; e.dataTransfer.effectAllowed = 'move'; }
+function _wfDragOver(e, idx) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+function _wfDrop(e, idx) {
+  e.preventDefault();
+  if (_wfDragIdx < 0 || _wfDragIdx === idx) return;
+  const item = _wfSteps.splice(_wfDragIdx, 1)[0];
+  _wfSteps.splice(idx, 0, item);
+  _wfDragIdx = -1;
+  renderWfSteps();
+}
+
+function addWorkflowStep(type) {
+  const defaults = {
+    install: { type: 'install', label: '', payload: { package_name: '' }, on_failure: 'abort', timeout: 300 },
+    script:  { type: 'script',  label: '', payload: { code: '', timeout: 120 }, on_failure: 'abort', timeout: 300 },
+    reboot:  { type: 'reboot',  label: '', payload: { countdown: 300, message: '', max_deferrals: 3, force_after_hours: 8 }, on_failure: 'abort', timeout: 86400 },
+  };
+  _wfSteps.push({...defaults[type]});
+  renderWfSteps();
+}
+
+async function saveWorkflow() {
+  const name = document.getElementById('wf-name').value.trim();
+  if (!name) { toast('Name ist Pflichtfeld'); return; }
+  if (!_wfSteps.length) { toast('Mindestens ein Step erforderlich'); return; }
+  const body = { name: name, description: document.getElementById('wf-desc').value.trim(), steps: _wfSteps };
+  const btn = document.getElementById('wf-save-btn');
+  btn.disabled = true;
+  try {
+    if (_wfEditing) {
+      await api('PATCH', '/admin/api/workflows/' + _wfEditing, body);
+    } else {
+      await api('POST', '/admin/api/workflows', body);
+    }
+    toast('Workflow gespeichert');
+    closeWorkflowEditor();
+    loadWorkflows();
+  } catch(e) {} finally { btn.disabled = false; }
+}
+
+async function deleteWorkflow(id) {
+  try {
+    await api('DELETE', '/admin/api/workflows/' + id);
+    toast('Workflow gelöscht');
+    loadWorkflows();
+  } catch(e) {}
+}
+
+// ── Agent Detail: Workflows ─────────────────────────────────────────────
+async function loadAgentWorkflows(agentId) {
+  // Populate dropdown
+  try {
+    if (!_workflows.length) _workflows = await api('GET', '/admin/api/workflows');
+  } catch(e) {}
+  const sel = document.getElementById('agent-wf-select');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">\u2014 Workflow wählen \u2014</option>' +
+    _workflows.map(w => '<option value="' + w.id + '">' + esc(w.name) + '</option>').join('');
+
+  // Load runs
+  try {
+    const runs = await api('GET', '/admin/api/agents/' + encodeURIComponent(agentId) + '/workflow-runs');
+    renderAgentWorkflowRuns(runs);
+  } catch(e) {
+    document.getElementById('agent-wf-runs').innerHTML = '<div class="empty-mini">Fehler beim Laden.</div>';
+  }
+}
+
+function renderAgentWorkflowRuns(runs) {
+  const el = document.getElementById('agent-wf-runs');
+  if (!el) return;
+  if (!runs.length) {
+    el.innerHTML = '<div class="empty-mini">Keine Workflow-Runs.</div>';
+    return;
+  }
+  el.innerHTML = runs.map(r => {
+    const steps = typeof r.step_snapshot === 'string' ? JSON.parse(r.step_snapshot || '[]') : (r.step_snapshot || []);
+    const total = steps.length;
+    const current = r.current_step || 0;
+    const pct = total ? Math.round((Math.min(current, total) / total) * 100) : 0;
+    const statusColors = {completed:'var(--green)',failed:'var(--danger)',timed_out:'var(--warning)',cancelled:'var(--fg-muted)',running:'var(--blue)',pending:'var(--fg-muted)'};
+    const color = statusColors[r.status] || 'var(--fg-muted)';
+    const statusLabel = {completed:'Abgeschlossen',failed:'Fehlgeschlagen',timed_out:'Timeout',cancelled:'Abgebrochen',running:'Läuft',pending:'Wartend'}[r.status] || r.status;
+    const stepLabel = current < total ? (steps[current].label || steps[current].type) : '\u2014';
+    const cancelBtn = (r.status === 'running' || r.status === 'pending')
+      ? '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="cancelWorkflowRun(' + r.id + ')">Abbrechen</button>'
+      : '';
+    return '<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:6px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center">' +
+        '<div>' +
+          '<span style="font-weight:600;font-size:13px">' + esc(r.workflow_name || 'Workflow #'+r.workflow_id) + '</span>' +
+          '<span style="font-size:11px;color:' + color + ';margin-left:8px;font-weight:600">' + esc(statusLabel) + '</span>' +
+        '</div>' +
+        cancelBtn +
+      '</div>' +
+      (r.status === 'running'
+        ? '<div style="margin-top:6px">' +
+            '<div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden">' +
+              '<div style="height:100%;width:' + pct + '%;background:var(--blue);border-radius:2px;transition:width 0.3s"></div>' +
+            '</div>' +
+            '<div style="font-size:11px;color:var(--fg-muted);margin-top:4px">Step ' + (current+1) + '/' + total + ': ' + esc(stepLabel) + '</div>' +
+          '</div>'
+        : '<div style="font-size:11px;color:var(--fg-muted);margin-top:4px">' + total + ' Steps, ' +
+          (r.status === 'completed' ? 'alle abgeschlossen' : current + '/' + total + ' durchgelaufen') + '</div>'
+      ) +
+    '</div>';
+  }).join('');
+}
+
+async function startWorkflowOnAgent() {
+  const sel = document.getElementById('agent-wf-select');
+  const wfId = parseInt(sel.value);
+  if (!wfId) { toast('Bitte Workflow wählen'); return; }
+  if (!_currentAgent) return;
+  try {
+    await api('POST', '/admin/api/agents/' + encodeURIComponent(_currentAgent.agent_id) + '/start-workflow', {workflow_id: wfId});
+    toast('Workflow gestartet');
+    loadAgentWorkflows(_currentAgent.agent_id);
+  } catch(e) {}
+}
+
+async function cancelWorkflowRun(runId) {
+  try {
+    await api('DELETE', '/admin/api/workflow-runs/' + runId);
+    toast('Workflow abgebrochen');
+    if (_currentAgent) loadAgentWorkflows(_currentAgent.agent_id);
+  } catch(e) {}
 }
 
 function _createPersistentToast(msg) {

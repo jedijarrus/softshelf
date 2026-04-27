@@ -5110,3 +5110,173 @@ async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentR
         cmd, "uninstall", "winget", log_id=log_id,
     ))
     return {"ok": True, "agent": agent["hostname"]}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Workflows — CRUD + Run-Management
+# ─────────────────────────────────────────────────────────────────────────────
+
+import json as _json
+import workflow_engine
+
+
+class WorkflowStep(BaseModel):
+    type: str
+    label: str = ""
+    payload: dict = {}
+    on_failure: str = "abort"
+    timeout: int = 3600
+
+    @field_validator("type")
+    @classmethod
+    def _check_type(cls, v: str) -> str:
+        if v not in ("install", "script", "reboot"):
+            raise ValueError("type muss install, script oder reboot sein")
+        return v
+
+    @field_validator("on_failure")
+    @classmethod
+    def _check_policy(cls, v: str) -> str:
+        if v not in ("abort", "skip") and not re.fullmatch(r"retry:[1-5]", v):
+            raise ValueError("on_failure muss abort, skip oder retry:N sein")
+        return v
+
+
+class WorkflowBody(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=500)
+    steps: list[WorkflowStep] = []
+
+
+class StartWorkflowBody(BaseModel):
+    workflow_id: int
+
+
+@router.get("/admin/api/workflows", dependencies=[Depends(_require_admin)])
+async def list_workflows():
+    """Alle Workflows, sortiert nach Name."""
+    rows = await database.get_workflows()
+    for r in rows:
+        try:
+            r["steps"] = _json.loads(r.get("steps") or "[]")
+        except Exception:
+            r["steps"] = []
+    return rows
+
+
+@router.post("/admin/api/workflows", dependencies=[Depends(_require_admin)])
+async def create_workflow(body: WorkflowBody):
+    """Neuen Workflow anlegen."""
+    steps_json = _json.dumps([s.model_dump() for s in body.steps])
+    try:
+        wid = await database.create_workflow(body.name, body.description, steps_json)
+    except Exception as e:
+        if "UNIQUE" in str(e):
+            raise HTTPException(status_code=409, detail="Ein Workflow mit diesem Namen existiert bereits.")
+        raise HTTPException(status_code=500, detail=str(e))
+    row = await database.get_workflow(wid)
+    if row:
+        try:
+            row["steps"] = _json.loads(row.get("steps") or "[]")
+        except Exception:
+            row["steps"] = []
+    return row
+
+
+@router.patch("/admin/api/workflows/{wid}", dependencies=[Depends(_require_admin)])
+async def update_workflow(wid: int, body: WorkflowBody):
+    """Workflow-Meta + Steps aktualisieren."""
+    existing = await database.get_workflow(wid)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
+    steps_json = _json.dumps([s.model_dump() for s in body.steps])
+    try:
+        await database.update_workflow(wid, body.name, body.description, steps_json)
+    except Exception as e:
+        if "UNIQUE" in str(e):
+            raise HTTPException(status_code=409, detail="Ein Workflow mit diesem Namen existiert bereits.")
+        raise HTTPException(status_code=500, detail=str(e))
+    row = await database.get_workflow(wid)
+    if row:
+        try:
+            row["steps"] = _json.loads(row.get("steps") or "[]")
+        except Exception:
+            row["steps"] = []
+    return row
+
+
+@router.delete("/admin/api/workflows/{wid}", dependencies=[Depends(_require_admin)])
+async def delete_workflow(wid: int):
+    """Workflow loeschen. 409 wenn noch aktive Runs laufen."""
+    existing = await database.get_workflow(wid)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
+    try:
+        await database.delete_workflow(wid)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"ok": True}
+
+
+@router.get("/admin/api/workflows/{wid}/runs", dependencies=[Depends(_require_admin)])
+async def get_workflow_runs(wid: int, limit: int = Query(default=50, ge=1, le=500)):
+    """Letzte Runs fuer einen Workflow."""
+    existing = await database.get_workflow(wid)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
+    async with database._db() as db:
+        db.row_factory = __import__("aiosqlite").Row
+        async with db.execute(
+            "SELECT r.id, r.workflow_id, r.agent_id, r.hostname, "
+            "       r.current_step, r.status, r.step_state, "
+            "       r.step_deadline_at, r.started_at, r.updated_at "
+            "FROM workflow_runs r "
+            "WHERE r.workflow_id = ? "
+            "ORDER BY r.id DESC LIMIT ?",
+            (wid, limit),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+    return rows
+
+
+@router.post(
+    "/admin/api/agents/{agent_id}/start-workflow",
+    dependencies=[Depends(_require_admin)],
+)
+async def start_workflow_on_agent(agent_id: str, body: StartWorkflowBody):
+    """Startet einen Workflow auf einem Agent. 409 wenn bereits ein Run laeuft."""
+    if not _AGENT_ID_RE.fullmatch(agent_id):
+        raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
+    agent = await _resolve_agent(agent_id)
+    wf = await database.get_workflow(body.workflow_id)
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
+    run_id = await workflow_engine.start_workflow(
+        body.workflow_id, agent_id, agent["hostname"]
+    )
+    return {"ok": True, "run_id": run_id}
+
+
+@router.delete(
+    "/admin/api/workflow-runs/{run_id}",
+    dependencies=[Depends(_require_admin)],
+)
+async def cancel_workflow_run(run_id: int):
+    """Bricht einen laufenden Workflow-Run ab."""
+    run = await database.get_workflow_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run nicht gefunden")
+    await workflow_engine.cancel(run_id)
+    return {"ok": True}
+
+
+@router.get(
+    "/admin/api/agents/{agent_id}/workflow-runs",
+    dependencies=[Depends(_require_admin)],
+)
+async def get_agent_workflow_runs(agent_id: str, limit: int = Query(default=20, ge=1, le=200)):
+    """Letzte Workflow-Runs eines Agents."""
+    if not _AGENT_ID_RE.fullmatch(agent_id):
+        raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
+    rows = await database.get_workflow_runs_for_agent(agent_id, limit=limit)
+    return rows
