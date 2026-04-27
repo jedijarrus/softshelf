@@ -48,10 +48,20 @@ from a browser.
   which version, and lets an admin push updates to every outdated endpoint
   with a single click. For winget packages the upgrade state comes straight
   from `winget upgrade`, no manual tracking needed.
+- **Version pinning** for winget and Chocolatey packages — lock any package to
+  a specific version without touching the per-agent state. A version picker in
+  the edit panel shows the versions available in the catalog (winget) or seen
+  across the fleet (choco). Set to *latest* to unpin.
+- **Workflows** — multi-step automation sequences you can define once and
+  run on any agent. Three step types: *install* (any whitelisted package),
+  *script* (inline PowerShell), and *reboot* (shows a countdown dialog to the
+  logged-in user, with a configurable force-timeout if nobody clicks). Steps
+  have configurable failure policies (abort / skip / retry:N). The engine
+  survives container restarts and handles missed deadlines.
 - **Admin UI** in the browser: search Chocolatey + winget, enable/disable
   packages, upload custom installers, browse a per-agent software detail page
   with install/upgrade/uninstall buttons, watch the distribution tab, browse
-  the audit log.
+  the audit log, build and run workflows.
 - **Self-contained clients** — a Windows tray app and a tkinter-based
   installer, built inside the repo via a Wine + PyInstaller container.
 - **CI branding** — three independent settings let you brand each surface
@@ -242,6 +252,9 @@ softshelf/
 │   ├── winget_enrichment.py # daily Tactical-scan → winget-id matcher
 │   ├── choco_scanner.py  # nightly + targeted per-agent choco scan
 │   │                     # (choco list + choco outdated)
+│   ├── workflow_engine.py # workflow orchestration: state machine, step
+│   │                     # dispatch (install/script/reboot), failure policies,
+│   │                     # timeout check, restart recovery
 │   └── Dockerfile
 ├── builder/              # Wine + PyInstaller cross-compile service
 │   ├── server.py

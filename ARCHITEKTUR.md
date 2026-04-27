@@ -1,12 +1,12 @@
 # Softshelf – Systemarchitektur
 
-**Version:** 2.0.2
-**Stand:** 2026-04-16
+**Version:** 2.2.0
+**Stand:** 2026-04-27
 
 > **Softshelf ist eine Windows-Software-Verteilungs-Plattform** mit Tactical-
 > RMM-Basis. Kern-Features: gestufte Rollouts, RBAC, Compliance-Policy,
-> Wartungsfenster, optionaler User-Self-Service. Frühere Positionierung als
-> „Self-Service-Portal" war zu eng — seit v2.0 ist Self-Service nur eines von
+> Wartungsfenster, Workflows, optionaler User-Self-Service. Fruehere Positionierung als
+> "Self-Service-Portal" war zu eng -- seit v2.0 ist Self-Service nur eines von
 > mehreren Deployment-Wegen neben Profil-Anwendung, Rollouts und
 > Compliance-Enforcement.
 
@@ -18,11 +18,13 @@
 4. [Datenbank-Schema](#datenbank-schema)
 5. [Authentifizierung & RBAC](#authentifizierung--rbac)
 6. [Paket-Pipelines](#paket-pipelines)
-7. [Phased Rollouts](#phased-rollouts)
-8. [Background-Jobs](#background-jobs-apscheduler)
-9. [API-Referenz](#api-referenz)
-10. [Security-Modell](#security-modell)
-11. [Deployment](#deployment)
+7. [Version Pinning](#version-pinning)
+8. [Phased Rollouts](#phased-rollouts)
+9. [Workflows](#workflows)
+10. [Background-Jobs](#background-jobs-apscheduler)
+11. [API-Referenz](#api-referenz)
+12. [Security-Modell](#security-modell)
+13. [Deployment](#deployment)
 
 ---
 
@@ -71,7 +73,7 @@ Background-Jobs. Auf dem Host unter `/opt/softshelf/`.
 
 | Datei | Verantwortung |
 |---|---|
-| `main.py` | FastAPI-Lifespan, Routing-Wiring, **8 APScheduler-Jobs**, public Endpoints. |
+| `main.py` | FastAPI-Lifespan, Routing-Wiring, **9 APScheduler-Jobs**, public Endpoints, Workflow-Reboot-Endpoints. |
 | `database.py` | Alle SQL + Schema-Migrations (ALTER TABLE add-column idempotent), aiosqlite-Wrapper `_db()` mit PRAGMA `foreign_keys=ON`. |
 | `config.py` | `BootstrapSettings` (pydantic, `.env`) + `RUNTIME_KEYS` dict. Runtime-Settings inkl. Rollout-Policy (Ring-Labels, Auto-Advance-Wartezeiten, Max-Fehler-Rate). |
 | `auth.py` | Machine-Token JWT (HS256), Download-Token. |
@@ -88,8 +90,9 @@ Background-Jobs. Auf dem Host unter `/opt/softshelf/`.
 | `routes/register.py` | `POST /api/v1/register`. |
 | `routes/packages.py` | `GET /api/v1/packages` — Kiosk-API mit **Phased-Rollout-Gate** (Updates nur sichtbar wenn Rollout-Phase den Agent-Ring erreicht hat) und **Hide-in-Kiosk-Filter**. |
 | `routes/install.py` | `/install` + `/uninstall` — Type-Dispatch mit Layer-2-Scope-Fallback (winget) und Ghost-Repair (choco). |
-| `routes/admin.py` | ~4300 Zeilen — alle `/admin/api/*`, RBAC-Gate, Rollout-State-Machine, Scheduled-Jobs, Compliance, Stage-Picker, Agent-Assign-Picker. |
-| `templates/admin.html` | Single-Page Admin-UI (~9500 Zeilen). Sidebar-Navigation, Dark-Mode, Cmd+K, 13 Tabs. |
+| `workflow_engine.py` | Workflow-Orchestrierung: State-Machine, Step-Dispatch (install/script/reboot), Failure-Policies, Timeout-Check, Restart-Recovery. |
+| `routes/admin.py` | ~4300 Zeilen -- alle `/admin/api/*`, RBAC-Gate, Rollout-State-Machine, Scheduled-Jobs, Compliance, Stage-Picker, Agent-Assign-Picker, Workflow-CRUD + Run-Endpoints. |
+| `templates/admin.html` | Single-Page Admin-UI (~9500 Zeilen). Sidebar-Navigation, Dark-Mode, Cmd+K, 14 Tabs inkl. Workflows. |
 | `templates/admin_help.html` | In-App-Hilfe. |
 
 ### softshelf-builder
@@ -148,7 +151,7 @@ packages
   install_args, uninstall_cmd, detection_name
   current_version_id         -- FK package_versions (nur custom)
   archive_type, entry_point
-  winget_version              -- Version-Pin (NULL = latest)
+  version_pin   TEXT          -- Version-Pin fuer winget+choco (NULL = latest); migriert aus winget_version
   winget_publisher
   winget_scope                -- 'auto'|'machine'|'user'
   required      INT           -- Compliance-Flag
@@ -179,6 +182,41 @@ agent_scan_meta           -- Per-Agent Scan/Action-Metadaten
   last_action_at, _package, _action
   last_action_error, _full_output
   last_action_error_acked_at
+
+action_log                -- Aktions-Log (install/uninstall/upgrade/run)
+  id               PK
+  agent_id, hostname, package_name, display_name
+  pkg_type, action, status
+  job_id           TEXT    -- korreliert Delivery mit Callback
+  workflow_run_id  INT FK  -- NULL fuer direkte Aktionen, gesetzt fuer Workflow-Steps
+  metadata         JSON
+```
+
+### Workflows (v2.2.0)
+
+```
+workflows
+  id          PK
+  name        TEXT UNIQUE
+  description TEXT
+  steps       JSON   -- [{type, payload, on_failure, timeout}, ...]
+
+workflow_runs
+  id             PK
+  workflow_id    FK workflows(id)
+  agent_id, hostname
+  status         TEXT  -- pending | running | completed | failed | cancelled | timed_out
+  current_step   INT   -- 0-basiert
+  step_snapshot  JSON  -- einmalig eingefroren beim Start (unveraenderlich)
+  step_state     JSON  -- ephemerer State des aktuellen Steps (z.B. retry_count, reboot_pending)
+  step_deadline_at TEXT -- ISO-Timestamp Deadline aktueller Step
+  started_at, updated_at
+
+-- Unique-Constraint: max. 1 aktiver Run pro Agent (pending/running)
+
+agent_workflows   -- welche Workflows sind einem Agent zugewiesen
+  agent_id, workflow_id FK
+  assigned_at
 ```
 
 ### Profile & Compliance
@@ -310,6 +348,28 @@ Damit sehen Agents updates erst wenn ihr Ring an der Reihe ist.
 
 ---
 
+## Version Pinning
+
+Seit v2.2.0 ersetzt `packages.version_pin` die frueheren separaten Felder
+(`winget_version` in packages, `version_pin` in profile_packages). Beides
+existiert weiterhin (profile_packages.version_pin war schon immer da), die
+Semantik ist aber jetzt einheitlich: `NULL` = latest, sonst exakter String
+der an das CLI uebergeben wird.
+
+**Endpunkte:**
+- `PATCH /admin/api/packages/{name}/version-pin` — neu, generisch fuer winget+choco
+- `PATCH /admin/api/winget/{name}/version-pin` — Legacy-Alias (unveraendert)
+
+**Verfuegbare Versionen:**
+- `GET /admin/api/packages/{name}/available-versions`
+  - winget: aus lokalem Catalog (`winget_catalog.get_versions`)
+  - choco: aus Fleet-Scan-Aggregat (`agent_choco_state` ueber alle Agents)
+
+**Dispatch:** `routes/install.py` liest `pkg.version_pin` und uebergibt
+bei gesetztem Wert `--version <pin>` an winget bzw. `--version <pin>` an choco.
+
+---
+
 ## Phased Rollouts
 
 ### State-Machine
@@ -376,6 +436,99 @@ konfigurierbar.
 
 ---
 
+## Workflows
+
+Workflows (v2.2.0) sind wiederverwendbare, mehrstufige Sequenzen von
+Aktionen die auf einem einzelnen Agent ausgefuehrt werden.
+
+### Konzept
+
+Ein **Workflow** ist eine benannte Liste von Steps (gespeichert als JSON
+in `workflows.steps`). Beim Start wird ein **Workflow-Run** angelegt, der
+den Step-Snapshot einfriert -- spaeere Edits des Workflows beeinflussen
+laufende Runs nicht.
+
+**Zulaessige Step-Typen:**
+
+| Typ | Beschreibung |
+|---|---|
+| `install` | Installiert ein Softshelf-Paket (gleicher Dispatch-Pfad wie manuell, incl. version_pin). |
+| `script` | Fuehrt beliebiges PowerShell-Inline-Script auf dem Agent aus. Code wird als temporaere .ps1 Datei geschrieben und via `-File` ausgefuehrt. |
+| `reboot` | Zeigt dem angemeldeten User einen Countdown-Dialog (QDialog, PyQt5). Der User kann sofort neu starten oder verschieben. Nach `force_after_hours` wird ein Shutdown-Befehl erzwungen. |
+
+**Failure-Policies pro Step (`on_failure`):**
+
+| Policy | Verhalten |
+|---|---|
+| `abort` (Default) | Step-Fehler beendet den ganzen Run mit status=failed. |
+| `skip` | Fehler wird ignoriert, naechster Step wird ausgefuehrt. |
+| `retry:N` | Bis zu N Wiederholungsversuche, danach abort. |
+
+### Dispatch-Fluss (workflow_engine.py)
+
+```
+start_workflow(workflow_id, agent_id)
+       │
+       ├── Pruefe aktiven Run (409 wenn bereits einer laeuft)
+       ├── Lade Workflow + Steps
+       ├── Lege workflow_run an (status=running, step_snapshot=eingefroren)
+       └── dispatch_current_step(run_id)
+                  │
+                  ├── install-Step → dispatch_install_for_agent (Standard-Install-Pfad)
+                  ├── script-Step → _build_script_and_bootstrap + _deliver_command_bg
+                  └── reboot-Step → Registriere AtStartup-Task + shutdown /r
+                                         │
+                                    Client empfaengt pending_action
+                                    via GET /api/v1/health
+                                         │
+                                    RebootDialog anzeigen
+                                    (PyQt5 Countdown)
+                                         │
+                           ┌────────────┴────────────┐
+                           │                         │
+               POST /api/v1/             POST /api/v1/
+               workflow/reboot-now/{id}  workflow/defer/{id}
+                           │
+                      Neustart durchgefuehrt
+                      AtStartup-Task sendet
+                      POST /api/v1/callback/{job_id}
+                           │
+                      advance(run_id, ...) → naechster Step
+```
+
+### Reboot-Step-Details
+
+1. Die Engine registriert via Tactical `run_command` einen
+   `AtStartup`-Scheduled-Task auf dem Agent. Dieser Task sendet nach
+   erfolgreichem Neustart einen Callback an den Proxy.
+2. Gleichzeitig wird ein `shutdown /r /t 300` angestossen (5 Min Countdown).
+3. Der Client pollt `GET /api/v1/health` und erhaelt `pending_actions` wenn
+   ein Reboot-Step laeuft. Die Tray-App oeffnet dann automatisch den
+   `RebootDialog` (PyQt5 QDialog, Countdown + Progressbar, zinc-Palette).
+4. Klick auf "Jetzt neu starten": `POST /api/v1/workflow/reboot-now/{run_id}`
+   -- loest sofortigen shutdown aus.
+5. Klick auf "Verschieben": `POST /api/v1/workflow/defer/{run_id}` -- inkrementiert
+   `deferrals`-Counter, kein sofortiger Neustart.
+6. Nach `force_after_hours` (Default 8h): APScheduler-Job `check_timeouts`
+   erkennt abgelaufene Deadline und sendet `shutdown /r /t 60` via Tactical.
+
+### Timeout und Restart-Recovery
+
+- `check_timeouts` laeuft minuetlich (APScheduler). Ueberfaellige Runs
+  (status=running + step_deadline_at in der Vergangenheit) werden auf
+  `timed_out` gesetzt, ausser beim Reboot-Step mit pending force-trigger.
+- `recover_after_restart` wird beim App-Start aufgerufen. Laufende Runs
+  mit noch gueltiger Deadline werden re-dispatched. Abgelaufene erhalten
+  status=timed_out.
+
+### Zulaessige Gleichzeitigkeit
+
+Pro Agent darf maximal **ein** aktiver Run gleichzeitig laufen
+(UNIQUE INDEX auf `workflow_runs(agent_id) WHERE status IN ('pending','running')`).
+Start-Versuch bei bereits laufendem Run → HTTP 409.
+
+---
+
 ## Background-Jobs (APScheduler)
 
 | Job-ID | Trigger | Zweck |
@@ -388,6 +541,7 @@ konfigurierbar.
 | `scheduled_jobs_tick` | Intervall 1 Min | Wartungsfenster |
 | `rollout_auto_advance` | Intervall 15 Min | Phasen-Advancement (per-Paket) |
 | `rollout_auto_start` | Intervall 15 Min | Auto-Rollout-Start (v2.0) |
+| `_workflow_timeout_check` | Intervall 1 Min | Workflow-Step-Timeouts + Force-Reboot (v2.2.0) |
 
 Alle mit `max_instances=1, coalesce=True`.
 
@@ -400,8 +554,10 @@ Alle mit `max_instances=1, coalesce=True`.
 - `POST /register` — Onboarding
 - `GET /packages` — Whitelist mit pro-Agent-State, respektiert Phased-Rollout-Gate + Hide-in-Kiosk
 - `POST /install` / `POST /uninstall`
-- `GET /health`, `GET /client-config`
+- `GET /health`, `GET /client-config` — health liefert optional `pending_actions` fuer Workflow-Reboot-Dialog
 - `GET /download/{filename}`, `GET /file/{sha256}?token=`
+- `POST /workflow/reboot-now/{run_id}` — Client bestaetigt sofortigen Neustart
+- `POST /workflow/defer/{run_id}` — Client verschiebt Reboot
 
 ### Admin-API (`/admin/api/*`, Session-Cookie, RBAC-gegatet)
 
@@ -413,7 +569,9 @@ Alle mit `max_instances=1, coalesce=True`.
 - `GET /enabled`, `POST /enable`, `PATCH /enable/{name}`, `POST /disable/{name}`
 - `POST /upload`, `POST /upload-folder`, Versions-Endpoints
 - `PATCH /packages/{name}/required` · `/staged` · `/notes` · `/hidden` · `/auto-advance`
-- `PATCH /winget/{name}/scope` · `/version-pin`
+- `PATCH /packages/{name}/version-pin` — neu v2.2.0, generisch fuer winget+choco
+- `GET /packages/{name}/available-versions` — neu v2.2.0, liefert waehlliste fuer Version-Picker
+- `PATCH /winget/{name}/scope` · `/version-pin` *(Legacy-Alias)*
 - `POST /winget/activate`, `/winget/bulk-activate`
 - `POST /packages/{name}/push-update?stage=` *(operator OK)*
 - `POST /packages/{name}/update-all?stage=` *(operator OK)*
@@ -447,6 +605,16 @@ Alle mit `max_instances=1, coalesce=True`.
 - `POST /agents/{id}/update-all` *(operator OK)*
 - `POST /agents/{id}/install-bulk` *(operator OK)*
 - `PATCH /agents/{id}/ring`, `POST /agents/{id}/revoke`, `/ban`, `/unban`, `DELETE /agents/{id}` — admin-only
+
+**Workflows (admin-only):**
+- `GET /workflows` — Liste aller Workflows
+- `POST /workflows` — Workflow anlegen
+- `PATCH /workflows/{wid}` — Workflow bearbeiten
+- `DELETE /workflows/{wid}` — Workflow loeschen (nur wenn kein aktiver Run)
+- `GET /workflows/{wid}/runs` — Run-Historie fuer einen Workflow
+- `POST /agents/{id}/start-workflow` — Workflow auf Agent starten *(operator OK)*
+- `GET /agents/{id}/workflow-runs` — aktive + abgeschlossene Runs des Agents
+- `DELETE /workflow-runs/{run_id}` — abgeschlossenen Run loeschen (Cleanup)
 
 **System (admin-only):**
 - Users-CRUD, `GET/PATCH /settings`, `POST /settings/rotate-registration-secret`

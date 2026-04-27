@@ -3,7 +3,7 @@
 <div class="doc-hero">
   <div class="doc-hero-title">Softshelf · Admin-Handbuch</div>
   <div class="doc-hero-sub">Software-Verteilung für Windows-Flotten mit optionalem Self-Service. Integriert mit Tactical RMM.</div>
-  <div class="doc-hero-meta">Version 2.1.0 &middot; Stand 24. April 2026</div>
+  <div class="doc-hero-meta">Version 2.2.0 &middot; Stand 27. April 2026</div>
 </div>
 
 <div class="doc-toc">
@@ -20,12 +20,21 @@
         <li><a href="#wf-import">Bulk-Import winget-IDs</a></li>
       </ol>
     </li>
+    <li><a href="#version-pinning">Version Pinning</a></li>
     <li><a href="#profile">Profile</a></li>
     <li><a href="#rollouts">Phased Rollouts</a>
       <ol>
-        <li><a href="#rollout-konzept">Konzept: Ringe & Phasen</a></li>
+        <li><a href="#rollout-konzept">Konzept: Ringe &amp; Phasen</a></li>
         <li><a href="#rollout-workflow">Workflow: Paket staged ausrollen</a></li>
         <li><a href="#rollout-auto">Auto-Advance-Einstellungen</a></li>
+      </ol>
+    </li>
+    <li><a href="#workflows">Workflows</a>
+      <ol>
+        <li><a href="#wf-steps">Step-Typen</a></li>
+        <li><a href="#wf-reboot">Reboot-Step im Detail</a></li>
+        <li><a href="#wf-failure">Failure-Policies</a></li>
+        <li><a href="#wf-run">Workflow starten &amp; beobachten</a></li>
       </ol>
     </li>
     <li><a href="#compliance">Compliance</a></li>
@@ -95,17 +104,18 @@
 <section id="navigation">
 <h1>Navigation & Tabs</h1>
 
-<p>Die Sidebar links ist in vier Gruppen gegliedert:</p>
+<p>Die Sidebar links ist in fünf Gruppen gegliedert:</p>
 
 <table class="doc-table">
   <thead><tr><th>Gruppe</th><th>Tab</th><th>Zweck</th></tr></thead>
   <tbody>
     <tr><td rowspan="1"></td><td><b>Übersicht</b></td><td>Dashboard: KPIs, offene Fehler, aktive Rollouts, Top-outdated.</td></tr>
-    <tr><td rowspan="4" class="doc-td-group">Software</td><td><b>Pakete</b></td><td>Whitelist verwalten: freigeben, taggen (required/staged), Scope-Einstellung, Notizen.</td></tr>
+    <tr><td rowspan="2" class="doc-td-group">Software</td><td><b>Pakete</b></td><td>Whitelist verwalten: freigeben, taggen (required/staged), Scope-Einstellung, Version-Pin, Notizen.</td></tr>
     <tr><td><b>Verteilung</b></td><td>Wer hat was: Tabelle mit Paket-State pro Flotte, Slide-Over mit Agent-Liste.</td></tr>
-    <tr><td><b>Profile</b></td><td>Paket-Bundles für Teams/Rollen. Auto-Update optional.</td></tr>
+    <tr><td rowspan="3" class="doc-td-group">Verwaltung</td><td><b>Profile</b></td><td>Paket-Bundles für Teams/Rollen. Auto-Update optional.</td></tr>
+    <tr><td><b>Workflows</b></td><td>Mehrstufige Automatisierungs-Sequenzen (install + script + reboot). Drag&amp;Drop-Editor.</td></tr>
     <tr><td><b>Rollouts</b></td><td>Phased Rollouts starten + Historie + Policy-Einstellungen.</td></tr>
-    <tr><td rowspan="2" class="doc-td-group">Flotte</td><td><b>Clients</b></td><td>Agent-Liste, pro-Agent Detail-Page mit Software-Inventur.</td></tr>
+    <tr><td rowspan="2" class="doc-td-group">Flotte</td><td><b>Clients</b></td><td>Agent-Liste, pro-Agent Detail-Page mit Software-Inventur und Workflow-Runs.</td></tr>
     <tr><td><b>Compliance</b></td><td>Required-Pakete: wer hat's nicht?</td></tr>
     <tr><td rowspan="4" class="doc-td-group">Operations</td><td><b>Fehler</b></td><td>Install-Fehler flottenweit, Erneut + Best&auml;tigen.</td></tr>
     <tr><td><b>Aktionen</b></td><td>Chronologisches Log aller Install/Uninstall/Upgrade-Aktionen mit Status, Exit-Code und vollem Output.</td></tr>
@@ -267,6 +277,43 @@
 
 <!-- ═══════════════════════════════════════════════════════════════════ -->
 
+<section id="version-pinning">
+<h1>Version Pinning</h1>
+
+<p>Winget- und Choco-Pakete werden standardmäßig auf <b>latest</b> gehalten — beim nächsten Upgrade wird die neueste verfügbare Version installiert. Mit einem <b>Version Pin</b> kannst du ein Paket auf eine bestimmte Version fixieren.</p>
+
+<h3>Pin setzen</h3>
+<ol class="doc-steps">
+  <li>Tab <b>Pakete</b> → Paket anklicken (winget oder choco) → <code>Bearbeiten</code>.</li>
+  <li>Im Bearbeitungs-Panel erscheint ein <b>Version</b>-Dropdown. Klick auf das Feld öffnet die Versions-Liste:
+    <ul>
+      <li>Winget: Versionen aus dem lokalen Catalog-Mirror.</li>
+      <li>Choco: Versionen die der Fleet-Scan auf mindestens einem Agent gesehen hat.</li>
+    </ul>
+  </li>
+  <li>Version auswählen oder manuell eingeben → <code>Speichern</code>.</li>
+</ol>
+
+<p>Der gesetzte Pin erscheint als Label <code>v2.3.1</code> in der Paket-Liste. <code>Speichern</code> ohne Auswahl setzt den Pin zurück auf <i>latest</i>.</p>
+
+<h3>Verhalten bei gesetztem Pin</h3>
+<ul>
+  <li><b>Neuinstallation</b>: winget/choco installiert exakt die gepinnte Version (<code>--version &lt;pin&gt;</code>).</li>
+  <li><b>Upgrade</b>: Upgrade wird nur ausgeführt wenn die installierte Version &ne; Pin. Ist die gepinnte Version schon drauf, wird der Upgrade-Schritt übersprungen.</li>
+  <li><b>Update-All</b> und <b>Profile-Auto-Update</b> berücksichtigen den Pin ebenfalls.</li>
+</ul>
+
+<div class="doc-callout info">
+  <b>Wichtig:</b> Version-Pin gilt fleet-weit für das Paket. Für abweichende Versionen pro Team nutze <b>Profile</b> — dort gibt es ebenfalls einen version_pin pro Profil-Eintrag.
+</div>
+
+<div class="doc-callout warn">
+  <b>Choco:</b> Die Versionen-Liste kommt aus dem Fleet-Scan (<code>agent_choco_state</code>), nicht direkt aus der Chocolatey-Registry. Wenn keine Agents das Paket installiert haben, ist die Liste leer — du kannst die Version trotzdem manuell eintippen.
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
 <section id="profile">
 <h1>Profile</h1>
 
@@ -411,6 +458,116 @@
   </tbody>
 </table>
 </section>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="workflows">
+<h1>Workflows</h1>
+
+<p class="doc-lead">Workflows sind wiederverwendbare mehrstufige Automations-Sequenzen, die auf einzelnen Agents ausgeführt werden. Typische Anwendungsfälle: komplexe Software-Setups mit Zwischenschritten, erzwungene Neustarts nach Updates, benutzerdefinierte Konfigurations-Skripte.</p>
+
+<div class="doc-callout info">
+  <b>Tab Workflows</b> (Sidebar-Gruppe <b>Verwaltung</b>) für alle Workflow-Definitionen. Workflow starten: Tab <b>Clients</b> → Agent anklicken → Abschnitt <b>Workflows</b> → <code>Starten</code>.
+</div>
+
+<section id="wf-steps">
+<h2>Step-Typen</h2>
+
+<table class="doc-table">
+  <thead><tr><th>Typ</th><th>Beschreibung</th><th>Parameter</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>install</b></td>
+      <td>Installiert ein Softshelf-Paket auf dem Agent (gleicher Dispatch-Pfad wie manuell aus der Paket-Liste — mit Output-Capture und Soft-Error-Detection).</td>
+      <td>Paket auswählen (Dropdown). Optional: version_pin für diesen Step überschreiben.</td>
+    </tr>
+    <tr>
+      <td><b>script</b></td>
+      <td>Führt ein eingebettetes PowerShell-Script auf dem Agent aus. Läuft als SYSTEM über Tactical run_command. Exit-Code 0 = Erfolg.</td>
+      <td>Freitextfeld für PS-Code. Code wird als temporäre .ps1-Datei geschrieben und mit <code>-File</code> aufgerufen, damit <code>exit N</code> den Callback-Wrapper nicht abbricht.</td>
+    </tr>
+    <tr>
+      <td><b>reboot</b></td>
+      <td>Initiiert einen Neustart. Zeigt dem angemeldeten User einen Dialog mit Countdown. Nach <code>force_after_hours</code> wird der Neustart erzwungen, auch ohne User-Reaktion.</td>
+      <td><b>force_after_hours</b> (Default 8h): Zeit bis zum Zwangs-Neustart. Ein AtStartup-Scheduled-Task sendet nach dem Hochfahren den Erfolgs-Callback.</td>
+    </tr>
+  </tbody>
+</table>
+</section>
+
+<section id="wf-reboot">
+<h2>Reboot-Step im Detail</h2>
+
+<p>Der Reboot-Step ist der komplexeste Step-Typ, weil er Client-Interaktion erfordert:</p>
+
+<ol class="doc-steps">
+  <li>Die Engine registriert einen <b>AtStartup-Scheduled-Task</b> auf dem Agent. Dieser Task sendet nach dem nächsten erfolgreich abgeschlossenen Boot einen Callback an den Proxy (bestätigt dass der Neustart stattgefunden hat).</li>
+  <li>Gleichzeitig wird ein <b>Shutdown-Countdown</b> eingeleitet (<code>shutdown /r /t 300</code> = 5 Minuten Vorlauf).</li>
+  <li>Der Kiosk-Client pollt regelmäßig <code>GET /api/v1/health</code> und erhält dabei <code>pending_actions</code>. Die Tray-App zeigt automatisch den <b>Reboot-Dialog</b> an: Countdown-Anzeige + Fortschrittsbalken.</li>
+  <li><b>„Jetzt neu starten"</b>: startet sofort (<code>shutdown /r /t 0</code>).</li>
+  <li><b>„Verschieben"</b>: schließt den Dialog für diese Runde. Der Countdown läuft weiter; bei nächstem Health-Poll erscheint der Dialog wieder.</li>
+  <li>Nach Ablauf von <code>force_after_hours</code>: der APScheduler-Job <code>_workflow_timeout_check</code> erkennt die abgelaufene Deadline und triggert einen <b>Zwangs-Neustart</b> via Tactical (<code>shutdown /r /t 60</code>). Der Run bleibt danach in einem Wartezustand bis der AtStartup-Callback eingeht.</li>
+</ol>
+
+<div class="doc-callout warn">
+  Der Reboot-Dialog erscheint nur wenn der Kiosk-Client läuft und ein User eingeloggt ist. Ohne laufenden Client kann der User den Dialog nicht sehen — der Zwangs-Neustart nach <code>force_after_hours</code> ist dann das einzige Sicherheitsnetz.
+</div>
+</section>
+
+<section id="wf-failure">
+<h2>Failure-Policies</h2>
+
+<p>Jeder Step hat eine konfigurierbare <b>on_failure</b>-Policy:</p>
+
+<table class="doc-table">
+  <thead><tr><th>Policy</th><th>Verhalten bei Step-Fehler</th></tr></thead>
+  <tbody>
+    <tr><td><code>abort</code> (Standard)</td><td>Run wird sofort mit <b>status=failed</b> beendet. Keine weiteren Steps werden ausgeführt.</td></tr>
+    <tr><td><code>skip</code></td><td>Fehler wird ignoriert, der nächste Step wird ausgeführt. Nützlich für optionale Schritte.</td></tr>
+    <tr><td><code>retry:N</code></td><td>Bis zu N Wiederholungsversuche. Nach dem N-ten Fehlversuch: abort.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section id="wf-run">
+<h2>Workflow starten &amp; beobachten</h2>
+
+<h3>Workflow anlegen</h3>
+<ol class="doc-steps">
+  <li>Tab <b>Workflows</b> → <code>+ Neuer Workflow</code>.</li>
+  <li>Name + optionale Beschreibung eingeben.</li>
+  <li>Steps per <b>Drag &amp; Drop</b> sortieren. Typ und Parameter pro Step konfigurieren.</li>
+  <li><code>Speichern</code>.</li>
+</ol>
+
+<h3>Workflow auf Agent starten</h3>
+<ol class="doc-steps">
+  <li>Tab <b>Clients</b> → Agent anklicken → Detail-Seite öffnet sich.</li>
+  <li>Abschnitt <b>Workflows</b> → Workflow aus Dropdown auswählen → <code>Starten</code>.</li>
+  <li>Der Run erscheint sofort in der Run-Liste mit Status und aktuellem Step.</li>
+</ol>
+
+<div class="doc-callout info">
+  Pro Agent kann immer nur <b>ein Workflow-Run aktiv</b> sein. Ein zweiter Start-Versuch solange ein Run läuft gibt einen Fehler — erst den laufenden Run abschließen oder abbrechen.
+</div>
+
+<h3>Run-Status</h3>
+<table class="doc-table">
+  <thead><tr><th>Status</th><th>Bedeutung</th></tr></thead>
+  <tbody>
+    <tr><td><code>running</code></td><td>Aktiver Run, wartet auf Step-Abschluss.</td></tr>
+    <tr><td><code>completed</code></td><td>Alle Steps erfolgreich abgeschlossen.</td></tr>
+    <tr><td><code>failed</code></td><td>Ein Step ist mit abort-Policy fehlgeschlagen.</td></tr>
+    <tr><td><code>cancelled</code></td><td>Manuell abgebrochen.</td></tr>
+    <tr><td><code>timed_out</code></td><td>Step-Deadline abgelaufen (kein Callback vom Agent eingegangen).</td></tr>
+  </tbody>
+</table>
+
+<h3>Run abbrechen</h3>
+<p>Im Abschnitt <b>Workflows</b> auf der Agent-Detail-Seite: <code>Abbrechen</code>-Button neben dem aktiven Run. Bereits laufende Steps auf dem Agent laufen zu Ende — nur das Weiterschalten zum nächsten Step wird verhindert.</p>
+</section>
+
 </section>
 
 <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -788,6 +945,22 @@ rsync -av /opt/softshelf/data/uploads/ backup:/backups/</pre>
     <tr>
       <td>Scheduled Job lief nicht zur eingestellten Zeit</td>
       <td>Tick läuft minuten-basiert, ±1 Min Toleranz. Bei Container-Restart innerhalb des Fensters werden Jobs beim nächsten Tick abgearbeitet.</td>
+    </tr>
+    <tr>
+      <td>Workflow-Run bleibt auf „running" stehen, kein Fortschritt</td>
+      <td>Der Agent hat keinen Callback geschickt. Mögliche Ursachen: (1) Tactical run_command konnte den Agent nicht erreichen (Agent offline). (2) Script ist abgestürzt ohne Exit-Code. (3) Die Callback-URL ist vom Agent nicht erreichbar (Proxy-URL falsch konfiguriert). Run nach Diagnose manuell abbrechen und neu starten.</td>
+    </tr>
+    <tr>
+      <td>Reboot-Dialog erscheint nicht auf dem Client</td>
+      <td>Der Kiosk-Client muss laufen und ein User muss eingeloggt sein. Prüfen: Tray-Icon vorhanden? Client pollt <code>/api/v1/health</code> alle 30s. Wenn kein Client läuft: der Zwangs-Neustart nach <code>force_after_hours</code> greift trotzdem.</td>
+    </tr>
+    <tr>
+      <td>Workflow startet nicht — „aktiver Run bereits vorhanden"</td>
+      <td>Pro Agent ist maximal ein aktiver Run erlaubt. Den laufenden Run auf der Agent-Detail-Seite abbrechen, dann neu starten.</td>
+    </tr>
+    <tr>
+      <td>Version-Picker zeigt keine Versionen für Choco-Paket</td>
+      <td>Die Versions-Liste kommt aus dem Fleet-Scan (<code>agent_choco_state</code>). Wenn das Paket noch auf keinem Agent installiert wurde, ist sie leer. Version manuell eintippen — das Feld akzeptiert freien Text.</td>
     </tr>
   </tbody>
 </table>
