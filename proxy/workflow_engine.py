@@ -399,11 +399,25 @@ async def _dispatch_script_step(
 ):
     """Dispatched einen script-Step: baut ein PS-Script aus dem eingebetteten
     Code, legt einen action_log-Eintrag an und startet die Delivery."""
-    code = payload.get("code") or ""
-    if not code.strip():
+    raw_code = payload.get("code") or ""
+    if not raw_code.strip():
         logger.error("workflow run %d script-step: kein Code in payload", run_id)
         await database.update_workflow_run(run_id, status="failed")
         return
+
+    # User-Code als temp .ps1 schreiben und via powershell.exe -File
+    # ausfuehren. Damit beendet 'exit N' nur den inneren Prozess und
+    # der aeussere (Callback-Wrapper) kann den exit code melden.
+    # Heredoc-Marker wird unique gemacht damit User-Code ihn nicht
+    # versehentlich enthaelt.
+    marker = f"__WF{run_id}END__"
+    code = (
+        f"$_wfTmp = [System.IO.Path]::Combine($env:TEMP, 'softshelf-wf-{run_id}.ps1')\n"
+        f"@'\n{raw_code}\n'@ | Set-Content -Path $_wfTmp -Encoding UTF8\n"
+        f"& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $_wfTmp 2>&1\n"
+        f"$global:LASTEXITCODE = $LASTEXITCODE\n"
+        f"Remove-Item $_wfTmp -Force -ErrorAction SilentlyContinue\n"
+    )
 
     job_id = _generate_job_id()
     try:
