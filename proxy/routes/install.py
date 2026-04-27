@@ -1197,6 +1197,9 @@ async def receive_callback(job_id: str, body: CallbackPayload):
             else:
                 status = "error"
                 error_summary = f"Installer beendete mit ExitCode {ec}"
+        elif pkg_type == "script" and ec != 0:
+            status = "error"
+            error_summary = f"Script beendete mit ExitCode {ec}"
         if status == "error":
             await database.complete_action_log(
                 entry["id"], "error", exit_code=ec,
