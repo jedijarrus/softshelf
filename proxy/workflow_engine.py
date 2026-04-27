@@ -149,6 +149,11 @@ async def dispatch_current_step(run_id: int):
     payload = step.get("payload") or {}
     timeout_s = step.get("timeout") or 600
 
+    # Reboot-Steps: Deadline = force_after_hours (default 8h), nicht Step-Timeout
+    if step_type == "reboot":
+        force_h = int(payload.get("force_after_hours") or 8)
+        timeout_s = force_h * 3600
+
     # Deadline setzen (jetzt + Step-Timeout)
     deadline = (_now_utc() + timedelta(seconds=timeout_s)).strftime("%Y-%m-%d %H:%M:%S")
     await database.update_workflow_run(
