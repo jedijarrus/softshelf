@@ -518,7 +518,7 @@ schtasks /Delete /TN '{ps_task_name}' /F 2>$null
 '@
 
 # Script in TEMP ablegen
-$scriptPath = Join-Path $env:SystemRoot 'Temp' 'sf_reboot_cb_{run_id}.ps1'
+$scriptPath = Join-Path (Join-Path $env:SystemRoot 'Temp') 'sf_reboot_cb_{run_id}.ps1'
 [System.IO.File]::WriteAllText($scriptPath, $postScript, [Text.Encoding]::UTF8)
 
 # AtStartup Scheduled Task anlegen (laeuft als SYSTEM)
