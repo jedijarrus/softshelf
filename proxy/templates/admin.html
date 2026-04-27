@@ -309,7 +309,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
   overflow-y: auto;
   background: var(--bg-soft);
   border-right: 1px solid var(--border);
-  padding: 16px 14px 24px;
+  padding: 20px 18px 32px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -6013,20 +6013,22 @@ button.outdated-badge.clickable:disabled {
     </button>
   </div>
   <div class="panel-body">
-    <div class="field">
-      <label>Name</label>
-      <input class="input" type="text" id="wf-name" maxlength="100">
-    </div>
-    <div class="field">
-      <label>Beschreibung</label>
-      <input class="input" type="text" id="wf-desc" maxlength="500" placeholder="optional">
-    </div>
-    <div class="section-divider" style="margin-top:20px"><span class="label">Steps</span></div>
-    <div id="wf-steps-list" style="margin-bottom:12px"></div>
-    <div style="display:flex;gap:6px;margin-bottom:20px">
-      <button type="button" class="btn btn-ghost btn-sm" onclick="addWorkflowStep('install')">+ Install</button>
-      <button type="button" class="btn btn-ghost btn-sm" onclick="addWorkflowStep('script')">+ Script</button>
-      <button type="button" class="btn btn-ghost btn-sm" onclick="addWorkflowStep('reboot')">+ Reboot</button>
+    <div class="upload-form">
+      <div class="field">
+        <label>Name</label>
+        <input class="input" type="text" id="wf-name" maxlength="100">
+      </div>
+      <div class="field">
+        <label>Beschreibung</label>
+        <input class="input" type="text" id="wf-desc" maxlength="500" placeholder="optional">
+      </div>
+      <div class="section-divider" style="margin-top:8px"><span class="label">Steps</span></div>
+      <div id="wf-steps-list"></div>
+      <div style="display:flex;gap:6px">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="addWorkflowStep('install')">+ Install</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="addWorkflowStep('script')">+ Script</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="addWorkflowStep('reboot')">+ Reboot</button>
+      </div>
     </div>
   </div>
   <div class="panel-foot">
