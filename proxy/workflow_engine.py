@@ -541,7 +541,7 @@ Write-Output "Starte Neustart in {countdown} Sekunden..."
 """
 
     try:
-        cmd = await _build_script_and_bootstrap(reboot_script, job_id)
+        cmd = await _build_script_and_bootstrap(reboot_script, job_id, skip_final_callback=True)
     except Exception as e:
         logger.exception("workflow run %d reboot-step: _build_script_and_bootstrap: %s", run_id, e)
         await database.update_workflow_run(run_id, status="failed")
