@@ -3664,13 +3664,20 @@ async def get_pending_actions_for_agent(agent_id: str) -> list[dict]:
     except Exception:
         state = {}
 
+    # Nicht anzeigen wenn Reboot schon getriggert wurde
+    if state.get("reboot_triggered"):
+        return []
+
+    payload = current.get("payload", {})
+    max_deferrals = int(payload.get("max_deferrals", 3))
+    deferrals = int(state.get("deferrals", 0))
+
     action = {
         "type": "reboot",
-        "message": current.get("message", "Ein Neustart ist erforderlich."),
-        "countdown": current.get("countdown", 300),
-        "can_defer": bool(current.get("can_defer", True)),
+        "message": payload.get("message", "Ein Neustart ist erforderlich."),
+        "countdown": int(payload.get("countdown", 300)),
+        "can_defer": deferrals < max_deferrals,
         "run_id": run["id"],
         "step": step_idx,
-        "deferred_until": state.get("deferred_until"),
     }
     return [action]
