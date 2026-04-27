@@ -1360,7 +1360,7 @@ def _generate_job_id() -> str:
     return _secrets.token_hex(32)
 
 
-async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
+async def _build_script_and_bootstrap(inner_script: str, job_id: str, skip_final_callback: bool = False) -> str:
     """Speichert ein PS-Script als Datei und returned den Bootstrap-Command
     (~200 Bytes) der das Script per HTTP laed und ausfuehrt.
 
@@ -1443,6 +1443,15 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str) -> str:
     )
 
     # Script speichern
+    if skip_final_callback:
+        # Reboot-Steps: kein finaler Callback — der kommt erst nach dem
+        # Reboot von der Scheduled Task. Nur try/catch-Wrapper behalten.
+        footer = (
+            "\n"
+            "} catch {\n"
+            "    $_sfOutput.Add(\"FEHLER: $($_.Exception.Message)\")\n"
+            "}\n"
+        )
     script_content = header + inner_script + footer
     script_path = _os.path.join(_SCRIPTS_DIR, f"{job_id}.ps1")
     with open(script_path, "w", encoding="utf-8") as f:
