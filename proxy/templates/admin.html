@@ -5754,7 +5754,13 @@ button.outdated-badge.clickable:disabled {
         <div class="hint">Bricht Installation ab wenn ein Neustart aussteht. Sinnvoll bei Paketen die fehlschlagen wenn Reboot pending ist (SAP GUI, .NET-abhaengige Software).</div>
       </div>
 
-      <div class="section-divider"><span class="label">Versionen</span></div>
+      <div class="field" id="edit-version-pin-field" style="display:none">
+        <label>Version-Pin</label>
+        <input class="input" id="edit-version-pin" placeholder="z. B. 115.0.1 — leer = immer latest" maxlength="50" style="font-family:var(--mono)">
+        <div class="hint" id="edit-version-pin-hint">Wenn gesetzt: immer diese Version installieren, kein Auto-Upgrade.</div>
+      </div>
+
+      <div class="section-divider" id="edit-versions-divider"><span class="label">Versionen</span></div>
 
       <div class="version-summary" id="version-summary"></div>
       <div class="version-list" id="version-list">
@@ -9024,6 +9030,21 @@ function openEditPanel(name) {
     const sel = document.getElementById('edit-entry-select');
     sel.innerHTML = `<option value="${esc(pkg.entry_point || '')}">${esc(pkg.entry_point || '—')}</option>`;
   }
+  // Version-Pin-Feld fuer winget/choco anzeigen
+  const showPin = ptype === 'winget' || ptype === 'choco';
+  document.getElementById('edit-version-pin-field').style.display = showPin ? '' : 'none';
+  if (showPin) {
+    document.getElementById('edit-version-pin').value = pkg.version_pin || '';
+    document.getElementById('edit-version-pin-hint').textContent =
+      ptype === 'winget'
+        ? 'Wenn gesetzt: winget installiert immer diese Version, kein Auto-Upgrade.'
+        : 'Wenn gesetzt: choco installiert immer diese Version via --version.';
+  }
+  // Versionen-Block fuer winget/choco ausblenden (nur custom hat Upload)
+  document.getElementById('edit-versions-divider').style.display = isCustom ? '' : 'none';
+  document.getElementById('version-list').style.display = isCustom ? '' : 'none';
+  document.getElementById('version-upload').style.display = isCustom ? '' : 'none';
+  document.getElementById('version-summary').style.display = isCustom ? '' : 'none';
   // Version-Upload-Widget Mode anpassen (Datei vs Ordner)
   setVersionUploadMode(isArchive ? 'folder' : 'single');
   // Versions/Installs zurücksetzen, dann nachladen
@@ -9582,7 +9603,8 @@ async function saveEdit() {
   btn.textContent = 'Speichere…';
   try {
     const pkg = store[_editingName];
-    const isCustom = pkg && (pkg.type || 'choco') === 'custom';
+    const ptype = (pkg && pkg.type) || 'choco';
+    const isCustom = ptype === 'custom';
     if (isCustom) {
       await api('PATCH', `/admin/api/custom/${encodeURIComponent(_editingName)}`, body);
     } else {
@@ -9594,6 +9616,14 @@ async function saveEdit() {
         install_timeout: parseInt(body.install_timeout) || 120,
         check_reboot: body.check_reboot || 0,
       });
+    }
+    // Version-Pin speichern (winget/choco)
+    if (ptype === 'winget' || ptype === 'choco') {
+      const pin = document.getElementById('edit-version-pin').value.trim();
+      if ((pin || '') !== (pkg.version_pin || '')) {
+        await api('PATCH', `/admin/api/packages/${encodeURIComponent(_editingName)}/version-pin`, {version: pin});
+        pkg.version_pin = pin || null;
+      }
     }
     toast('Änderungen gespeichert');
     closeAll();
