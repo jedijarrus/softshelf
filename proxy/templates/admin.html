@@ -6015,7 +6015,7 @@ button.outdated-badge.clickable:disabled {
       <div class="field" id="pkg-detail-pin-field" style="display:none;margin-bottom:14px">
         <label>Version-Pin</label>
         <input class="input" type="text" id="pkg-detail-pin" placeholder="z. B. 115.0.1 — leer = immer latest" maxlength="50" style="font-family:var(--mono)">
-        <div class="hint">Wenn gesetzt: winget wird immer diese Version installieren, kein Auto-Upgrade.</div>
+        <div class="hint" id="pkg-detail-pin-hint">Wenn gesetzt: immer diese Version installieren, kein Auto-Upgrade.</div>
       </div>
       <div class="field">
         <label>Notizen</label>
@@ -7162,7 +7162,7 @@ async function init() {
       archive_type:       p.archive_type || 'single',
       entry_point:        p.entry_point,
       winget_publisher:   p.winget_publisher,
-      winget_version:     p.winget_version,
+      version_pin:        p.version_pin,
       winget_scope:       p.winget_scope || 'auto',
       required:           p.required ? 1 : 0,
       staged_rollout:     p.staged_rollout ? 1 : 0,
@@ -7814,9 +7814,14 @@ function openPkgDetail(name) {
   document.getElementById('pkg-detail-title').textContent = `Details · ${pkg.display_name || name}`;
   document.getElementById('pkg-detail-notes').value = pkg.notes || '';
   const pinField = document.getElementById('pkg-detail-pin-field');
-  if (pkg.type === 'winget') {
+  const ptype = pkg.type || 'choco';
+  if (ptype === 'winget' || ptype === 'choco') {
     pinField.style.display = '';
-    document.getElementById('pkg-detail-pin').value = pkg.winget_version || '';
+    document.getElementById('pkg-detail-pin').value = pkg.version_pin || '';
+    document.getElementById('pkg-detail-pin-hint').textContent =
+      ptype === 'winget'
+        ? 'Wenn gesetzt: winget installiert immer diese Version, kein Auto-Upgrade.'
+        : 'Wenn gesetzt: choco installiert immer diese Version via --version.';
   } else {
     pinField.style.display = 'none';
   }
@@ -7834,11 +7839,12 @@ async function savePkgDetail() {
   try {
     await api('PATCH', `/admin/api/packages/${encodeURIComponent(name)}/notes`, {notes});
     if (pkg) pkg.notes = notes;
-    if (pkg && pkg.type === 'winget') {
+    const ptype = (pkg && pkg.type) || 'choco';
+    if (ptype === 'winget' || ptype === 'choco') {
       const pin = document.getElementById('pkg-detail-pin').value.trim();
-      if ((pin || '') !== (pkg.winget_version || '')) {
-        await api('PATCH', `/admin/api/winget/${encodeURIComponent(name)}/version-pin`, {version: pin});
-        pkg.winget_version = pin || null;
+      if ((pin || '') !== (pkg.version_pin || '')) {
+        await api('PATCH', `/admin/api/packages/${encodeURIComponent(name)}/version-pin`, {version: pin});
+        pkg.version_pin = pin || null;
       }
     }
     toast('Gespeichert');

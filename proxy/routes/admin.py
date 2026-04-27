@@ -606,7 +606,7 @@ class EnabledPackage(BaseModel):
     archive_type: str | None = None
     entry_point: str | None = None
     winget_publisher: str | None = None
-    winget_version: str | None = None
+    version_pin: str | None = None
     winget_scope: str | None = None
     required: int = 0
     notes: str | None = None
@@ -758,7 +758,7 @@ async def update_package(name: str, body: EnableRequest):
             name=name,
             display_name=body.display_name or pkg["display_name"],
             category=body.category,
-            winget_version=pkg.get("winget_version"),
+            version_pin=pkg.get("version_pin"),
         )
     else:
         await database.upsert_package(name, body.display_name or name, body.category)
@@ -1844,7 +1844,7 @@ async def get_staged_overview():
         # Target-Version ermitteln (je nach Paket-Typ)
         target_version = None
         if ptype == "winget":
-            target_version = pkg.get("winget_version")
+            target_version = pkg.get("version_pin")
             if not target_version:
                 # Latest aus Catalog ODER dominante available_version im Fleet
                 try:
@@ -2218,7 +2218,7 @@ async def set_package_notes(name: str, body: PackageNotesBody):
     return {"ok": True}
 
 
-class WingetVersionPinBody(BaseModel):
+class VersionPinBody(BaseModel):
     version: str = Field(default="", max_length=50)
 
     @field_validator("version")
@@ -2229,21 +2229,22 @@ class WingetVersionPinBody(BaseModel):
         return v
 
 
-@router.patch("/admin/api/winget/{name}/version-pin", dependencies=[Depends(_require_admin)])
-async def set_winget_version_pin(name: str, body: WingetVersionPinBody):
-    if not _WINGET_ID_RE.fullmatch(name):
-        raise HTTPException(status_code=400, detail="Ungueltige winget-ID")
+@router.patch("/admin/api/packages/{name}/version-pin", dependencies=[Depends(_require_admin)])
+async def set_version_pin(name: str, body: VersionPinBody):
     pkg = await database.get_package(name)
-    if not pkg or pkg.get("type") != "winget":
-        raise HTTPException(status_code=404, detail="winget-Paket nicht gefunden")
-    # Use update_winget_package to set winget_version
-    await database.update_winget_package(
-        name=name,
-        display_name=pkg["display_name"],
-        category=pkg["category"],
-        winget_version=body.version or None,
-    )
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Paket nicht gefunden")
+    ptype = pkg.get("type") or "choco"
+    if ptype not in ("winget", "choco"):
+        raise HTTPException(status_code=400, detail="Version-Pin nur fuer winget/choco Pakete")
+    await database.set_version_pin(name, body.version or None)
     return {"ok": True, "version": body.version or None}
+
+
+# Legacy alias
+@router.patch("/admin/api/winget/{name}/version-pin", dependencies=[Depends(_require_admin)])
+async def set_winget_version_pin_legacy(name: str, body: VersionPinBody):
+    return await set_version_pin(name, body)
 
 
 @router.get("/admin/api/compliance", dependencies=[Depends(_require_admin)])
@@ -2479,7 +2480,7 @@ async def bulk_activate_winget(body: BulkWingetImportBody):
                 display_name=display_name,
                 category=body.category,
                 publisher=publisher,
-                winget_version=None,
+                version_pin=None,
                 winget_scope="auto",
             )
             if default_staged:
@@ -2786,7 +2787,7 @@ async def get_distributions(
                 if not iv: unknown += 1
                 elif av:   outdated += 1
                 else:      current += 1
-            current_label = pkg.get("winget_version") or "latest"
+            current_label = pkg.get("version_pin") or "latest"
         else:  # choco
             raw = await database.get_agents_with_choco_package(pkg["name"])
             total = len(raw)
@@ -2795,7 +2796,7 @@ async def get_distributions(
                 if not iv: unknown += 1
                 elif av:   outdated += 1
                 else:      current += 1
-            current_label = "latest"
+            current_label = pkg.get("version_pin") or "latest"
 
         if outdated_only and outdated == 0:
             continue
@@ -4927,7 +4928,7 @@ async def winget_activate(body: WingetActivateRequest):
         display_name=name or body.id,
         category=body.category,
         publisher=publisher or None,
-        winget_version=None,  # MVP: immer latest, kein Pin
+        version_pin=None,
         winget_scope=body.scope,
     )
     # Policy rollout_default_staged: wenn aktiv, neues winget-Paket

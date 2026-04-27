@@ -801,7 +801,7 @@ async def install_package(
         else:
             action = "install"
         scope = pkg.get("winget_scope") or "auto"
-        ver = pkg.get("winget_version")
+        ver = pkg.get("version_pin")
         include_scope_machine = scope != "user"
         inner_cmd = _build_winget_command(
             action, body.package_name, ver,
@@ -983,7 +983,7 @@ async def dispatch_install_for_agent(
             action = "upgrade"
         else:
             action = "install"
-        ver = version_pin or pkg.get("winget_version")
+        ver = version_pin or pkg.get("version_pin")
         scope = pkg.get("winget_scope") or "auto"
         include_scope_machine = scope != "user"
         inner_cmd = _build_winget_command(
@@ -1024,7 +1024,7 @@ async def dispatch_install_for_agent(
     else:
         if not _is_safe_package_name(package_name):
             raise HTTPException(status_code=400, detail="Ungültiger Paketname")
-        inner_cmd = _build_choco_command("install", package_name, version=version_pin)
+        inner_cmd = _build_choco_command("install", package_name, version=version_pin or pkg.get("version_pin"))
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(

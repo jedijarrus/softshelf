@@ -376,6 +376,7 @@ async def init_db():
             ("archive_type",       "TEXT NOT NULL DEFAULT 'single'"),
             ("entry_point",        "TEXT"),
             ("winget_version",     "TEXT"),
+            ("version_pin",        "TEXT"),
             ("winget_publisher",   "TEXT"),
             ("winget_scope",       "TEXT NOT NULL DEFAULT 'auto'"),
             ("required",           "INTEGER NOT NULL DEFAULT 0"),
@@ -388,6 +389,13 @@ async def init_db():
         ]:
             if col not in pkg_cols:
                 await db.execute(f"ALTER TABLE packages ADD COLUMN {col} {ddl}")
+
+        # Migration: winget_version → version_pin (idempotent)
+        await db.execute(
+            "UPDATE packages SET version_pin = winget_version "
+            "WHERE winget_version IS NOT NULL AND version_pin IS NULL"
+        )
+        await db.commit()
 
         # Migration: archive-Felder in package_versions
         async with db.execute("PRAGMA table_info(package_versions)") as cur:
@@ -597,7 +605,7 @@ async def cleanup_old_logs(days: int):
 _PKG_COLS = (
     "name, display_name, category, type, filename, sha256, size_bytes, "
     "install_args, uninstall_cmd, detection_name, current_version_id, "
-    "archive_type, entry_point, winget_version, winget_publisher, winget_scope, "
+    "archive_type, entry_point, version_pin, winget_publisher, winget_scope, "
     "required, notes, staged_rollout, hidden_in_kiosk, auto_advance, "
     "install_timeout, check_reboot"
 )
@@ -1774,7 +1782,7 @@ async def upsert_winget_package(
     display_name: str,
     category: str,
     publisher: str | None = None,
-    winget_version: str | None = None,
+    version_pin: str | None = None,
     winget_scope: str = "auto",
 ):
     """Winget-Paket einfügen oder aktualisieren. `name` ist die winget
@@ -1787,7 +1795,7 @@ async def upsert_winget_package(
             """
             INSERT INTO packages (
                 name, display_name, category, type,
-                winget_publisher, winget_version, winget_scope
+                winget_publisher, version_pin, winget_scope
             )
             VALUES (?, ?, ?, 'winget', ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
@@ -1795,11 +1803,11 @@ async def upsert_winget_package(
                 category         = excluded.category,
                 type             = 'winget',
                 winget_publisher = excluded.winget_publisher,
-                winget_version   = excluded.winget_version,
+                version_pin      = excluded.version_pin,
                 winget_scope     = excluded.winget_scope,
                 updated_at       = datetime('now')
             """,
-            (name, display_name, category, publisher, winget_version, winget_scope),
+            (name, display_name, category, publisher, version_pin, winget_scope),
         )
         await db.commit()
 
@@ -1949,17 +1957,27 @@ async def update_winget_package(
     name: str,
     display_name: str,
     category: str,
-    winget_version: str | None,
+    version_pin: str | None = None,
 ):
     async with _db() as db:
         await db.execute(
             """
             UPDATE packages
-            SET display_name = ?, category = ?, winget_version = ?,
+            SET display_name = ?, category = ?, version_pin = ?,
                 updated_at = datetime('now')
             WHERE name = ? AND type = 'winget'
             """,
-            (display_name, category, winget_version, name),
+            (display_name, category, version_pin, name),
+        )
+        await db.commit()
+
+
+async def set_version_pin(name: str, version: str | None):
+    """Generischer Version-Pin-Setter fuer alle Pakettypen."""
+    async with _db() as db:
+        await db.execute(
+            "UPDATE packages SET version_pin = ?, updated_at = datetime('now') WHERE name = ?",
+            (version, name),
         )
         await db.commit()
 
