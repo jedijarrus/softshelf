@@ -2247,6 +2247,23 @@ async def set_winget_version_pin_legacy(name: str, body: VersionPinBody):
     return await set_version_pin(name, body)
 
 
+@router.get("/admin/api/packages/{name}/available-versions", dependencies=[Depends(_require_admin)])
+async def get_available_versions(name: str):
+    """Verfuegbare Versionen fuer winget (aus Catalog) oder choco (aus Fleet-Scan)."""
+    pkg = await database.get_package(name)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Paket nicht gefunden")
+    ptype = pkg.get("type") or "choco"
+    if ptype == "winget":
+        versions = await winget_catalog.get_versions(name)
+        return {"type": "winget", "versions": versions[:50]}
+    elif ptype == "choco":
+        versions = await database.get_choco_known_versions(name)
+        return {"type": "choco", "versions": versions}
+    else:
+        return {"type": ptype, "versions": []}
+
+
 @router.get("/admin/api/compliance", dependencies=[Depends(_require_admin)])
 async def get_compliance():
     """Compliance-Uebersicht: fuer jedes required-Paket welche Agents es haben,
