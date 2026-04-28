@@ -12,6 +12,7 @@ dann als normaler Benutzer.
 PRODUCT_SLUG wird vom Builder in _build_config.py eingebacken und steuert
 Registry-Pfad und Namen der System-Umgebungsvariable (fuer CI-Branding).
 """
+import ctypes
 import os
 import re
 import sys
@@ -69,11 +70,14 @@ def load_config() -> ClientConfig:
 
 
 def _fatal(msg: str) -> None:
+    """Zeigt eine native Windows MessageBox (kein PyQt5 noetig)."""
     try:
-        from PyQt5.QtWidgets import QApplication, QMessageBox
-        if not QApplication.instance():
-            QApplication(sys.argv)
-        QMessageBox.critical(None, f"{PRODUCT_SLUG} – Konfigurationsfehler", msg)
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            msg,
+            f"{PRODUCT_SLUG} \u2014 Konfigurationsfehler",
+            0x10,  # MB_ICONERROR
+        )
     except Exception:
         print(f"Konfigurationsfehler: {msg}", file=sys.stderr)
     sys.exit(1)
