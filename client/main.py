@@ -81,9 +81,11 @@ def main():
     tray = KioskTray(api, app_name=app_name)
     tray.start()
 
-    # webview.start() blockiert den Main-Thread.
-    # Alle Fenster werden vom Tray via webview.create_window() erzeugt.
-    # Wir starten ohne initiales Fenster - der Tray oeffnet es bei Klick.
+    # pywebview braucht mindestens ein Fenster vor start().
+    # Erstelle ein verstecktes Dummy-Fenster das offen bleibt solange die App laeuft.
+    _keeper = webview.create_window(
+        "", hidden=True, width=1, height=1,
+    )
     webview.start(debug=False, gui="edgechromium")
 
 
