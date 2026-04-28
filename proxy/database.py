@@ -3670,6 +3670,19 @@ async def get_pending_actions_for_agent(agent_id: str) -> list[dict]:
     if state.get("reboot_triggered"):
         return []
 
+    # Nicht anzeigen wenn noch im Verschieben-Zeitfenster
+    deferred_until = state.get("deferred_until")
+    if deferred_until:
+        from datetime import datetime, timezone
+        try:
+            dt = datetime.fromisoformat(deferred_until.replace(" ", "T"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt > datetime.now(timezone.utc):
+                return []
+        except Exception:
+            pass
+
     payload = current.get("payload", {})
     max_deferrals = int(payload.get("max_deferrals", 3))
     deferrals = int(state.get("deferrals", 0))
