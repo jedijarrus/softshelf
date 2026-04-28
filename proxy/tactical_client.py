@@ -18,8 +18,11 @@ Verwendete Endpoints:
   POST /agents/<agent_id>/cmd/         → Raw Command (für custom MSI/EXE)
 """
 import asyncio
+import contextlib
 import logging
 import re
+import threading
+import time as _time
 import httpx
 
 from config import runtime_value
@@ -28,10 +31,15 @@ logger = logging.getLogger(__name__)
 
 _RETRYABLE_STATUS = {500, 502, 503, 504}
 
-# Globaler Semaphore: max 2 gleichzeitige run_command Calls an Tactical.
+# Globaler Semaphore: max N gleichzeitige run_command Calls an Tactical.
 # Schuetzt den Tactical-Server vor Worker-Pool-Erschoepfung.
 MAX_CONCURRENT_COMMANDS = 8
 _cmd_semaphore: asyncio.Semaphore | None = None
+
+# Queue-Tracking: was laeuft, was wartet
+_active_commands: list[dict] = []   # [{agent_id, hostname, action, started_at}]
+_waiting_count: int = 0
+_queue_lock = threading.Lock()
 
 
 def _get_semaphore() -> asyncio.Semaphore:
@@ -40,6 +48,48 @@ def _get_semaphore() -> asyncio.Semaphore:
     if _cmd_semaphore is None:
         _cmd_semaphore = asyncio.Semaphore(MAX_CONCURRENT_COMMANDS)
     return _cmd_semaphore
+
+
+@contextlib.asynccontextmanager
+async def _tracked_semaphore(agent_id: str = "", hostname: str = "", action: str = ""):
+    """Semaphore mit Tracking — zaehlt wartende + aktive Commands."""
+    global _waiting_count
+    with _queue_lock:
+        _waiting_count += 1
+    try:
+        async with _get_semaphore():
+            entry = {
+                "agent_id": agent_id, "hostname": hostname,
+                "action": action, "started_at": _time.time(),
+            }
+            with _queue_lock:
+                _waiting_count -= 1
+                _active_commands.append(entry)
+            try:
+                yield
+            finally:
+                with _queue_lock:
+                    if entry in _active_commands:
+                        _active_commands.remove(entry)
+    except BaseException:
+        with _queue_lock:
+            _waiting_count = max(0, _waiting_count - 1)
+        raise
+
+
+def get_queue_status() -> dict:
+    """Gibt den aktuellen Queue-Status zurueck (fuer Admin-API)."""
+    with _queue_lock:
+        active = [
+            {**cmd, "running_seconds": int(_time.time() - cmd["started_at"])}
+            for cmd in _active_commands
+        ]
+        return {
+            "max_concurrent": MAX_CONCURRENT_COMMANDS,
+            "active_count": len(active),
+            "waiting_count": _waiting_count,
+            "active": active,
+        }
 
 # Defense-in-depth: Namens-Validierung vor jeder URL-/Shell-Interpolation
 _PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,99}$")
@@ -193,7 +243,7 @@ class TacticalClient:
             "run_as_user": bool(run_as_user),
         }
 
-        async with _get_semaphore():
+        async with _tracked_semaphore(agent_id=agent_id, action=cmd[:80]):
             async with httpx.AsyncClient(headers=headers, timeout=timeout + 15) as c:
                 try:
                     r = await c.post(url, json=payload)
