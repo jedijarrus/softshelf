@@ -121,6 +121,10 @@ xvfb-run -a wine python -m PyInstaller \
     --workpath "build-${PRODUCT_SLUG}" \
     --hidden-import win32ctypes.core \
     --hidden-import win32api \
+    --hidden-import webview \
+    --hidden-import webview.platforms.winforms \
+    --hidden-import clr_loader \
+    --hidden-import pythonnet \
     "${ICON_ARG[@]}" \
     --noconfirm \
     main.py
