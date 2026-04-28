@@ -26,6 +26,8 @@ async def _db():
     """aiosqlite-Connection mit aktivierten Foreign Keys."""
     async with aiosqlite.connect(DB_PATH) as conn:
         await conn.execute("PRAGMA foreign_keys = ON")
+        await conn.execute("PRAGMA journal_mode = WAL")
+        await conn.execute("PRAGMA busy_timeout = 5000")
         yield conn
 
 

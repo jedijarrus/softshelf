@@ -30,7 +30,7 @@ _RETRYABLE_STATUS = {500, 502, 503, 504}
 
 # Globaler Semaphore: max 2 gleichzeitige run_command Calls an Tactical.
 # Schuetzt den Tactical-Server vor Worker-Pool-Erschoepfung.
-MAX_CONCURRENT_COMMANDS = 2
+MAX_CONCURRENT_COMMANDS = 8
 _cmd_semaphore: asyncio.Semaphore | None = None
 
 
