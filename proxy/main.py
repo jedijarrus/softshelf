@@ -659,6 +659,9 @@ async def workflow_reboot_now(run_id: int, request: Request):
     run = await database.get_workflow_run(run_id)
     if not run or run["agent_id"] != agent_id:
         raise HTTPException(status_code=404)
+    # Nur wenn Run noch aktiv ist — cancelled/completed/timed_out = kein Reboot
+    if run["status"] != "running":
+        return {"ok": False, "reason": f"Run ist {run['status']}, kein Reboot"}
     # Shutdown via Tactical dispatchen
     try:
         from tactical_client import TacticalClient
