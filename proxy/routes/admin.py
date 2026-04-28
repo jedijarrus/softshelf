@@ -5280,3 +5280,10 @@ async def get_agent_workflow_runs(agent_id: str, limit: int = Query(default=20, 
         raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
     rows = await database.get_workflow_runs_for_agent(agent_id, limit=limit)
     return rows
+
+
+@router.get("/admin/api/tactical-queue", dependencies=[Depends(_require_admin)])
+async def get_tactical_queue():
+    """Tactical Command Queue Status — aktive + wartende Commands."""
+    from tactical_client import get_queue_status
+    return get_queue_status()

@@ -7493,15 +7493,43 @@ async function loadHome() {
   const el = document.getElementById('main-home');
   el.innerHTML = '<div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Lade</span></div>';
   try {
-    const [d, rlt] = await Promise.all([
+    const [d, rlt, tq] = await Promise.all([
       api('GET', '/admin/api/dashboard'),
       api('GET', '/admin/api/rollouts?status=active').catch(() => ({rollouts: []})),
+      api('GET', '/admin/api/tactical-queue').catch(() => ({active_count:0,waiting_count:0,active:[]})),
     ]);
     d._active_rollouts = rlt.rollouts || [];
+    d._tactical_queue = tq;
     renderHome(d);
   } catch (e) {
     el.innerHTML = `<div class="empty"><h3>Fehler</h3><p>${esc(e.message)}</p></div>`;
   }
+}
+
+function _renderTacticalQueue(tq) {
+  if (!tq) return '';
+  const ac = tq.active_count || 0;
+  const wc = tq.waiting_count || 0;
+  if (ac === 0 && wc === 0) return '';
+  const max = tq.max_concurrent || 8;
+  const rows = (tq.active || []).map(cmd => {
+    const secs = cmd.running_seconds || 0;
+    const dur = secs < 60 ? secs + 's' : Math.floor(secs/60) + 'm ' + (secs%60) + 's';
+    const agent = esc(cmd.hostname || cmd.agent_id || '?');
+    const action = esc((cmd.action || '').substring(0, 60));
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+      <span class="spinner" style="width:12px;height:12px;flex-shrink:0"></span>
+      <span style="font-size:12px;font-weight:500;min-width:120px">${agent}</span>
+      <span style="font-size:11px;color:var(--fg-4);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono)">${action}</span>
+      <span style="font-size:11px;color:var(--fg-5);flex-shrink:0">${dur}</span>
+    </div>`;
+  }).join('');
+  return `<div class="home-panel" style="margin-bottom:16px">
+    <div class="home-panel-head">
+      <h3>Tactical Queue <span style="font-weight:400;color:var(--fg-4)">${ac}/${max} aktiv${wc > 0 ? `, ${wc} wartend` : ''}</span></h3>
+    </div>
+    <div style="padding:0 16px 12px">${rows || '<div style="font-size:12px;color:var(--fg-5);padding:8px 0">Keine aktiven Commands</div>'}</div>
+  </div>`;
 }
 
 function renderHome(d) {
@@ -7601,6 +7629,7 @@ function renderHome(d) {
         </div>
         <div class="rollout-rows">${rolloutRows}</div>
       </div>` : ''}
+    ${_renderTacticalQueue(d._tactical_queue)}
     <div class="home-grid">
       <div class="home-panel">
         <div class="home-panel-head">
