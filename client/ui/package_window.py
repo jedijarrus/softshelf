@@ -643,8 +643,7 @@ let searchQuery = '';
 let busyPkg = null;
 
 // ─── Init ───
-document.addEventListener('DOMContentLoaded', () => {{
-  // Tab clicks
+function _initApp() {{
   document.querySelectorAll('.tab').forEach(tab => {{
     tab.addEventListener('click', () => {{
       activeTab = tab.dataset.tab;
@@ -653,17 +652,16 @@ document.addEventListener('DOMContentLoaded', () => {{
       renderPackages();
     }});
   }});
-
-  // Search
   const searchInput = document.getElementById('searchInput');
   searchInput.addEventListener('input', (e) => {{
     searchQuery = e.target.value.toLowerCase();
     renderPackages();
   }});
-
-  // Load initial data
   loadPackages();
-}});
+}}
+// pywebview Bridge ist erst nach 'pywebviewready' verfuegbar
+if (window.pywebview) {{ _initApp(); }}
+else {{ window.addEventListener('pywebviewready', _initApp); }}
 
 async function loadPackages() {{
   showLoading();
