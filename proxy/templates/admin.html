@@ -7532,6 +7532,12 @@ function _renderTacticalQueue(tq) {
   </div>`;
 }
 
+function openUpdatesView() {
+  distState.outdatedOnly = true;
+  const btn = document.querySelector('[data-tab="distribution"]');
+  switchTab('distribution', btn);
+}
+
 function renderHome(d) {
   const el = document.getElementById('main-home');
   const s = d.stats || {};
@@ -7558,7 +7564,7 @@ function renderHome(d) {
          'location.hash="packages"')}
       ${kpiCard('Updates verfügbar', outdated.total || 0,
          `winget ${outdated.winget||0} · choco ${outdated.choco||0} · custom ${outdated.custom||0}`,
-         'distState.outdatedOnly=true;switchTab(\"distribution\",document.querySelector(\"[data-tab=distribution]\"))',
+         'openUpdatesView()',
          (outdated.total||0) > 0 ? 'warn' : '')}
       ${kpiCard('Fehler (7 Tage)', errors.count_7d || 0,
          (errors.count_7d||0) > 0 ? 'Sofort prüfen' : 'Alles sauber',
