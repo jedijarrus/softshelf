@@ -152,8 +152,9 @@ class KioskTray:
         run_id = action.get("run_id")
 
         def on_done(result):
-            if result == "defer":
-                # Remove from seen set so it reappears on next poll
+            # Bei defer, rejected oder close: run_id freigeben damit
+            # Dialog beim naechsten Poll wieder erscheinen kann
+            if result in ("defer", "rejected", "closed"):
                 self._shown_reboot_runs.discard(run_id)
 
         show_reboot_dialog(

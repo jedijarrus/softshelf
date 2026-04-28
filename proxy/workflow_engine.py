@@ -287,6 +287,12 @@ async def check_timeouts():
             # Pruefen ob es ein Reboot-Step ist der force-reboot braucht
             state = _parse_json(run.get("step_state"), {})
             if state.get("reboot_pending") and not state.get("reboot_triggered"):
+                # TOCTOU-Guard: Status nochmal frisch aus DB lesen
+                fresh = await database.get_workflow_run(run["id"])
+                if not fresh or fresh["status"] != "running":
+                    logger.info("workflow run %d: skip force-reboot (status=%s)",
+                                run["id"], (fresh or {}).get("status"))
+                    continue
                 # Force-Reboot: Client hat nicht reagiert, Deadline abgelaufen
                 logger.warning(
                     "workflow run %d: reboot force-trigger (deadline abgelaufen)",
@@ -296,7 +302,7 @@ async def check_timeouts():
                     from tactical_client import TacticalClient
                     tc = TacticalClient()
                     await tc.run_command(
-                        run["agent_id"],
+                        fresh["agent_id"],
                         'shutdown /r /t 60 /c "Softshelf: Erzwungener Neustart" /d p:4:1',
                         timeout=10,
                     )

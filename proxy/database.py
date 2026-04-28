@@ -3560,6 +3560,10 @@ async def update_workflow_run(run_id: int, **kwargs):
     nackter SQL-Ausdruck eingefuegt statt als gebundener Parameter."""
     if not kwargs:
         return
+    _ALLOWED = {"status", "current_step", "step_state", "step_deadline_at", "started_at"}
+    for key in kwargs:
+        if key not in _ALLOWED:
+            raise ValueError(f"update_workflow_run: unerlaubter Key {key!r}")
     fields: list[str] = []
     params: list = []
     # Spezielle SQL-Ausdruecke die nicht als Parameter gebunden werden sollen

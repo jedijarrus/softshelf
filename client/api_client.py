@@ -105,24 +105,32 @@ class KioskApiClient:
         return {"status": "error"}
 
     def workflow_reboot_now(self, run_id: int) -> bool:
+        """Returns True only if server accepted the reboot (ok=true)."""
         try:
             with self._client() as c:
                 r = c.post(
                     f"{self._base}/api/v1/workflow/reboot-now/{run_id}",
                     timeout=5,
                 )
-                return r.status_code == 200
+                if r.status_code != 200:
+                    return False
+                data = r.json()
+                return data.get("ok", False) is True
         except Exception:
             return False
 
     def workflow_defer(self, run_id: int) -> bool:
+        """Returns True only if server accepted the defer (ok=true)."""
         try:
             with self._client() as c:
                 r = c.post(
                     f"{self._base}/api/v1/workflow/defer/{run_id}",
                     timeout=5,
                 )
-                return r.status_code == 200
+                if r.status_code != 200:
+                    return False
+                data = r.json()
+                return data.get("ok", False) is True
         except Exception:
             return False
 
