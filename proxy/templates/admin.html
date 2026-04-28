@@ -7533,11 +7533,11 @@ function _renderTacticalQueue(tq) {
 }
 
 function openUpdatesView() {
+  // Checkbox VOR switchTab setzen — switchTab ruft loadDistributions() auf
+  const cb = document.getElementById('distribution-only-outdated');
+  if (cb) cb.checked = true;
   const btn = document.querySelector('[data-tab="distribution"]');
   switchTab('distribution', btn);
-  // Checkbox direkt setzen NACH Tab-Wechsel (DOM muss sichtbar sein)
-  const cb = document.getElementById('distribution-only-outdated');
-  if (cb && !cb.checked) { cb.checked = true; loadDistributions(); }
 }
 
 function renderHome(d) {
