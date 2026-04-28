@@ -2333,11 +2333,17 @@ async def get_fleet_stats() -> dict:
 
         # Outdated edges
         async with db.execute(
-            "SELECT COUNT(*) AS n FROM agent_winget_state WHERE available_version IS NOT NULL"
+            "SELECT COUNT(*) AS n FROM agent_winget_state aws "
+            "JOIN packages p ON p.name = aws.winget_id "
+            "JOIN agents a ON a.agent_id = aws.agent_id "
+            "WHERE aws.available_version IS NOT NULL"
         ) as cur:
             outdated_winget = (await cur.fetchone())["n"]
         async with db.execute(
-            "SELECT COUNT(*) AS n FROM agent_choco_state WHERE available_version IS NOT NULL"
+            "SELECT COUNT(*) AS n FROM agent_choco_state acs "
+            "JOIN packages p ON p.name = acs.choco_name "
+            "JOIN agents a ON a.agent_id = acs.agent_id "
+            "WHERE acs.available_version IS NOT NULL"
         ) as cur:
             outdated_choco = (await cur.fetchone())["n"]
         # Custom: agent_installations wo version_id != package.current_version_id
