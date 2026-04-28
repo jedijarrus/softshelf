@@ -7558,7 +7558,7 @@ function renderHome(d) {
          'location.hash="packages"')}
       ${kpiCard('Updates verfügbar', outdated.total || 0,
          `winget ${outdated.winget||0} · choco ${outdated.choco||0} · custom ${outdated.custom||0}`,
-         'location.hash="distribution"',
+         'distState.outdatedOnly=true;switchTab(\"distribution\",document.querySelector(\"[data-tab=distribution]\"))',
          (outdated.total||0) > 0 ? 'warn' : '')}
       ${kpiCard('Fehler (7 Tage)', errors.count_7d || 0,
          (errors.count_7d||0) > 0 ? 'Sofort prüfen' : 'Alles sauber',
@@ -10083,7 +10083,12 @@ async function loadDistributions() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Lädt';
 
-  distState.outdatedOnly = !!document.getElementById('distribution-only-outdated')?.checked;
+  // Checkbox mit distState synchronisieren (z.B. wenn von KPI-Karte vorgesetzt)
+  const ooCheckbox = document.getElementById('distribution-only-outdated');
+  if (ooCheckbox && distState.outdatedOnly && !ooCheckbox.checked) {
+    ooCheckbox.checked = true;
+  }
+  distState.outdatedOnly = !!ooCheckbox?.checked;
   distState.q = document.getElementById('distribution-filter')?.value || '';
   distState.offset = 0;
   distState.loading = true;
