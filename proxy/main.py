@@ -684,8 +684,13 @@ async def workflow_defer_reboot(run_id: int, request: Request):
     if not run or run["agent_id"] != agent_id:
         raise HTTPException(status_code=404)
     import json as _json
+    from datetime import datetime, timezone, timedelta
     state = _json.loads(run.get("step_state") or "{}")
     state["deferrals"] = state.get("deferrals", 0) + 1
-    state["reboot_pending"] = False  # dismiss bis naechster Health-Poll
+    # Verschieben-Dauer: 60s zum Testen, spaeter 24h
+    defer_seconds = 60  # TODO: auf 86400 (24h) setzen fuer Produktion
+    state["deferred_until"] = (
+        datetime.now(timezone.utc) + timedelta(seconds=defer_seconds)
+    ).strftime("%Y-%m-%d %H:%M:%S")
     await database.update_workflow_run(run_id, step_state=_json.dumps(state))
-    return {"ok": True, "deferrals": state["deferrals"]}
+    return {"ok": True, "deferrals": state["deferrals"], "deferred_until": state["deferred_until"]}
