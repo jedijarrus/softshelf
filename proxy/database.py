@@ -2344,8 +2344,10 @@ async def get_fleet_stats() -> dict:
         async with db.execute(
             "SELECT COUNT(*) AS n FROM agent_installations ai "
             "JOIN packages p ON p.name = ai.package_name "
+            "JOIN agents a ON a.agent_id = ai.agent_id "
             "WHERE p.type = 'custom' AND p.current_version_id IS NOT NULL "
-            "  AND (ai.version_id IS NULL OR ai.version_id != p.current_version_id)"
+            "  AND ai.version_id IS NOT NULL "
+            "  AND ai.version_id != p.current_version_id"
         ) as cur:
             outdated_custom = (await cur.fetchone())["n"]
 
