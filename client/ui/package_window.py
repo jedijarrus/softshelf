@@ -593,10 +593,8 @@ html, body {{
   <div class="header">
     <div class="header-top">
       <div class="header-brand">
-        <div class="header-icon">
-          <svg viewBox="0 0 12 12" fill="none">
-            <rect x="2" y="2" width="8" height="8" rx="1.5" stroke="white" stroke-width="1.5" fill="none"/>
-          </svg>
+        <div class="header-icon" id="headerIcon">
+          <!--ICON_PLACEHOLDER-->
         </div>
         <span class="header-title" id="appTitle">{app_name}</span>
       </div>
@@ -670,8 +668,10 @@ async function loadPackages() {{
     packages = result;
     updateCounts();
     renderPackages();
+    setOnlineState(true);
   }} catch (e) {{
     showError(e.message || 'Verbindungsfehler');
+    setOnlineState(false);
   }}
 }}
 
@@ -1007,10 +1007,26 @@ def show_main_window(api_client: KioskApiClient, app_name: str = "Softshelf"):
             except Exception:
                 _main_window = None
 
+        # App-Icon vom Server als Base64 fuer Header
+        icon_b64 = ""
+        try:
+            icon_data = api_client.get_icon()
+            if icon_data:
+                import base64
+                icon_b64 = base64.b64encode(icon_data).decode()
+        except Exception:
+            pass
+
         html = _HTML.format(
             app_name=_h(app_name),
             version=_h(__version__),
         )
+        # Icon einfuegen (nach .format() weil Base64 geschweifte Klammern enthalten kann)
+        if icon_b64:
+            icon_tag = f'<img src="data:image/png;base64,{icon_b64}" style="width:18px;height:18px;border-radius:3px">'
+        else:
+            icon_tag = '<svg viewBox="0 0 12 12" fill="none"><rect x="2" y="2" width="8" height="8" rx="1.5" stroke="white" stroke-width="1.5" fill="none"/></svg>'
+        html = html.replace('<!--ICON_PLACEHOLDER-->', icon_tag)
         js_api = PackageApi(api_client)
         _main_window = webview.create_window(
             app_name,
