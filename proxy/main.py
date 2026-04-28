@@ -686,6 +686,8 @@ async def workflow_defer_reboot(run_id: int, request: Request):
     run = await database.get_workflow_run(run_id)
     if not run or run["agent_id"] != agent_id:
         raise HTTPException(status_code=404)
+    if run["status"] != "running":
+        return {"ok": False, "reason": f"Run ist {run['status']}"}
     import json as _json
     from datetime import datetime, timezone, timedelta
     state = _json.loads(run.get("step_state") or "{}")
