@@ -10089,11 +10089,12 @@ async function loadDistributions() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Lädt';
 
-  // Checkbox mit distState synchronisieren (z.B. wenn von KPI-Karte vorgesetzt)
+  // Checkbox mit distState synchronisieren (einmalig von KPI-Karte)
   const ooCheckbox = document.getElementById('distribution-only-outdated');
-  if (ooCheckbox && distState.outdatedOnly && !ooCheckbox.checked) {
-    ooCheckbox.checked = true;
+  if (ooCheckbox && distState.outdatedOnly !== ooCheckbox.checked) {
+    ooCheckbox.checked = distState.outdatedOnly;
   }
+  // Ab jetzt ist Checkbox Source-of-Truth
   distState.outdatedOnly = !!ooCheckbox?.checked;
   distState.q = document.getElementById('distribution-filter')?.value || '';
   distState.offset = 0;
