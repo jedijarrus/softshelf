@@ -20,7 +20,7 @@ RUN wine python -m pip install --upgrade pip \
         httpx==0.27.2 \
         pystray==0.19.5 \
         Pillow==10.4.0 \
-        PyQt5==5.15.11 \
+        pywebview==5.3.2 \
         pywin32==308
 
 # Linux-seitige FastAPI für den HTTP-Trigger (auf 8766)
