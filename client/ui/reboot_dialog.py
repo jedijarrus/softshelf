@@ -336,25 +336,28 @@ class RebootApi:
         if self._handled:
             return
         self._handled = True
+        accepted = False
         if self._run_id:
-            self._api.workflow_reboot_now(self._run_id)
-        self._on_done("now")
+            accepted = self._api.workflow_reboot_now(self._run_id)
+        self._on_done("now" if accepted else "rejected")
 
     def on_auto_reboot(self):
         if self._handled:
             return
         self._handled = True
+        accepted = False
         if self._run_id:
-            self._api.workflow_reboot_now(self._run_id)
-        self._on_done("auto")
+            accepted = self._api.workflow_reboot_now(self._run_id)
+        self._on_done("auto" if accepted else "rejected")
 
     def on_defer(self):
         if self._handled:
             return
         self._handled = True
+        accepted = False
         if self._run_id:
-            self._api.workflow_defer(self._run_id)
-        self._on_done("defer")
+            accepted = self._api.workflow_defer(self._run_id)
+        self._on_done("defer" if accepted else "rejected")
 
 
 # ────────────────────────────────────────────────────── Window Management ─────
