@@ -7533,9 +7533,11 @@ function _renderTacticalQueue(tq) {
 }
 
 function openUpdatesView() {
-  distState.outdatedOnly = true;
   const btn = document.querySelector('[data-tab="distribution"]');
   switchTab('distribution', btn);
+  // Checkbox direkt setzen NACH Tab-Wechsel (DOM muss sichtbar sein)
+  const cb = document.getElementById('distribution-only-outdated');
+  if (cb && !cb.checked) { cb.checked = true; loadDistributions(); }
 }
 
 function renderHome(d) {
@@ -10089,12 +10091,7 @@ async function loadDistributions() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Lädt';
 
-  // Checkbox mit distState synchronisieren (einmalig von KPI-Karte)
   const ooCheckbox = document.getElementById('distribution-only-outdated');
-  if (ooCheckbox && distState.outdatedOnly !== ooCheckbox.checked) {
-    ooCheckbox.checked = distState.outdatedOnly;
-  }
-  // Ab jetzt ist Checkbox Source-of-Truth
   distState.outdatedOnly = !!ooCheckbox?.checked;
   distState.q = document.getElementById('distribution-filter')?.value || '';
   distState.offset = 0;
