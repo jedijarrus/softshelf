@@ -13528,25 +13528,34 @@ function renderAgentWorkflowRuns(runs) {
     const pct = total ? Math.round((Math.min(current, total) / total) * 100) : 0;
     const statusColors = {completed:'var(--green)',failed:'var(--danger)',timed_out:'var(--warning)',cancelled:'var(--fg-muted)',running:'var(--blue)',pending:'var(--fg-muted)'};
     const color = statusColors[r.status] || 'var(--fg-muted)';
-    const statusLabel = {completed:'Abgeschlossen',failed:'Fehlgeschlagen',timed_out:'Timeout',cancelled:'Abgebrochen',running:'Läuft',pending:'Wartend'}[r.status] || r.status;
+    const statusLabel = {completed:'Abgeschlossen',failed:'Fehlgeschlagen',timed_out:'Timeout',cancelled:'Abgebrochen',running:'L\u00e4uft',pending:'Wartend',paused:'Pausiert'}[r.status] || r.status;
     const stepLabel = current < total ? (steps[current].label || steps[current].type) : '\u2014';
-    const cancelBtn = (r.status === 'running' || r.status === 'pending')
-      ? '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="cancelWorkflowRun(' + r.id + ')">Abbrechen</button>'
-      : '';
+    let actionBtns = '';
+    if (r.status === 'running') {
+      actionBtns = '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="pauseWorkflowRun(' + r.id + ')">Pausieren</button>' +
+        '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="cancelWorkflowRun(' + r.id + ')">Abbrechen</button>';
+    } else if (r.status === 'paused') {
+      actionBtns = '<button class="btn btn-primary btn-sm" style="font-size:11px" onclick="resumeWorkflowRun(' + r.id + ')">Fortsetzen</button>' +
+        '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="cancelWorkflowRun(' + r.id + ')">Abbrechen</button>';
+    } else if (r.status === 'pending') {
+      actionBtns = '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="cancelWorkflowRun(' + r.id + ')">Abbrechen</button>';
+    } else {
+      actionBtns = '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="deleteWorkflowRun(' + r.id + ')">L\u00f6schen</button>';
+    }
     return '<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:6px">' +
       '<div style="display:flex;justify-content:space-between;align-items:center">' +
         '<div>' +
           '<span style="font-weight:600;font-size:13px">' + esc(r.workflow_name || 'Workflow #'+r.workflow_id) + '</span>' +
           '<span style="font-size:11px;color:' + color + ';margin-left:8px;font-weight:600">' + esc(statusLabel) + '</span>' +
         '</div>' +
-        cancelBtn +
+        '<div style="display:flex;gap:4px">' + actionBtns + '</div>' +
       '</div>' +
-      (r.status === 'running'
+      (r.status === 'running' || r.status === 'paused'
         ? '<div style="margin-top:6px">' +
             '<div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden">' +
-              '<div style="height:100%;width:' + pct + '%;background:var(--blue);border-radius:2px;transition:width 0.3s"></div>' +
+              '<div style="height:100%;width:' + pct + '%;background:' + (r.status === 'paused' ? 'var(--amber)' : 'var(--blue)') + ';border-radius:2px;transition:width 0.3s"></div>' +
             '</div>' +
-            '<div style="font-size:11px;color:var(--fg-muted);margin-top:4px">Step ' + (current+1) + '/' + total + ': ' + esc(stepLabel) + '</div>' +
+            '<div style="font-size:11px;color:var(--fg-muted);margin-top:4px">Step ' + (current+1) + '/' + total + ': ' + esc(stepLabel) + (r.status === 'paused' ? ' (pausiert)' : '') + '</div>' +
           '</div>'
         : '<div style="font-size:11px;color:var(--fg-muted);margin-top:4px">' + total + ' Steps, ' +
           (r.status === 'completed' ? 'alle abgeschlossen' : current + '/' + total + ' durchgelaufen') + '</div>'
@@ -13571,6 +13580,30 @@ async function cancelWorkflowRun(runId) {
   try {
     await api('DELETE', '/admin/api/workflow-runs/' + runId);
     toast('Workflow abgebrochen');
+    if (_currentAgent) loadAgentWorkflows(_currentAgent.agent_id);
+  } catch(e) {}
+}
+
+async function pauseWorkflowRun(runId) {
+  try {
+    await api('POST', '/admin/api/workflow-runs/' + runId + '/pause');
+    toast('Workflow pausiert');
+    if (_currentAgent) loadAgentWorkflows(_currentAgent.agent_id);
+  } catch(e) {}
+}
+
+async function resumeWorkflowRun(runId) {
+  try {
+    await api('POST', '/admin/api/workflow-runs/' + runId + '/resume');
+    toast('Workflow fortgesetzt');
+    if (_currentAgent) loadAgentWorkflows(_currentAgent.agent_id);
+  } catch(e) {}
+}
+
+async function deleteWorkflowRun(runId) {
+  try {
+    await api('DELETE', '/admin/api/workflow-runs/' + runId + '/delete');
+    toast('Run gelöscht');
     if (_currentAgent) loadAgentWorkflows(_currentAgent.agent_id);
   } catch(e) {}
 }

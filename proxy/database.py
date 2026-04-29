@@ -343,7 +343,7 @@ async def init_db():
                 step_snapshot    TEXT NOT NULL,
                 current_step     INTEGER NOT NULL DEFAULT 0,
                 status           TEXT NOT NULL DEFAULT 'pending'
-                                 CHECK(status IN ('pending','running','completed','failed','timed_out','cancelled')),
+                                 CHECK(status IN ('pending','running','paused','completed','failed','timed_out','cancelled')),
                 step_state       TEXT DEFAULT '{}',
                 step_deadline_at TEXT,
                 started_at       TEXT,
@@ -352,7 +352,7 @@ async def init_db():
         """)
         await db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_active_run "
-            "ON workflow_runs(agent_id) WHERE status IN ('pending', 'running')"
+            "ON workflow_runs(agent_id) WHERE status IN ('pending', 'running', 'paused')"
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_workflow_runs_status "
@@ -3553,7 +3553,7 @@ async def get_active_run_for_agent(agent_id: str) -> dict | None:
             "       current_step, status, step_state, step_deadline_at, "
             "       started_at, updated_at "
             "FROM workflow_runs "
-            "WHERE agent_id = ? AND status IN ('pending', 'running')",
+            "WHERE agent_id = ? AND status IN ('pending', 'running', 'paused')",
             (agent_id,),
         ) as cur:
             row = await cur.fetchone()
