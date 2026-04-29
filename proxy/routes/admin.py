@@ -5270,6 +5270,34 @@ async def cancel_workflow_run(run_id: int):
     return {"ok": True}
 
 
+@router.post("/admin/api/workflow-runs/{run_id}/pause", dependencies=[Depends(_require_admin)])
+async def pause_workflow_run(run_id: int):
+    """Pausiert einen laufenden Workflow-Run."""
+    await workflow_engine.pause(run_id)
+    return {"ok": True}
+
+
+@router.post("/admin/api/workflow-runs/{run_id}/resume", dependencies=[Depends(_require_admin)])
+async def resume_workflow_run(run_id: int):
+    """Setzt einen pausierten Workflow-Run fort."""
+    await workflow_engine.resume(run_id)
+    return {"ok": True}
+
+
+@router.delete("/admin/api/workflow-runs/{run_id}/delete", dependencies=[Depends(_require_admin)])
+async def delete_workflow_run(run_id: int):
+    """Loescht einen abgeschlossenen/abgebrochenen Workflow-Run aus der DB."""
+    run = await database.get_workflow_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404)
+    if run["status"] in ("pending", "running", "paused"):
+        raise HTTPException(status_code=400, detail="Aktive Runs erst abbrechen")
+    async with database._db() as db:
+        await db.execute("DELETE FROM workflow_runs WHERE id = ?", (run_id,))
+        await db.commit()
+    return {"ok": True}
+
+
 @router.get(
     "/admin/api/agents/{agent_id}/workflow-runs",
     dependencies=[Depends(_require_admin)],
