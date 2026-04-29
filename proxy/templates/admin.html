@@ -13529,7 +13529,11 @@ function renderAgentWorkflowRuns(runs) {
     const statusColors = {completed:'var(--green)',failed:'var(--danger)',timed_out:'var(--warning)',cancelled:'var(--fg-muted)',running:'var(--blue)',pending:'var(--fg-muted)'};
     const color = statusColors[r.status] || 'var(--fg-muted)';
     const statusLabel = {completed:'Abgeschlossen',failed:'Fehlgeschlagen',timed_out:'Timeout',cancelled:'Abgebrochen',running:'L\u00e4uft',pending:'Wartend',paused:'Pausiert'}[r.status] || r.status;
-    const stepLabel = current < total ? (steps[current].label || steps[current].type) : '\u2014';
+    let stepLabel = '\u2014';
+    if (current < total) {
+      const s = steps[current];
+      stepLabel = s.label || (s.type === 'install' ? (s.payload && s.payload.package_name || 'install') : s.type);
+    }
     let actionBtns = '';
     if (r.status === 'running') {
       actionBtns = '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="pauseWorkflowRun(' + r.id + ')">Pausieren</button>' +
