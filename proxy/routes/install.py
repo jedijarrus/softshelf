@@ -734,13 +734,12 @@ def _build_choco_command(action: str, package_name: str, version: str | None = N
         # Dependencies im Weg sind — räumt auch ghost-packages auf (z.B.
         # peazip wo der App-Ordner weg ist, aber C:\ProgramData\chocolatey\
         # lib\peazip\ noch existiert).
-        # --skip-autouninstaller: vermeidet dass choco nachträglich noch
-        # den MSI/EXE-Uninstaller startet wenn er in der DB gefunden wird,
-        # aber das App-Verzeichnis schon weg ist. Verhindert „uninstaller
-        # not found" Hard-Error bei ghost-installs.
+        # KEIN --skip-autouninstaller: choco MUSS den nativen Uninstaller
+        # aufrufen (MSI/EXE aus Registry), sonst wird nur das choco-Tracking
+        # entfernt aber die Software bleibt installiert.
         choco_args = (
             f"uninstall '{safe}' -y --force --remove-dependencies "
-            f"--skip-autouninstaller --no-progress --limit-output"
+            f"--no-progress --limit-output"
         )
 
     # Wichtig: Wir exitieren IMMER mit 0 und kodieren den echten ExitCode
