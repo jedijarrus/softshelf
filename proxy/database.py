@@ -1443,7 +1443,15 @@ async def delete_agent(agent_id: str):
     bewusst gebannter Client nach Re-Register nicht wieder auftaucht."""
     async with _db() as db:
         await db.execute("DELETE FROM agent_installations WHERE agent_id = ?", (agent_id,))
+        await db.execute("DELETE FROM agent_winget_state WHERE agent_id = ?", (agent_id,))
+        await db.execute("DELETE FROM agent_choco_state WHERE agent_id = ?", (agent_id,))
+        await db.execute("DELETE FROM agent_scan_meta WHERE agent_id = ?", (agent_id,))
+        await db.execute("DELETE FROM agent_profiles WHERE agent_id = ?", (agent_id,))
+        await db.execute("DELETE FROM agent_workflows WHERE agent_id = ?", (agent_id,))
+        await db.execute("UPDATE action_log SET workflow_run_id = NULL WHERE agent_id = ?", (agent_id,))
+        await db.execute("DELETE FROM workflow_runs WHERE agent_id = ?", (agent_id,))
         await db.execute("DELETE FROM install_log WHERE agent_id = ?", (agent_id,))
+        await db.execute("DELETE FROM action_log WHERE agent_id = ?", (agent_id,))
         await db.execute("DELETE FROM agents WHERE agent_id = ?", (agent_id,))
         await db.commit()
 
