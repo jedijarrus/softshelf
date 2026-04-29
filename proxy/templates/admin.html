@@ -10501,6 +10501,7 @@ function renderAgents() {
     <thead><tr>
       <th>Status</th>
       <th>Hostname</th>
+      <th>User</th>
       <th>Ring</th>
       <th>Registriert</th>
       <th>Letzter Kontakt</th>
@@ -10516,6 +10517,7 @@ function renderAgents() {
       return `<tr class="${a.banned ? 'row-banned' : ''}">
         <td><span class="status ${st.cls}">${st.label}</span></td>
         <td><span class="cell-host">${esc(a.hostname)}</span>${a.error_count ? `<span class="agent-error-badge">${a.error_count} Fehler</span>` : ''}</td>
+        <td style="font-size:12px;color:var(--fg-4)">${esc(a.logged_in_user || '\u2014')}</td>
         <td>${ringBadge}</td>
         <td><span class="cell-time" title="${esc(fmtDt(a.registered_at))}">${esc(relTime(a.registered_at))}</span></td>
         <td><span class="cell-time" title="${esc(fmtDt(a.last_seen))}">${esc(relTime(a.last_seen))}</span></td>
@@ -10569,7 +10571,8 @@ async function openAgentDetail(agentId, hostname) {
 
   const titleSuffix = _currentAgent.banned ? ' · GESPERRT' : '';
   document.getElementById('agent-detail-title').textContent = hostname + titleSuffix;
-  document.getElementById('agent-detail-sub').textContent = agentId;
+  const userInfo = _currentAgent.logged_in_user ? ` · User: ${_currentAgent.logged_in_user}` : '';
+  document.getElementById('agent-detail-sub').textContent = agentId + userInfo;
   document.getElementById('agents-detail-body').innerHTML = '<div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Software wird geladen</span></div>';
 
   // Action-Buttons je nach State togglen
