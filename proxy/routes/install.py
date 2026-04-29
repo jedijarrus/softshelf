@@ -418,6 +418,8 @@ def _check_winget_id(wid: str) -> str:
     return wid
 
 
+# NOTE: _PS_FIND_WINGET is duplicated in winget_scanner.py. If you change the
+# Find-WingetExe / Ensure-VCLibsInPath logic, update both copies.
 _PS_FIND_WINGET = r"""
 function Ensure-VCLibsInPath {
     # winget.exe braucht VCLibs DLLs (MSVCP140.dll, VCRUNTIME140.dll).

@@ -56,7 +56,7 @@ dispatch Installs/Uninstalls über dessen `run_command`-API.
              ▼                            ▼
    ┌──────────────────────────────────────────────────┐
    │  Windows-Clients                                 │
-   │  - Softshelf.exe (Tray, PyQt5 + pystray)         │
+   │  - Softshelf.exe (Tray, pywebview + pystray)      │
    │  - Tactical-Agent (installiert Software als      │
    │    SYSTEM via run_command)                       │
    └──────────────────────────────────────────────────┘
@@ -101,7 +101,7 @@ Ubuntu+Wine+PyInstaller Container. Baut `<slug>.exe` (Tray) und `<slug>-setup.ex
 
 ### Client-Binaries
 
-- **`<slug>.exe`** — PyQt5-Tray-App mit Paket-Grid, Install/Update/Uninstall, Health-Monitor
+- **`<slug>.exe`** — pywebview-Tray-App mit Paket-Grid, Install/Update/Uninstall, Health-Monitor
 - **`<slug>-setup.exe`** — tkinter-Installer, Session-aware-Launch via Task-Scheduler-Trick, Apps-&-Features-Integration
 
 ---
@@ -454,7 +454,7 @@ laufende Runs nicht.
 |---|---|
 | `install` | Installiert ein Softshelf-Paket (gleicher Dispatch-Pfad wie manuell, incl. version_pin). |
 | `script` | Fuehrt beliebiges PowerShell-Inline-Script auf dem Agent aus. Code wird als temporaere .ps1 Datei geschrieben und via `-File` ausgefuehrt. |
-| `reboot` | Zeigt dem angemeldeten User einen Countdown-Dialog (QDialog, PyQt5). Der User kann sofort neu starten oder verschieben. Nach `force_after_hours` wird ein Shutdown-Befehl erzwungen. |
+| `reboot` | Zeigt dem angemeldeten User einen Countdown-Dialog (pywebview). Der User kann sofort neu starten oder verschieben. Nach `force_after_hours` wird ein Shutdown-Befehl erzwungen. |
 
 **Failure-Policies pro Step (`on_failure`):**
 
@@ -482,7 +482,7 @@ start_workflow(workflow_id, agent_id)
                                     via GET /api/v1/health
                                          │
                                     RebootDialog anzeigen
-                                    (PyQt5 Countdown)
+                                    (pywebview Countdown)
                                          │
                            ┌────────────┴────────────┐
                            │                         │
@@ -504,7 +504,7 @@ start_workflow(workflow_id, agent_id)
 2. Gleichzeitig wird ein `shutdown /r /t 300` angestossen (5 Min Countdown).
 3. Der Client pollt `GET /api/v1/health` und erhaelt `pending_actions` wenn
    ein Reboot-Step laeuft. Die Tray-App oeffnet dann automatisch den
-   `RebootDialog` (PyQt5 QDialog, Countdown + Progressbar, zinc-Palette).
+   `RebootDialog` (pywebview, Countdown + Progressbar, zinc-Palette).
 4. Klick auf "Jetzt neu starten": `POST /api/v1/workflow/reboot-now/{run_id}`
    -- loest sofortigen shutdown aus.
 5. Klick auf "Verschieben": `POST /api/v1/workflow/defer/{run_id}` -- inkrementiert
@@ -661,6 +661,18 @@ Update-Version-Info nur sichtbar wenn Agent-Ring ≤ Rollout-Phase. Verhindert V
 - Path-Traversal-Check bei ZIP-Extract
 - MSI-Metadata via msiinfo-Subprocess (kein Python-Parser)
 - Icon: Pillow mit DecompressionBombError-Schutz
+
+### Callback-Auth und TLS
+
+Die Callback-URL (`POST /api/v1/callback/{job_id}`) ist ausschliesslich
+durch die Geheimhaltung der `job_id` (UUID4, 122 Bit Entropie) geschuetzt —
+es gibt keine zusaetzliche Signatur oder Bearer-Token-Validierung auf dem
+Callback-Endpoint. Das ist akzeptabel **solange TLS** den Transport
+verschluesselt. **Ohne TLS** (plain HTTP) koennte ein Netzwerk-Beobachter
+eine job_id abfangen und falsche Ergebnisse injizieren.
+
+> **Produktiv-Betrieb ohne Reverse-Proxy mit TLS ist fuer Callbacks nicht
+> empfohlen.** Siehe Deployment-Sektion: Caddy/Traefik mit TLS vorschalten.
 
 ### Rate-Limiting
 

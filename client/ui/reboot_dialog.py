@@ -424,13 +424,13 @@ def show_reboot_dialog(
 
 
 def _on_reboot_closed(js_api: RebootApi):
-    """Handle window closed via X button - treat as defer if not handled."""
+    """Handle window closed via X button - treat as closed, notify caller."""
     global _reboot_window
     with _reboot_lock:
         _reboot_window = None
-    # If user closed without choosing, don't call API - just reset state
     if not js_api._handled:
         js_api._handled = True
+        js_api._on_done("closed")
 
 
 def destroy_reboot_window():
