@@ -5801,6 +5801,12 @@ button.outdated-badge.clickable:disabled {
         </label>
         <div class="hint">Bricht Installation ab wenn ein Neustart aussteht. Sinnvoll bei Paketen die fehlschlagen wenn Reboot pending ist (SAP GUI, .NET-abhaengige Software).</div>
       </div>
+      <div class="field">
+        <label class="check-label">
+          <input type="checkbox" data-edit="hide_uninstall"> Deinstallation ausblenden
+        </label>
+        <div class="hint">Im Kiosk-Client wird kein Deinstallieren-Button angezeigt. Sinnvoll bei Pflicht-Software.</div>
+      </div>
 
       <div class="field" id="edit-version-pin-field" style="display:none">
         <label>Version-Pin</label>
@@ -9181,6 +9187,7 @@ function openEditPanel(name) {
   document.querySelector('[data-edit="uninstall_cmd"]').value  = pkg.uninstall_cmd || '';
   document.querySelector('[data-edit="install_timeout"]').value = pkg.install_timeout || 120;
   document.querySelector('[data-edit="check_reboot"]').checked = !!pkg.check_reboot;
+  document.querySelector('[data-edit="hide_uninstall"]').checked = !!pkg.hide_uninstall;
   // Custom-only Felder ausblenden fuer Choco/Winget
   document.querySelector('[data-edit="install_args"]').closest('.field').style.display = isCustom ? '' : 'none';
   document.querySelector('[data-edit="detection_name"]').closest('.field').style.display = isCustom ? '' : 'none';

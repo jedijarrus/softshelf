@@ -451,6 +451,7 @@ async def init_db():
             ("auto_advance",       "INTEGER NOT NULL DEFAULT 0"),
             ("install_timeout",    "INTEGER NOT NULL DEFAULT 120"),
             ("check_reboot",       "INTEGER NOT NULL DEFAULT 0"),
+            ("hide_uninstall",     "INTEGER NOT NULL DEFAULT 0"),
         ]:
             if col not in pkg_cols:
                 await db.execute(f"ALTER TABLE packages ADD COLUMN {col} {ddl}")
@@ -672,7 +673,7 @@ _PKG_COLS = (
     "install_args, uninstall_cmd, detection_name, current_version_id, "
     "archive_type, entry_point, version_pin, winget_publisher, winget_scope, "
     "required, notes, staged_rollout, hidden_in_kiosk, auto_advance, "
-    "install_timeout, check_reboot"
+    "install_timeout, check_reboot, hide_uninstall"
 )
 
 
