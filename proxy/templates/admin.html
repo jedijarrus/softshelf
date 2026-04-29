@@ -8752,6 +8752,23 @@ function renderStagedRow(p, settings) {
     ).join('<span class="sr-ring-sep">·</span>');
     const curPhase = r.current_phase || 1;
     const since = r.last_advanced_at ? esc(relTime(r.last_advanced_at)) : '';
+    // Naechste Phase: Wartezeit berechnen
+    const waitH = curPhase === 1 ? (parseInt(settings.rollout_ring1_to_ring2_hours) || 24)
+                : curPhase === 2 ? (parseInt(settings.rollout_ring2_to_ring3_hours) || 168)
+                : 0;
+    let nextPhaseHint = '';
+    if (waitH > 0 && r.last_advanced_at) {
+      const advancedAt = new Date(r.last_advanced_at + 'Z');
+      const nextAt = new Date(advancedAt.getTime() + waitH * 3600000);
+      const diffMs = nextAt.getTime() - Date.now();
+      if (diffMs > 0) {
+        const diffH = Math.ceil(diffMs / 3600000);
+        nextPhaseHint = diffH > 24 ? `${Math.ceil(diffH/24)} Tage` : `${diffH}h`;
+        nextPhaseHint = ` · n\u00e4chste Phase in ~${nextPhaseHint}`;
+      } else {
+        nextPhaseHint = ' · bereit f\u00fcr n\u00e4chste Phase';
+      }
+    }
     const modeTag = p.auto_advance ? 'AUTO-MODUS' : 'MANUELL';
     const nextDisabled = curPhase >= 3;
     const nextLabel = curPhase === 1 ? `Weiter zu ${esc(settings.rollout_ring2_label || 'Pilot')}`
@@ -8774,7 +8791,7 @@ function renderStagedRow(p, settings) {
           <div class="sr-head-right">
             ${errorBadge}
             ${autoBadge}
-            <span class="sr-state-tag">Rollout #${r.id || ''} · ${modeTag} · seit ${since}</span>
+            <span class="sr-state-tag">Rollout #${r.id || ''} · ${modeTag} · seit ${since}${nextPhaseHint}</span>
             ${rowMenu}
           </div>
         </div>
