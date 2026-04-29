@@ -781,7 +781,11 @@ function renderRow(pkg) {{
   }} else if (isUpdate) {{
     btn = `<button class="btn btn-update" onclick="doInstall('${{escAttr(pkg.name)}}')">Updaten</button>`;
   }} else if (isInstalled) {{
-    btn = `<span class="btn btn-installed" onmouseenter="this.innerHTML='Deinstallieren';this.className='btn btn-uninstall'" onmouseleave="this.innerHTML='Installiert';this.className='btn btn-installed'" onclick="doUninstall('${{escAttr(pkg.name)}}')">Installiert</span>`;
+    if (pkg.hide_uninstall) {{
+      btn = `<span class="btn btn-installed">Installiert</span>`;
+    }} else {{
+      btn = `<span class="btn btn-installed" onmouseenter="this.innerHTML='Deinstallieren';this.className='btn btn-uninstall'" onmouseleave="this.innerHTML='Installiert';this.className='btn btn-installed'" onclick="doUninstall('${{escAttr(pkg.name)}}')">Installiert</span>`;
+    }}
   }} else {{
     btn = `<button class="btn btn-install" onclick="doInstall('${{escAttr(pkg.name)}}')">Installieren</button>`;
   }}
