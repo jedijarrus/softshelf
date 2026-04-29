@@ -149,6 +149,16 @@ async def dispatch_current_step(run_id: int):
     payload = step.get("payload") or {}
     timeout_s = step.get("timeout") or 600
 
+    # Install-Steps: Paket-Timeout aus DB lesen (Office braucht 15-30min)
+    if step_type == "install":
+        pkg_name = payload.get("package_name")
+        if pkg_name:
+            pkg = await database.get_package(pkg_name)
+            if pkg:
+                pkg_timeout = pkg.get("install_timeout") or 120
+                # Mindestens Paket-Timeout + 60s Puffer, mindestens 900s
+                timeout_s = max(timeout_s, pkg_timeout + 60, 900)
+
     # Reboot-Steps: Deadline = force_after_hours (default 8h), nicht Step-Timeout
     if step_type == "reboot":
         force_h = int(payload.get("force_after_hours") or 8)

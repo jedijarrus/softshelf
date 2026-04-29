@@ -10798,9 +10798,9 @@ function renderAgentDetail(softwareData, log) {
         ? `<div style="font-size:11px;color:var(--red);margin-top:2px">${esc(e.error_summary.substring(0, 120))}</div>`
         : '';
       return `${groupHeader}<div class="install-row${hidden}${e.status === 'error' ? ' al-error' : ''}"${hidden ? ' style="display:none"' : ''}${e.id ? ` onclick="alShowDetail(${e.id})" style="cursor:pointer${hidden ? ';display:none' : ''}"` : ''}>
-        <span class="install-badge ${e.action}">${e.action === 'install' ? 'Install' : e.action === 'upgrade' ? 'Upgrade' : 'Uninstall'}</span>${statusBadge}
+        <span class="install-badge ${e.action}">${e.action === 'install' ? 'Install' : e.action === 'upgrade' ? 'Upgrade' : 'Uninstall'}</span>
         <div>
-          <div class="install-pkg">${esc(e.display_name)}</div>
+          <div class="install-pkg">${esc(e.display_name)}${statusBadge}</div>
           <div class="install-name">${esc(e.package_name)}${errHint}</div>
         </div>
         <div class="install-time" title="${esc(fmtDt(ts))}">${esc(relTime(ts))}</div>
