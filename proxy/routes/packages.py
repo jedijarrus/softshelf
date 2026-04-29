@@ -33,6 +33,7 @@ class Package(BaseModel):
     installed_version_label: str | None = None
     current_version_label: str | None = None
     update_available: bool = False
+    hide_uninstall: bool = False
 
 
 @router.get("/packages", response_model=list[Package])
@@ -141,6 +142,7 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
                 installed_version_label=installed_label,
                 current_version_label=current_label,
                 update_available=update_avail,
+                hide_uninstall=bool(row.get("hide_uninstall")),
             ))
             continue
 
@@ -199,6 +201,7 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
             installed_version_label=installed_label,
             current_version_label=current_label,
             update_available=update_avail,
+            hide_uninstall=bool(row.get("hide_uninstall")),
         ))
 
     # Staged-Rollout Update-Gate: fuer staged Pakete wird update_available
