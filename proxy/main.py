@@ -575,6 +575,10 @@ async def health(request: Request):
                 pending = await database.get_pending_actions_for_agent(agent_id)
                 if pending:
                     result["pending_actions"] = pending
+                # Windows-User aus Header speichern
+                win_user = request.headers.get("x-softshelf-user", "").strip()
+                if win_user:
+                    await database.update_agent_user(agent_id, win_user)
     except Exception:
         pass  # kein gueltiges Token — kein pending_actions, das ist ok
     return result
