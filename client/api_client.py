@@ -22,12 +22,22 @@ class Package:
     update_available: bool = False
 
 
+def _get_windows_user() -> str:
+    """Aktuell eingeloggter Windows-User (DOMAIN\\User oder User)."""
+    import os
+    try:
+        return os.environ.get("USERNAME") or os.environ.get("USER") or os.getlogin()
+    except Exception:
+        return ""
+
+
 class KioskApiClient:
     def __init__(self, config: ClientConfig):
         self._base = config.proxy_url
         self._headers = {
             "Authorization": f"Bearer {config.machine_token}",
             "Content-Type": "application/json",
+            "X-Softshelf-User": _get_windows_user(),
         }
 
     def _client(self) -> httpx.Client:
