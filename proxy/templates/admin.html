@@ -2038,7 +2038,10 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   text-transform: lowercase;
 }
 .install-badge.install   { color: var(--green); background: var(--green-bg); border-color: var(--green-bd); }
+.install-badge.upgrade   { color: var(--amber); background: var(--amber-bg); border-color: var(--amber-bd); }
 .install-badge.uninstall { color: var(--red);   background: var(--red-bg);   border-color: var(--red-bd); }
+.install-badge.reboot    { color: var(--fg-3);  background: var(--bg-hover); border-color: var(--border); }
+.install-badge.run       { color: var(--blue);  background: #eff6ff;         border-color: #bfdbfe; }
 
 .install-pkg {
   font-size: 13px;
@@ -10798,7 +10801,7 @@ function renderAgentDetail(softwareData, log) {
         ? `<div style="font-size:11px;color:var(--red);margin-top:2px">${esc(e.error_summary.substring(0, 120))}</div>`
         : '';
       return `${groupHeader}<div class="install-row${hidden}${e.status === 'error' ? ' al-error' : ''}"${hidden ? ' style="display:none"' : ''}${e.id ? ` onclick="alShowDetail(${e.id})" style="cursor:pointer${hidden ? ';display:none' : ''}"` : ''}>
-        <span class="install-badge ${e.action}">${e.action === 'install' ? 'Install' : e.action === 'upgrade' ? 'Upgrade' : 'Uninstall'}</span>
+        <span class="install-badge ${e.action}">${{install:'Install',upgrade:'Upgrade',uninstall:'Uninstall',reboot:'Reboot',run:'Script'}[e.action] || e.action}</span>
         <div>
           <div class="install-pkg">${esc(e.display_name)}${statusBadge}</div>
           <div class="install-name">${esc(e.package_name)}${errHint}</div>
