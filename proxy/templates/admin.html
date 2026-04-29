@@ -4948,6 +4948,71 @@ button.outdated-badge.clickable:disabled {
 .toast-spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: spin .6s linear infinite; margin-right: 6px; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .toast-item .toast-action-btn { background: rgba(255,255,255,.2); border: none; color: inherit; padding: 2px 8px; border-radius: 3px; cursor: pointer; margin-left: 8px; font-size: 12px; }
+
+/* ── Inline Help ─────────────────────────────────────────────────────────── */
+.help-toggle {
+  width: 30px; height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--fg-3);
+  border-radius: var(--r);
+  cursor: pointer;
+  transition: all .14s;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--sans);
+}
+.help-toggle:hover { background: var(--bg-hover); color: var(--fg); border-color: var(--border-strong); }
+.help-toggle.active { background: var(--blue-bg); border-color: var(--blue); color: var(--blue); }
+
+/* Help hints: hidden by default, visible when body.help-active */
+[data-help]::after {
+  content: attr(data-help);
+  display: none;
+  font-size: 11px;
+  color: var(--blue);
+  font-weight: 400;
+  font-style: italic;
+  margin-left: 6px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+body.help-active [data-help]::after {
+  display: inline;
+}
+/* Block-level help hints */
+[data-help-block]::after {
+  content: attr(data-help-block);
+  display: none;
+  font-size: 11px;
+  color: var(--blue);
+  font-weight: 400;
+  font-style: italic;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+body.help-active [data-help-block]::after {
+  display: block;
+}
+/* Sidebar tabs: help text as flex item */
+.sidebar .tab[data-help]::after {
+  flex-shrink: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  font-size: 10px;
+  margin-left: auto;
+}
+/* Hide help hints in collapsed sidebar on mobile */
+@media (max-width: 900px) {
+  body.help-active [data-help]::after { display: none; }
+  body.help-active [data-help-block]::after { display: none; }
+}
 </style>
 </head>
 <body>
@@ -4963,6 +5028,7 @@ button.outdated-badge.clickable:disabled {
       <span>Suchen…</span>
       <kbd>⌘K</kbd>
     </button>
+    <button class="help-toggle" id="helpToggle" onclick="toggleHelp()" title="Inline-Hilfe ein/ausschalten">?</button>
     <button class="hdr-icon-btn" id="theme-toggle-btn" onclick="toggleTheme()" title="Theme umschalten">
       <svg class="theme-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
       <svg class="theme-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -4999,40 +5065,40 @@ button.outdated-badge.clickable:disabled {
   </button>
 
   <div class="sidebar-group-label">Software</div>
-  <button class="tab" data-tab="packages" onclick="switchTab('packages',this)">
+  <button class="tab" data-tab="packages" data-help="Whitelist der freigegebenen Software" onclick="switchTab('packages',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
     Pakete
   </button>
-  <button class="tab" data-tab="distribution" onclick="switchTab('distribution',this)">
+  <button class="tab" data-tab="distribution" data-help="Welche Pakete auf welchen Clients laufen" onclick="switchTab('distribution',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
     Verteilung
   </button>
   <div class="sidebar-group-label">Verwaltung</div>
-  <button class="tab" data-tab="profiles" onclick="switchTab('profiles',this)">
+  <button class="tab" data-tab="profiles" data-help="Paket-Gruppen die Agents zugewiesen werden" onclick="switchTab('profiles',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
     Profile
   </button>
-  <button class="tab" data-tab="workflows" onclick="switchTab('workflows',this)">
+  <button class="tab" data-tab="workflows" data-help="Mehrstufige Ablaeufe (Install, Reboot, Script)" onclick="switchTab('workflows',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
     Workflows
   </button>
-  <button class="tab" data-tab="rollouts" onclick="switchTab('rollouts',this)">
+  <button class="tab" data-tab="rollouts" data-help="Phased Rollout mit Ring-System" onclick="switchTab('rollouts',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
     Rollouts
   </button>
 
   <div class="sidebar-group-label">Flotte</div>
-  <button class="tab" data-tab="agents" onclick="switchTab('agents',this)">
+  <button class="tab" data-tab="agents" data-help="Alle registrierten Kiosk-Agents" onclick="switchTab('agents',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
     Clients
   </button>
-  <button class="tab" data-tab="compliance" onclick="switchTab('compliance',this)">
+  <button class="tab" data-tab="compliance" data-help="Required-Pakete und fehlende Installationen" onclick="switchTab('compliance',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
     Compliance
   </button>
 
   <div class="sidebar-group-label">Operations</div>
-  <button class="tab" data-tab="errors" onclick="switchTab('errors',this)">
+  <button class="tab" data-tab="errors" data-help="Offene Install-/Scan-Fehler" onclick="switchTab('errors',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
     Fehler
   </button>
@@ -5123,7 +5189,7 @@ button.outdated-badge.clickable:disabled {
         <div class="section-sub" id="wf-count">&mdash;</div></div>
       <div class="section-actions">
         <button class="btn btn-ghost btn-sm" onclick="loadWorkflows()">Aktualisieren</button>
-        <button class="btn btn-primary btn-sm" onclick="openWorkflowEditor(null)">Workflow erstellen</button>
+        <button class="btn btn-primary btn-sm" data-help="Steps: Install, Script (PowerShell), Reboot" onclick="openWorkflowEditor(null)">Workflow erstellen</button>
       </div>
     </div>
     <div id="wf-list" class="pkg-grid" style="margin-top:16px">
@@ -5178,8 +5244,8 @@ button.outdated-badge.clickable:disabled {
       </div>
       <div style="display:flex;gap:8px">
         <button class="btn btn-ghost btn-sm" onclick="exportPackagesCsv()" title="CSV-Export">↓ CSV</button>
-        <button class="btn btn-ghost btn-sm" onclick="openBulkImport()">Bulk-Import</button>
-        <button class="btn btn-primary" id="add-btn" onclick="openSearch()">
+        <button class="btn btn-ghost btn-sm" data-help="Mehrere winget-Pakete auf einmal aktivieren" onclick="openBulkImport()">Bulk-Import</button>
+        <button class="btn btn-primary" id="add-btn" data-help="Choco, Winget, eigene EXE/MSI oder Ordner" onclick="openSearch()">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
           Paket hinzufügen
         </button>
@@ -5362,7 +5428,7 @@ button.outdated-badge.clickable:disabled {
           <div class="section-sub" id="agent-detail-sub">—</div>
         </div>
         <div class="agent-detail-actions">
-          <label class="agent-ring-picker" title="Rollout-Ring: 1=Canary (erste Phase), 2=Pilot, 3=Produktion (Default). Pakete mit Phased Rollout gehen zuerst an Ring 1.">
+          <label class="agent-ring-picker" data-help="Ring 1=Canary, 2=Pilot, 3=Produktion" title="Rollout-Ring: 1=Canary (erste Phase), 2=Pilot, 3=Produktion (Default). Pakete mit Phased Rollout gehen zuerst an Ring 1.">
             <span class="agent-ring-label">Ring</span>
             <select class="agent-ring-select" id="agent-detail-ring-select" onchange="agentSetRing(this.value)">
               <option value="1" data-ring="1">1 — Canary</option>
@@ -5370,7 +5436,7 @@ button.outdated-badge.clickable:disabled {
               <option value="3" data-ring="3" selected>3 — Produktion</option>
             </select>
           </label>
-          <button class="btn btn-ghost btn-sm" type="button" id="agent-detail-rescan-btn" onclick="agentDetailRescan()" title="winget-Scan jetzt anstoßen">Neu scannen</button>
+          <button class="btn btn-ghost btn-sm" type="button" id="agent-detail-rescan-btn" data-help="Winget+Choco Re-Scan auf diesem Client" onclick="agentDetailRescan()" title="winget-Scan jetzt anstoßen">Neu scannen</button>
           <div class="agent-overflow-wrap">
             <button class="agent-overflow-btn" type="button" onclick="toggleAgentOverflow(event)" title="Weitere Aktionen">⋯</button>
             <div class="agent-overflow-menu" id="agent-overflow-menu">
@@ -5777,7 +5843,7 @@ button.outdated-badge.clickable:disabled {
         <div class="hint">Dateien im Archiv anzeigen, einzelne hinzufügen oder löschen — wird als neue Version gespeichert.</div>
       </div>
       <div class="field">
-        <label>Detection-Name</label>
+        <label data-help-block="Wird mit Apps &amp; Features abgeglichen um Installationsstatus zu erkennen">Detection-Name</label>
         <input class="input" data-edit="detection_name" placeholder='wie in "Apps & Features"'>
         <div class="hint">Wird mit der Tactical-Liste installierter Programme abgeglichen.</div>
       </div>
@@ -5791,25 +5857,25 @@ button.outdated-badge.clickable:disabled {
       </div>
 
       <div class="field">
-        <label>Install-Timeout (Sekunden)</label>
+        <label data-help-block="Grosse Pakete wie Office brauchen 600-900s">Install-Timeout (Sekunden)</label>
         <input class="input" data-edit="install_timeout" type="number" min="30" max="3600" placeholder="120">
         <div class="hint">Wie lange der Installer maximal laufen darf bevor er abgebrochen wird. Standard: 120s. Grosse Pakete (Office, SAP): 600-900s.</div>
       </div>
       <div class="field">
         <label class="check-label">
-          <input type="checkbox" data-edit="check_reboot"> Reboot-Check vor Installation
+          <input type="checkbox" data-edit="check_reboot"> <span data-help-block="Verhindert Installation wenn ein Neustart aussteht">Reboot-Check vor Installation</span>
         </label>
         <div class="hint">Bricht Installation ab wenn ein Neustart aussteht. Sinnvoll bei Paketen die fehlschlagen wenn Reboot pending ist (SAP GUI, .NET-abhaengige Software).</div>
       </div>
       <div class="field">
         <label class="check-label">
-          <input type="checkbox" data-edit="hide_uninstall"> Deinstallation ausblenden
+          <input type="checkbox" data-edit="hide_uninstall"> <span data-help-block="Im Kiosk-Client wird kein Deinstallieren-Button angezeigt">Deinstallation ausblenden</span>
         </label>
         <div class="hint">Im Kiosk-Client wird kein Deinstallieren-Button angezeigt. Sinnvoll bei Pflicht-Software.</div>
       </div>
 
       <div class="field" id="edit-version-pin-field" style="display:none">
-        <label>Version-Pin</label>
+        <label data-help-block="Fixiert auf diese Version, kein Auto-Upgrade">Version-Pin</label>
         <div style="display:flex;gap:8px;align-items:center">
           <input class="input" id="edit-version-pin" placeholder="z. B. 115.0.1 — leer = immer latest" maxlength="50" style="font-family:var(--mono);flex:1">
           <button type="button" class="btn btn-ghost btn-sm" id="edit-version-pin-toggle" onclick="toggleVersionList()" style="white-space:nowrap;font-size:12px">Versionen ▾</button>
@@ -8030,6 +8096,18 @@ function pickVersion(v) {
 // ── Cmd+K Quick-Jump ────────────────────────────────────────────────────────
 let _qjumpIdx = 0;
 let _qjumpItems = [];
+
+// ── Inline Help Toggle ──────────────────────────────────────────────────────
+function toggleHelp() {
+  const active = document.body.classList.toggle('help-active');
+  document.getElementById('helpToggle').classList.toggle('active', active);
+  localStorage.setItem('softshelf_help', active ? '1' : '0');
+}
+// Restore help state on load
+if (localStorage.getItem('softshelf_help') === '1') {
+  document.body.classList.add('help-active');
+  document.getElementById('helpToggle')?.classList.add('active');
+}
 
 function toggleTheme() {
   const cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
@@ -12680,6 +12758,7 @@ async function loadSettings() {
     const data = await api('GET', '/admin/api/settings');
     _settingsMeta = data.settings;
     renderSettings();
+    _applySettingsHelpHints();
     renderDeploySnippet();
     loadBranding();
     loadBuildStatus();
@@ -12897,6 +12976,23 @@ function renderSettings() {
       <div class="settings-group-body">${fields.join('')}</div>
     </div>`;
   }).join('');
+}
+
+function _applySettingsHelpHints() {
+  const hints = {
+    'tactical_url': 'Basis-URL der Tactical RMM API (z.B. https://api.example.com)',
+    'registration_secret': 'Wird in die Client-EXE eingebacken. Aendern = neue EXEs bauen',
+  };
+  for (const [key, text] of Object.entries(hints)) {
+    const input = document.querySelector(`.setting-field input[data-key="${key}"]`);
+    if (input) {
+      const field = input.closest('.setting-field');
+      if (field) {
+        const label = field.querySelector('label');
+        if (label) label.setAttribute('data-help-block', text);
+      }
+    }
+  }
 }
 
 function _renderSettingField(s) {
