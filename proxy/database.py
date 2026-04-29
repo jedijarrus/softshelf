@@ -423,6 +423,8 @@ async def init_db():
             cols = {row[1] for row in await cur.fetchall()}
         if "token_version" not in cols:
             await db.execute("ALTER TABLE agents ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1")
+        if "logged_in_user" not in cols:
+            await db.execute("ALTER TABLE agents ADD COLUMN logged_in_user TEXT")
 
         # Migration: custom-package-Felder + winget-Felder
         async with db.execute("PRAGMA table_info(packages)") as cur:
@@ -1171,7 +1173,7 @@ async def get_agents() -> list[dict]:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT a.agent_id, a.hostname, a.registered_at, a.last_seen, "
-            "a.ring, (b.agent_id IS NOT NULL) AS banned "
+            "a.ring, a.logged_in_user, (b.agent_id IS NOT NULL) AS banned "
             "FROM agents a "
             "LEFT JOIN agent_blocklist b ON b.agent_id = a.agent_id "
             "ORDER BY a.hostname"
@@ -1268,6 +1270,16 @@ async def update_agent_seen(agent_id: str, hostname: str):
                 hostname  = excluded.hostname,
                 last_seen = datetime('now')
         """, (agent_id, hostname))
+        await db.commit()
+
+
+async def update_agent_user(agent_id: str, username: str):
+    """Speichert den aktuell eingeloggten Windows-User fuer einen Agent."""
+    async with _db() as db:
+        await db.execute(
+            "UPDATE agents SET logged_in_user = ? WHERE agent_id = ?",
+            (username, agent_id),
+        )
         await db.commit()
 
 
