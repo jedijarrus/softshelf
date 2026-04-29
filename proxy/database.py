@@ -3600,7 +3600,7 @@ async def get_workflow_runs_for_agent(
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT r.id, r.workflow_id, r.agent_id, r.hostname, "
-            "       r.current_step, r.status, r.step_state, "
+            "       r.current_step, r.status, r.step_state, r.step_snapshot, "
             "       r.step_deadline_at, r.started_at, r.updated_at, "
             "       w.name AS workflow_name "
             "FROM workflow_runs r "
