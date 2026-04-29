@@ -1426,7 +1426,8 @@ async def get_package_agents_version_split(
                 "state":              state,
             })
         out[ring] = {
-            "total":     len(agents_in_ring),
+            "total":     on_target + on_old,  # nur Agents die das Paket haben
+            "total_all": len(agents_in_ring),  # alle Agents im Ring
             "on_target": on_target,
             "on_old":    on_old,
             "missing":   missing,
