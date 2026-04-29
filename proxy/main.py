@@ -233,6 +233,8 @@ async def _rollout_auto_advance_tick():
         from routes.admin import _stage_to_ring_filter
 
         rollouts = await database.list_rollouts(status="active", limit=500)
+        # Fehler-Liste einmal laden, dann pro Rollout filtern
+        all_fleet_errors = await database.get_fleet_errors(limit=500)
         for r in rollouts:
             # Per-Paket opt-in: nur Pakete mit auto_advance=1 werden
             # automatisch weitergeschaltet.
@@ -264,9 +266,8 @@ async def _rollout_auto_advance_tick():
             if la > threshold:
                 continue
 
-            # Fehler-Anteil berechnen
-            errors = await database.get_fleet_errors(limit=500)
-            err_for_pkg = [e for e in errors
+            # Fehler-Anteil berechnen (aus vorab geladener Liste filtern)
+            err_for_pkg = [e for e in all_fleet_errors
                            if e.get("last_action_package") == r["package_name"]]
             stage = phase_stage.get(r["current_phase"])
             agents_in_stage = await database.get_agents_by_ring(
@@ -379,14 +380,16 @@ async def lifespan(app: FastAPI):
         await database.cleanup_expired_sessions()
     except Exception as e:
         logger.warning("Cleanup fehlgeschlagen: %s", e)
-    # Stale action_log Eintraege aus vorherigem Container-Restart aufräumen
+    # Stale action_log Eintraege aus vorherigem Container-Restart aufräumen.
+    # Workflow-Eintraege ausnehmen — die werden von recover_after_restart() behandelt.
     try:
         async with database._db() as db:
             res = await db.execute(
                 "UPDATE action_log SET status = 'error', "
                 "error_summary = 'Container-Restart waehrend Ausfuehrung', "
                 "completed_at = datetime('now') "
-                "WHERE status IN ('pending', 'running')"
+                "WHERE status IN ('pending', 'running') "
+                "AND workflow_run_id IS NULL"
             )
             if res.rowcount:
                 logger.info("Stale action_log: %d Eintraege als error markiert", res.rowcount)
@@ -575,9 +578,9 @@ async def health(request: Request):
                 pending = await database.get_pending_actions_for_agent(agent_id)
                 if pending:
                     result["pending_actions"] = pending
-                # Windows-User aus Header speichern
-                win_user = request.headers.get("x-softshelf-user", "").strip()
-                if win_user:
+                # Windows-User aus Header speichern (sanitized)
+                win_user = request.headers.get("x-softshelf-user", "").strip()[:60]
+                if win_user and re.fullmatch(r'[^\x00-\x1f\x7f<>"\'`]{1,60}', win_user):
                     await database.update_agent_user(agent_id, win_user)
     except Exception:
         pass  # kein gueltiges Token — kein pending_actions, das ist ok
@@ -596,9 +599,6 @@ async def download_exe(filename: str):
     """
     slug = await runtime_value("product_slug") or "Softshelf"
     allowed = {f"{slug}.exe", f"{slug}-setup.exe"}
-    # .ps1 Scripts aus dem downloads-Verzeichnis (fuer Debug/Deploy)
-    if filename.endswith(".ps1") and re.fullmatch(r"[a-zA-Z0-9_\-]{1,80}\.ps1", filename):
-        allowed.add(filename)
     if filename not in allowed:
         raise HTTPException(status_code=404, detail="Nicht gefunden")
     path = os.path.join(DOWNLOADS_DIR, filename)
@@ -697,7 +697,7 @@ async def workflow_defer_reboot(run_id: int, request: Request):
     state = _json.loads(run.get("step_state") or "{}")
     state["deferrals"] = state.get("deferrals", 0) + 1
     # Verschieben-Dauer: 60s zum Testen, spaeter 24h
-    defer_seconds = 60  # TODO: auf 86400 (24h) setzen fuer Produktion
+    defer_seconds = 86400  # 24 Stunden
     state["deferred_until"] = (
         datetime.now(timezone.utc) + timedelta(seconds=defer_seconds)
     ).strftime("%Y-%m-%d %H:%M:%S")

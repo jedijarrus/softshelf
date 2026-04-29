@@ -406,18 +406,28 @@ async def recover_after_restart():
 
 
 async def _advance_to_next(run_id: int):
-    """Setzt den Run auf den naechsten Step und dispatched ihn."""
+    """Setzt den Run auf den naechsten Step und dispatched ihn.
+
+    Verwendet ein atomares UPDATE mit WHERE current_step = expected als
+    Concurrency-Guard — verhindert Doppel-Advance bei parallelen Callbacks.
+    """
     run = await database.get_workflow_run(run_id)
     if not run:
         return
-    next_idx = (run.get("current_step") or 0) + 1
-    # step_state zuruecksetzen fuer den naechsten Step
-    await database.update_workflow_run(
-        run_id,
-        current_step=next_idx,
-        step_state="{}",
-        step_deadline_at=None,
-    )
+    expected_step = run.get("current_step", 0)
+    next_idx = expected_step + 1
+    # Atomic: only advance if step hasn't changed (concurrency guard)
+    async with database._db() as db:
+        result = await db.execute(
+            "UPDATE workflow_runs SET current_step = ?, step_state = '{}', "
+            "step_deadline_at = NULL, updated_at = datetime('now') "
+            "WHERE id = ? AND current_step = ? AND status = 'running'",
+            (next_idx, run_id, expected_step),
+        )
+        await db.commit()
+        if result.rowcount == 0:
+            logger.warning("advance: run %d lost update (step was %d)", run_id, expected_step)
+            return
     await dispatch_current_step(run_id)
 
 
@@ -443,26 +453,13 @@ async def _dispatch_install_step(
     version_pin = payload.get("version_pin") or None
 
     try:
-        # workflow_run_id wird in Task 3 zu dispatch_install_for_agent hinzugefuegt.
-        # Bis dahin ohne den Parameter aufrufen — der action_log bekommt dann
-        # workflow_run_id=None, was der Callback-Handler noch nicht kennt.
-        import inspect as _inspect
-        _sig = _inspect.signature(dispatch_install_for_agent)
-        if "workflow_run_id" in _sig.parameters:
-            result = await dispatch_install_for_agent(
-                agent_id,
-                hostname,
-                pkg,
-                version_pin=version_pin,
-                workflow_run_id=run_id,
-            )
-        else:
-            result = await dispatch_install_for_agent(
-                agent_id,
-                hostname,
-                pkg,
-                version_pin=version_pin,
-            )
+        result = await dispatch_install_for_agent(
+            agent_id,
+            hostname,
+            pkg,
+            version_pin=version_pin,
+            workflow_run_id=run_id,
+        )
         logger.info(
             "workflow run %d install-step: %s %s dispatched (action=%s)",
             run_id, result.get("type"), package_name, result.get("action"),

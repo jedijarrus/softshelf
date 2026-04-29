@@ -26,14 +26,14 @@ async def _db():
     """aiosqlite-Connection mit aktivierten Foreign Keys."""
     async with aiosqlite.connect(DB_PATH) as conn:
         await conn.execute("PRAGMA foreign_keys = ON")
-        await conn.execute("PRAGMA journal_mode = WAL")
-        await conn.execute("PRAGMA busy_timeout = 5000")
+        await conn.execute("PRAGMA busy_timeout = 15000")
         yield conn
 
 
 async def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     async with _db() as db:
+        await db.execute("PRAGMA journal_mode = WAL")
         await db.executescript("""
             CREATE TABLE IF NOT EXISTS packages (
                 name         TEXT PRIMARY KEY,
