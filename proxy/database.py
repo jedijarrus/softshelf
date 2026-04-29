@@ -2859,7 +2859,7 @@ async def get_agent_choco_state(agent_id: str) -> dict[str, dict]:
             "FROM agent_choco_state WHERE agent_id = ?",
             (agent_id,),
         ) as cur:
-            return {r["choco_name"]: dict(r) for r in await cur.fetchall()}
+            return {r["choco_name"].lower(): dict(r) for r in await cur.fetchall()}
 
 
 async def cleanup_choco_state_for_package(package_name: str):

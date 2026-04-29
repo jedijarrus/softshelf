@@ -159,7 +159,7 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
         # installed_version + available_version. Wenn vorhanden, überschreibt
         # sie die Substring-Heuristik vom Tactical-Scan.
         if ptype == "choco":
-            cstate = choco_state.get(row["name"])
+            cstate = choco_state.get(row["name"].lower())
             if cstate:
                 cs_installed = cstate.get("installed_version")
                 cs_avail = cstate.get("available_version")
