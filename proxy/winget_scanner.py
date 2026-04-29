@@ -40,6 +40,8 @@ logger = logging.getLogger("softshelf.winget.scanner")
 # C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*_x64__*\winget.exe
 # und ist von SYSTEM aus zugreifbar (regulärer User nicht). Wir resolven
 # beide Pfade und fallen auf die WindowsApps-Variante zurück.
+# NOTE: _PS_FIND_WINGET is duplicated in routes/install.py. If you change the
+# Find-WingetExe / Ensure-VCLibsInPath logic, update both copies.
 _PS_FIND_WINGET = r"""
 function Ensure-VCLibsInPath {
     $vcDir = Get-ChildItem 'C:\Program Files\WindowsApps\Microsoft.VCLibs.140.00.UWPDesktop_*_x64__*' `
