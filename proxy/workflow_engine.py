@@ -280,6 +280,36 @@ async def cancel(run_id: int):
     logger.info("workflow run %d cancelled", run_id)
 
 
+async def pause(run_id: int):
+    """Pausiert einen laufenden Workflow-Run. Aktueller Step laeuft ggf. noch
+    zu Ende, aber advance() dispatcht keinen naechsten Step."""
+    run = await database.get_workflow_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Workflow-Run {run_id} nicht gefunden")
+    if run["status"] != "running":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Workflow-Run {run_id} kann nicht pausiert werden (status={run['status']})",
+        )
+    await database.update_workflow_run(run_id, status="paused")
+    logger.info("workflow run %d paused", run_id)
+
+
+async def resume(run_id: int):
+    """Setzt einen pausierten Workflow-Run fort."""
+    run = await database.get_workflow_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Workflow-Run {run_id} nicht gefunden")
+    if run["status"] != "paused":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Workflow-Run {run_id} kann nicht fortgesetzt werden (status={run['status']})",
+        )
+    await database.update_workflow_run(run_id, status="running")
+    logger.info("workflow run %d resumed, dispatching current step", run_id)
+    await dispatch_current_step(run_id)
+
+
 async def check_timeouts():
     """APScheduler-Job: prueft ueberfaellige Workflow-Runs und markiert sie als timed_out.
 
