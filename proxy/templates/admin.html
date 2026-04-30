@@ -2768,8 +2768,7 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
 }
 .dist-agent-row.outdated { border-left: 3px solid var(--amber); }
 .dist-agent-row .dar-name { font-weight: 500; color: var(--fg); }
-.dist-agent-row .dar-id { font-family: var(--mono); font-size: 10px; color: var(--fg-5); }
-.dist-agent-row .dar-version { font-family: var(--mono); font-size: 11px; color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dist-agent-row .dar-version { font-family: var(--mono); font-size: 11px; color: var(--fg-3); white-space: normal; word-break: break-all; }
 .dist-agent-row .dar-actions { display: flex; gap: 4px; }
 .dist-agent-row .dar-actions button {
   font-family: inherit;
@@ -10471,8 +10470,7 @@ function renderDistAgents(data) {
     return `
       <div class="dist-agent-row ${a.outdated ? 'outdated' : ''}">
         <div class="dar-host">
-          <div class="dar-name">${esc(a.hostname || '—')}</div>
-          <div class="dar-id">${esc(a.agent_id)}</div>
+          <a class="dar-name" href="#agents/${esc(a.agent_id)}" style="color:var(--fg);text-decoration:none" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${esc(a.hostname || '—')}</a>
         </div>
         <div class="dar-version">${esc(ver)}${av}</div>
         <div class="dar-actions">${updateBtn}${uninstBtn}</div>
