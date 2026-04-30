@@ -10685,6 +10685,9 @@ async function openAgentDetail(agentId, hostname) {
     _applyRingLabelsToSelect(rs);
   }
 
+  // Hash setzen damit F5 die Detail-Sicht wiederherstellt
+  try { history.replaceState(null, '', '#agents/' + agentId); } catch(_){}
+
   // List ausblenden, Detail einblenden
   document.getElementById('agents-list-view').style.display = 'none';
   document.getElementById('agents-detail-view').style.display = '';
@@ -10743,6 +10746,7 @@ function toggleHistoryShowMore() {
 function closeAgentDetailPage() {
   document.getElementById('agents-detail-view').style.display = 'none';
   document.getElementById('agents-list-view').style.display = '';
+  try { history.replaceState(null, '', '#agents'); } catch(_){}
   _currentAgent = null;
   _agentSoftwareBusy.clear();
   if (_agentSoftwarePollTimer) {
@@ -10971,6 +10975,11 @@ function renderAgentDetail(softwareData, log) {
     ${actionBanner}
     ${profilePills}
     ${updateAllBanner}
+    <div style="font-size:11px;color:var(--fg-5);margin-bottom:8px;display:flex;gap:16px;flex-wrap:wrap">
+      ${meta.last_scan_at ? `<span title="Letzter winget+choco Scan">Scan: ${esc(relTime(meta.last_scan_at))}</span>` : ''}
+      ${meta.last_status ? `<span>Status: ${esc(meta.last_status)}</span>` : ''}
+      ${meta.last_action_at ? `<span>Letzte Aktion: ${esc(relTime(meta.last_action_at))}</span>` : ''}
+    </div>
     <div class="agent-section-head">
       <span class="agent-section-title">Installierte Software</span>
       <span class="agent-section-count" id="sw-section-count">${total} insgesamt · ${managed} verwaltet${updates ? ` · ${updates} Update${updates === 1 ? '' : 's'}` : ''}</span>
@@ -13239,10 +13248,21 @@ init();
 // Tab aus URL-Hash wiederherstellen. Default ist home — wenn Hash fehlt
 // oder home ist, Home-Daten laden und nichts zu switchen.
 (function _restoreTabFromHash() {
-  const validTabs = ['home', 'packages', 'distribution', 'profiles', 'rollouts', 'agents', 'errors', 'compliance', 'scheduled', 'audit', 'actions', 'users', 'settings', 'help'];
+  const validTabs = ['home', 'packages', 'distribution', 'profiles', 'rollouts', 'workflows', 'agents', 'errors', 'compliance', 'scheduled', 'audit', 'actions', 'users', 'settings', 'help'];
   const raw = (location.hash || '').replace(/^#/, '');
+  // Agent-Detail direkt oeffnen: #agents/<agentId>
+  if (raw.startsWith('agents/')) {
+    const agentId = raw.substring(7);
+    const btn = document.querySelector('.tab[data-tab="agents"]');
+    if (btn) switchTab('agents', btn);
+    setTimeout(() => {
+      const cached = (cachedAgents || []).find(a => a.agent_id === agentId);
+      if (cached) openAgentDetail(agentId, cached.hostname);
+      else openAgentDetail(agentId, agentId.substring(0, 12) + '...');
+    }, 500);
+    return;
+  }
   if (!raw || raw === 'home' || !validTabs.includes(raw)) {
-    // Home ist bereits aktiv via HTML — nur Daten laden
     loadHome();
     return;
   }
@@ -13252,8 +13272,23 @@ init();
 
 // Back/Forward-Navigation: auch auf den richtigen Tab reagieren.
 window.addEventListener('hashchange', () => {
-  const validTabs = ['home', 'packages', 'distribution', 'profiles', 'rollouts', 'agents', 'errors', 'compliance', 'scheduled', 'audit', 'actions', 'users', 'settings', 'help'];
+  const validTabs = ['home', 'packages', 'distribution', 'profiles', 'rollouts', 'workflows', 'agents', 'errors', 'compliance', 'scheduled', 'audit', 'actions', 'users', 'settings', 'help'];
   const raw = (location.hash || '').replace(/^#/, '') || 'packages';
+  // Agent-Detail: #agents/<agentId>
+  if (raw.startsWith('agents/')) {
+    const agentId = raw.substring(7);
+    if (agentId && currentTab !== 'agents') {
+      const btn = document.querySelector('.tab[data-tab="agents"]');
+      if (btn) switchTab('agents', btn);
+    }
+    // Agent-Detail oeffnen nachdem agents-tab geladen
+    setTimeout(() => {
+      const cached = (cachedAgents || []).find(a => a.agent_id === agentId);
+      if (cached) openAgentDetail(agentId, cached.hostname);
+      else openAgentDetail(agentId, agentId.substring(0, 12) + '...');
+    }, 300);
+    return;
+  }
   if (!validTabs.includes(raw)) return;
   if (raw === currentTab) return;
   const btn = document.querySelector(`.tab[data-tab="${raw}"]`);
