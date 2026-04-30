@@ -3246,6 +3246,10 @@ async def get_agent_software(agent_id: str):
     already_pkg_names_lower = {
         (i.get("package_name") or "").lower() for i in items if i.get("managed")
     }
+    # Auch Display-Namen sammeln um Duplikate mit unmanaged Tactical-Items zu vermeiden
+    already_display_lower = {
+        (i.get("name") or "").lower() for i in items
+    }
     for pkg in other_whitelist:
         ptype = pkg.get("type") or "choco"
         if ptype != "choco":
@@ -3254,6 +3258,19 @@ async def get_agent_software(agent_id: str):
             continue
         cstate = choco_state.get(pkg["name"].lower())
         if not cstate:
+            continue
+        # Duplikat-Check: wenn Display-Name schon als unmanaged Item existiert,
+        # das unmanaged Item zu managed upgraden statt neues hinzufuegen
+        dn_lower = (pkg.get("display_name") or pkg["name"]).lower()
+        existing = next((i for i in items if (i.get("name") or "").lower() == dn_lower and not i.get("managed")), None)
+        if existing:
+            existing["managed"] = True
+            existing["managed_type"] = "choco"
+            existing["package_name"] = pkg["name"]
+            existing["installed_version"] = cstate.get("installed_version") or existing.get("installed_version")
+            if cstate.get("available_version"):
+                existing["available_version"] = cstate["available_version"]
+                existing["update_available"] = True
             continue
         # Choco-Paket ist installiert aber war in keinem Pass
         items.append({
