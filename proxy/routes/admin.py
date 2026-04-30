@@ -3229,7 +3229,7 @@ async def get_agent_software(agent_id: str):
         pkg_name = item.get("package_name")
         if not pkg_name:
             continue
-        cstate = choco_state.get(pkg_name)
+        cstate = choco_state.get(pkg_name.lower())
         if not cstate:
             continue
         cs_installed = cstate.get("installed_version")
@@ -3239,6 +3239,37 @@ async def get_agent_software(agent_id: str):
         if cs_avail:
             item["available_version"] = cs_avail
             item["update_available"] = True
+
+    # Pass 5: choco_state Whitelist-Pakete die in keinem vorherigen Pass
+    # aufgetaucht sind (extern installiert, nicht ueber Softshelf, kein
+    # Tactical-Scan-Match). Case-insensitiver Lookup.
+    already_pkg_names_lower = {
+        (i.get("package_name") or "").lower() for i in items if i.get("managed")
+    }
+    for pkg in other_whitelist:
+        ptype = pkg.get("type") or "choco"
+        if ptype != "choco":
+            continue
+        if pkg["name"].lower() in already_pkg_names_lower:
+            continue
+        cstate = choco_state.get(pkg["name"].lower())
+        if not cstate:
+            continue
+        # Choco-Paket ist installiert aber war in keinem Pass
+        items.append({
+            "name":              pkg.get("display_name") or pkg["name"],
+            "winget_id":         None,
+            "installed_version": cstate.get("installed_version"),
+            "available_version": cstate.get("available_version"),
+            "publisher":         None,
+            "source":            "choco",
+            "managed":           True,
+            "managed_type":      "choco",
+            "package_name":      pkg["name"],
+            "can_activate":      False,
+            "update_available":  bool(cstate.get("available_version")),
+            "os_managed":        False,
+        })
 
     # Sortieren: Updates zuerst, dann managed, dann unmanaged, jeweils nach Name
     items.sort(key=lambda i: (
