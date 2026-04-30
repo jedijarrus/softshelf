@@ -2799,21 +2799,36 @@ async def get_distributions(
         elif ptype == "winget":
             raw = await database.get_agents_with_winget_package(pkg["name"])
             total = len(raw)
+            _versions = []
             for r in raw:
                 iv = r.get("installed_version"); av = r.get("available_version")
                 if not iv: unknown += 1
                 elif av:   outdated += 1
                 else:      current += 1
-            current_label = pkg.get("version_pin") or "latest"
+                if iv: _versions.append(iv)
+            # Pin > häufigste installierte Version > "kein Pin"
+            if pkg.get("version_pin"):
+                current_label = pkg["version_pin"]
+            elif _versions:
+                current_label = max(set(_versions), key=_versions.count)
+            else:
+                current_label = "kein Pin"
         else:  # choco
             raw = await database.get_agents_with_choco_package(pkg["name"])
             total = len(raw)
+            _versions = []
             for r in raw:
                 iv = r.get("installed_version"); av = r.get("available_version")
                 if not iv: unknown += 1
                 elif av:   outdated += 1
                 else:      current += 1
-            current_label = pkg.get("version_pin") or "latest"
+                if iv: _versions.append(iv)
+            if pkg.get("version_pin"):
+                current_label = pkg["version_pin"]
+            elif _versions:
+                current_label = max(set(_versions), key=_versions.count)
+            else:
+                current_label = "kein Pin"
 
         if outdated_only and outdated == 0:
             continue
