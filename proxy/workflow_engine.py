@@ -279,6 +279,19 @@ async def cancel(run_id: int):
     await database.update_workflow_run(run_id, status="cancelled")
     logger.info("workflow run %d cancelled", run_id)
 
+    # Wenn aktueller Step ein Reboot war: AtStartup-Task auf dem Agent loeschen
+    try:
+        state = _parse_json(run.get("step_state"), {})
+        task_name = state.get("task_name")
+        if task_name and state.get("reboot_pending"):
+            from tactical_client import TacticalClient
+            tc = TacticalClient()
+            cmd = f"schtasks /Delete /TN '{task_name}' /F 2>$null; Write-Output 'task deleted'"
+            _spawn_bg(tc.run_command(run["agent_id"], cmd, timeout=10))
+            logger.info("workflow run %d: cleanup AtStartup task %s on agent", run_id, task_name)
+    except Exception as e:
+        logger.warning("workflow run %d: failed to cleanup AtStartup task: %s", run_id, e)
+
 
 async def pause(run_id: int):
     """Pausiert einen laufenden Workflow-Run. Aktueller Step laeuft ggf. noch
