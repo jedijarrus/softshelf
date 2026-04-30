@@ -5048,8 +5048,10 @@ async def winget_rescan(agent_id: str):
         raise HTTPException(status_code=404, detail="Agent nicht gefunden")
 
     await database.reset_scan_failures(agent_id)
-    # Im Hintergrund starten — Admin-UI muss nicht warten
+    # Beide Scanner im Hintergrund starten
     _spawn_bg(winget_scanner.scan_agent(agent_id))
+    import choco_scanner
+    _spawn_bg(choco_scanner.scan_agent(agent_id))
     return {"ok": True, "started": True}
 
 
