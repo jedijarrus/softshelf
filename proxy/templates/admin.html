@@ -5841,10 +5841,10 @@ body.help-active [data-help]:not(.tab)::after {
         <label>Kategorie</label>
         <input class="input" data-edit="category">
       </div>
-      <div class="field">
+      <div class="field" id="edit-install-args-field">
         <label>Silent-Install Argumente</label>
-        <input class="input" data-edit="install_args" placeholder="/qn /norestart">
-        <div class="hint">Wird beim Install hinter <code>msiexec /i</code> bzw. vor den Installer gehängt.</div>
+        <input class="input" data-edit="install_args" placeholder="/qn /norestart" id="edit-install-args">
+        <div class="hint" id="edit-install-args-hint">Wird beim Install hinter <code>msiexec /i</code> bzw. vor den Installer gehängt.</div>
       </div>
       <div class="field" id="edit-entry-field" style="display:none">
         <label>Entry-Point (Installer im Archiv)</label>
@@ -9300,8 +9300,22 @@ function openEditPanel(name) {
   document.querySelector('[data-edit="install_timeout"]').value = pkg.install_timeout || 120;
   document.querySelector('[data-edit="check_reboot"]').checked = !!pkg.check_reboot;
   document.querySelector('[data-edit="hide_uninstall"]').checked = !!pkg.hide_uninstall;
-  // Custom-only Felder ausblenden fuer Choco/Winget
-  document.querySelector('[data-edit="install_args"]').closest('.field').style.display = isCustom ? '' : 'none';
+  // install_args ist fuer custom UND winget verfuegbar (winget mit Whitelist-validierten Flags)
+  const argsField = document.querySelector('[data-edit="install_args"]').closest('.field');
+  const argsInput = document.getElementById('edit-install-args');
+  const argsHint  = document.getElementById('edit-install-args-hint');
+  if (isCustom) {
+    argsField.style.display = '';
+    argsInput.placeholder = '/qn /norestart';
+    argsHint.innerHTML = 'Wird beim Install hinter <code>msiexec /i</code> bzw. vor den Installer geh&auml;ngt.';
+  } else if (pkg.type === 'winget') {
+    argsField.style.display = '';
+    argsInput.placeholder = '--skip-dependencies';
+    argsHint.innerHTML = 'Optionale winget-Flags. Erlaubt (Whitelist): <code>--skip-dependencies</code>, <code>--ignore-security-hash</code>, <code>--include-pinned</code>, <code>--include-unknown</code>, <code>--allow-reboot</code>, <code>--no-upgrade</code>. Andere Tokens werden ignoriert.';
+  } else {
+    argsField.style.display = 'none';
+  }
+  // detection_name/uninstall_cmd bleiben custom-only
   document.querySelector('[data-edit="detection_name"]').closest('.field').style.display = isCustom ? '' : 'none';
   document.querySelector('[data-edit="uninstall_cmd"]').closest('.field').style.display = isCustom ? '' : 'none';
   // Entry-Point-Dropdown + Inhalt-verwalten nur bei Archive-Paketen
