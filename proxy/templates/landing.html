@@ -389,13 +389,6 @@ footer.foot a:hover { color: var(--fg); }
         <div class="status-value" id="val-softshelf">—</div>
       </div>
     </div>
-    <div class="status-item">
-      <div class="status-dot muted" id="dot-online"></div>
-      <div class="status-text">
-        <div class="status-label">Verbindung</div>
-        <div class="status-value" id="val-online">—</div>
-      </div>
-    </div>
   </div>
 </div>
 
@@ -472,16 +465,6 @@ function showStatusGrid(s) {
     setVal('val-softshelf', 'Nicht installiert');
   }
 
-  if (s.kiosk_online) {
-    setDot('dot-online', 'ok');
-    setVal('val-online', 'Online');
-  } else if (s.in_softshelf) {
-    setDot('dot-online', 'warn');
-    setVal('val-online', 'Letzter Kontakt: ' + (s.last_seen || '—'));
-  } else {
-    setDot('dot-online', 'muted');
-    setVal('val-online', '—');
-  }
 }
 
 function renderResult(s) {
