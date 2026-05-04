@@ -615,6 +615,8 @@ class EnabledPackage(BaseModel):
     auto_advance: int = 0
     install_timeout: int = 120
     check_reboot: int = 0
+    hide_uninstall: int = 0
+    process_check: str = ""
 
 
 class SearchResult(BaseModel):
@@ -630,6 +632,16 @@ class EnableRequest(BaseModel):
     category: str = Field(default="Allgemein", min_length=1, max_length=40)
     install_timeout: int | None = Field(default=None, ge=30, le=3600)
     check_reboot: int | None = Field(default=None, ge=0, le=1)
+    hide_uninstall: int | None = Field(default=None, ge=0, le=1)
+    install_args: str | None = Field(default=None, max_length=500)
+    process_check: str | None = Field(default=None, max_length=500)
+
+    @field_validator("install_args", "process_check")
+    @classmethod
+    def _check_no_ctrl_optional(cls, v):
+        if v and not _NO_CTRL_RE.fullmatch(v):
+            raise ValueError("Feld enthält Steuerzeichen oder Zeilenumbrüche")
+        return v
 
     @field_validator("name")
     @classmethod
@@ -762,12 +774,18 @@ async def update_package(name: str, body: EnableRequest):
         )
     else:
         await database.upsert_package(name, body.display_name or name, body.category)
-    # install_timeout + check_reboot fuer alle Pakettypen
+    # install_timeout + check_reboot + hide_uninstall + install_args + process_check
     updates = {}
     if body.install_timeout is not None:
         updates["install_timeout"] = body.install_timeout
     if body.check_reboot is not None:
         updates["check_reboot"] = body.check_reboot
+    if body.hide_uninstall is not None:
+        updates["hide_uninstall"] = body.hide_uninstall
+    if body.install_args is not None:
+        updates["install_args"] = body.install_args
+    if body.process_check is not None:
+        updates["process_check"] = body.process_check
     if updates:
         async with database._db() as db:
             sets = ", ".join(f"{k} = ?" for k in updates)
@@ -2414,6 +2432,79 @@ async def ack_all_errors_endpoint():
     """Bulk-Ack aller offenen Fehler."""
     count = await database.ack_all_errors()
     return {"ok": True, "acked": count}
+
+
+# ── Errors v2: action_log-basiertes Acknowledge / Delete ────────────────────
+
+
+class _BulkErrorIdsBody(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=200)
+
+    @field_validator("ids", mode="before")
+    @classmethod
+    def _coerce_ids(cls, v):
+        if isinstance(v, list):
+            out: list[int] = []
+            for x in v:
+                try:
+                    out.append(int(x))
+                except (TypeError, ValueError):
+                    raise ValueError("ids muessen Integer sein")
+            return out
+        raise ValueError("ids muss eine Liste sein")
+
+
+@router.get("/admin/api/errors", dependencies=[Depends(_require_admin)])
+async def get_errors_v2(
+    show: str = Query(default="open", pattern=r"^(open|acked|all)$"),
+    limit: int = Query(default=500, ge=1, le=1000),
+):
+    """Listet action_log-Eintraege mit status='error'.
+    show=open (default) | acked | all.
+    Zusaetzlich: Counts (open/acked/total) fuer Header-Anzeige."""
+    errors = await database.get_action_log_errors(show=show, limit=limit)
+    counts = await database.get_action_log_error_counts()
+    return {"errors": errors, "counts": counts, "show": show}
+
+
+@router.post("/admin/api/errors/{log_id}/ack",
+             dependencies=[Depends(_require_admin)])
+async def ack_error_endpoint(log_id: int):
+    """Markiert einen action_log-Fehler als bestaetigt (acked)."""
+    if log_id < 1:
+        raise HTTPException(status_code=400, detail="Ungueltige ID")
+    ok = await database.ack_action_log_error(log_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Fehler-Eintrag nicht gefunden")
+    return {"ok": True}
+
+
+@router.delete("/admin/api/errors/{log_id}",
+               dependencies=[Depends(_require_admin)])
+async def delete_error_endpoint(log_id: int):
+    """Loescht einen einzelnen action_log-Eintrag."""
+    if log_id < 1:
+        raise HTTPException(status_code=400, detail="Ungueltige ID")
+    ok = await database.delete_action_log_row(log_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Eintrag nicht gefunden")
+    return {"ok": True}
+
+
+@router.post("/admin/api/errors/bulk-ack",
+             dependencies=[Depends(_require_admin)])
+async def bulk_ack_errors_endpoint(body: _BulkErrorIdsBody):
+    """Mehrere Fehler in einem Rutsch bestaetigen (max 200)."""
+    count = await database.bulk_ack_action_log(body.ids)
+    return {"ok": True, "acked": count}
+
+
+@router.post("/admin/api/errors/bulk-delete",
+             dependencies=[Depends(_require_admin)])
+async def bulk_delete_errors_endpoint(body: _BulkErrorIdsBody):
+    """Mehrere Fehler in einem Rutsch loeschen (max 200)."""
+    count = await database.bulk_delete_action_log(body.ids)
+    return {"ok": True, "deleted": count}
 
 
 @router.delete("/admin/api/action-log/{log_id}", dependencies=[Depends(_require_admin)])

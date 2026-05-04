@@ -398,6 +398,10 @@ async def init_db():
                 "ALTER TABLE action_log ADD COLUMN workflow_run_id INTEGER "
                 "REFERENCES workflow_runs(id)"
             )
+        if "error_acked_at" not in al_cols_now:
+            await db.execute(
+                "ALTER TABLE action_log ADD COLUMN error_acked_at TEXT"
+            )
 
         # Migration: role-Spalte auf admin_users fuer RBAC
         async with db.execute("PRAGMA table_info(admin_users)") as cur:
@@ -452,6 +456,7 @@ async def init_db():
             ("install_timeout",    "INTEGER NOT NULL DEFAULT 120"),
             ("check_reboot",       "INTEGER NOT NULL DEFAULT 0"),
             ("hide_uninstall",     "INTEGER NOT NULL DEFAULT 0"),
+            ("process_check",      "TEXT NOT NULL DEFAULT ''"),
         ]:
             if col not in pkg_cols:
                 await db.execute(f"ALTER TABLE packages ADD COLUMN {col} {ddl}")
@@ -673,7 +678,7 @@ _PKG_COLS = (
     "install_args, uninstall_cmd, detection_name, current_version_id, "
     "archive_type, entry_point, version_pin, winget_publisher, winget_scope, "
     "required, notes, staged_rollout, hidden_in_kiosk, auto_advance, "
-    "install_timeout, check_reboot, hide_uninstall"
+    "install_timeout, check_reboot, hide_uninstall, process_check"
 )
 
 
@@ -3318,7 +3323,7 @@ async def get_action_log(
         async with db.execute(
             f"SELECT id, agent_id, hostname, package_name, display_name, "
             f"pkg_type, action, status, exit_code, error_summary, "
-            f"created_at, completed_at "
+            f"created_at, completed_at, error_acked_at "
             f"FROM action_log {where} ORDER BY id DESC LIMIT ? OFFSET ?",
             params,
         ) as cur:
@@ -3391,6 +3396,114 @@ async def cleanup_action_logs(days: int = 30) -> int:
         )
         await db.commit()
         return cur.rowcount
+
+
+# ── Action-Log Error Acknowledge / Delete (v2.3.0) ────────────────────────────
+
+
+async def get_action_log_errors(
+    show: str = "open", limit: int = 500
+) -> list[dict]:
+    """Liefert action_log-Eintraege mit status='error', joined mit Hostname.
+    show='open' (default, unacked) | 'acked' | 'all'."""
+    where_extra = ""
+    if show == "open":
+        where_extra = " AND (al.error_acked_at IS NULL OR al.error_acked_at = '')"
+    elif show == "acked":
+        where_extra = " AND al.error_acked_at IS NOT NULL AND al.error_acked_at != ''"
+    # 'all' => kein Extra-Filter
+    limit = max(1, min(int(limit), 1000))
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT al.id, al.agent_id, al.hostname, al.package_name, "
+            "al.display_name, al.pkg_type, al.action, al.status, "
+            "al.exit_code, al.error_summary, al.created_at, "
+            "al.completed_at, al.error_acked_at, al.job_id "
+            "FROM action_log al "
+            f"WHERE al.status = 'error'{where_extra} "
+            "ORDER BY al.id DESC LIMIT ?",
+            (limit,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_action_log_error_counts() -> dict:
+    """Returns {open: N, acked: N, total: N} fuer die Errors-Tab Header-Anzeige."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT "
+            "  SUM(CASE WHEN error_acked_at IS NULL OR error_acked_at = '' THEN 1 ELSE 0 END) AS open_n, "
+            "  SUM(CASE WHEN error_acked_at IS NOT NULL AND error_acked_at != '' THEN 1 ELSE 0 END) AS acked_n, "
+            "  COUNT(*) AS total_n "
+            "FROM action_log WHERE status = 'error'"
+        ) as cur:
+            row = await cur.fetchone()
+    if not row:
+        return {"open": 0, "acked": 0, "total": 0}
+    return {
+        "open":  int(row["open_n"] or 0),
+        "acked": int(row["acked_n"] or 0),
+        "total": int(row["total_n"] or 0),
+    }
+
+
+async def ack_action_log_error(log_id: int) -> bool:
+    """Markiert einen action_log-Fehler als bestaetigt. Idempotent.
+    Returns True wenn Zeile existiert, sonst False."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET error_acked_at = datetime('now') "
+            "WHERE id = ? AND status = 'error'",
+            (int(log_id),),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def delete_action_log_row(log_id: int) -> bool:
+    """Loescht einen einzelnen action_log-Eintrag. Returns True bei Erfolg."""
+    async with _db() as db:
+        cur = await db.execute(
+            "DELETE FROM action_log WHERE id = ?", (int(log_id),)
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def bulk_ack_action_log(ids: list[int]) -> int:
+    """Bestaetigt mehrere action_log-Fehler in einem Rutsch.
+    Akzeptiert nur Eintraege mit status='error'. Returns Anzahl modifizierter Zeilen."""
+    if not ids:
+        return 0
+    # Cap auf 200 — siehe admin endpoint
+    ids = [int(i) for i in ids][:200]
+    placeholders = ",".join("?" * len(ids))
+    async with _db() as db:
+        cur = await db.execute(
+            f"UPDATE action_log SET error_acked_at = datetime('now') "
+            f"WHERE id IN ({placeholders}) AND status = 'error' "
+            f"AND (error_acked_at IS NULL OR error_acked_at = '')",
+            ids,
+        )
+        await db.commit()
+        return cur.rowcount or 0
+
+
+async def bulk_delete_action_log(ids: list[int]) -> int:
+    """Loescht mehrere action_log-Eintraege. Returns Anzahl geloeschter Zeilen."""
+    if not ids:
+        return 0
+    ids = [int(i) for i in ids][:200]
+    placeholders = ",".join("?" * len(ids))
+    async with _db() as db:
+        cur = await db.execute(
+            f"DELETE FROM action_log WHERE id IN ({placeholders})",
+            ids,
+        )
+        await db.commit()
+        return cur.rowcount or 0
 
 
 # ── Workflows ─────────────────────────────────────────────────────────────────

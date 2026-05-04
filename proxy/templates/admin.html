@@ -1783,7 +1783,7 @@ html[data-theme="dark"] .hdr-icon-btn .theme-moon { display: inline-block; }
 }
 .err-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(180px, 1.2fr) 80px minmax(200px, 2fr) 100px 140px;
+  grid-template-columns: 28px minmax(140px, 1fr) minmax(180px, 1.2fr) 80px minmax(200px, 2fr) 100px 200px;
   align-items: center;
   gap: 10px;
   padding: 10px var(--row-pad-x);
@@ -1791,6 +1791,8 @@ html[data-theme="dark"] .hdr-icon-btn .theme-moon { display: inline-block; }
   border-bottom: 1px solid var(--border);
   font-size: 12.5px;
 }
+.err-row .er-check { display: flex; align-items: center; justify-content: center; }
+.err-row .er-check input[type="checkbox"] { cursor: pointer; }
 .err-row:last-child { border-bottom: none; }
 .err-row.err-head {
   background: var(--bg-soft);
@@ -5231,22 +5233,35 @@ body.help-active [data-help]:not(.tab)::after {
     </div>
   </section>
 
-  <!-- FEHLER-TAB (Fleet-wide) -->
+  <!-- FEHLER-TAB (Fleet-wide, action_log basiert mit Ack/Delete) -->
   <section class="tab-pane" id="tab-errors">
     <div class="section-head">
       <div>
         <h1 class="section-title">Install-Fehler</h1>
-        <div class="section-sub">Offene Fehler flottenweit. Erneut startet den letzten Versuch neu, Bestätigen entfernt den Fehler aus der Liste (Verlauf bleibt erhalten).</div>
+        <div class="section-sub">
+          Fehlgeschlagene Installations- und Deinstallations-Aktionen aus dem Action-Log.
+          Bestätigen blendet einen Fehler aus der Liste aus, Löschen entfernt den Eintrag komplett.
+          <span class="errors-prune-hint" title="Bestätigte und unbestätigte Fehler werden nach 30 Tagen automatisch entfernt." style="margin-left:6px;color:var(--fg-4);font-size:11px">
+            ⓘ Auto-Prune nach 30 Tagen.
+          </span>
+        </div>
       </div>
-      <div style="display:flex;gap:8px">
-        <label class="dist-only-outdated">
-          <input type="checkbox" id="errors-include-acked" onchange="loadFleetErrors()">
-          <span>Bestätigte anzeigen</span>
-        </label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="errors-count-info" class="errors-count-info" style="color:var(--fg-4);font-size:12px"></span>
+        <select class="input" id="errors-show-filter" onchange="loadFleetErrors()" style="height:30px;font-size:12px;padding:0 8px">
+          <option value="open" selected>Offen</option>
+          <option value="acked">Bestätigt</option>
+          <option value="all">Alle</option>
+        </select>
         <button class="btn btn-ghost btn-sm" onclick="exportErrorsCsv()">↓ CSV</button>
-        <button class="btn btn-ghost btn-sm" onclick="ackAllErrors()">Alle bestätigen</button>
         <button class="btn btn-ghost btn-sm" onclick="loadFleetErrors()">Aktualisieren</button>
       </div>
+    </div>
+    <div class="err-bulk-bar" id="err-bulk-bar" style="display:none;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-soft);border:1px solid var(--border);border-radius:6px;margin-bottom:10px">
+      <span id="err-bulk-count" style="font-size:13px;color:var(--fg-2)">0 ausgewählt</span>
+      <button class="btn btn-primary btn-sm" onclick="bulkAckErrors()">Ausgewählte bestätigen</button>
+      <button class="btn btn-danger btn-sm" onclick="bulkDeleteErrors()">Ausgewählte löschen</button>
+      <button class="btn btn-ghost btn-sm" onclick="errClearSelection()">Auswahl aufheben</button>
     </div>
     <div id="main-errors">
       <div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Lade</span></div>
@@ -5845,6 +5860,11 @@ body.help-active [data-help]:not(.tab)::after {
         <label>Silent-Install Argumente</label>
         <input class="input" data-edit="install_args" placeholder="/qn /norestart" id="edit-install-args">
         <div class="hint" id="edit-install-args-hint">Wird beim Install hinter <code>msiexec /i</code> bzw. vor den Installer gehängt.</div>
+      </div>
+      <div class="field" id="edit-process-check-field" style="display:none">
+        <label>Prozess-Check vor Install</label>
+        <input class="input" data-edit="process_check" placeholder="pdf24-Editor,pdf24-Launcher,Acrobat" id="edit-process-check">
+        <div class="hint">Komma-separierte Prozessnamen (mit oder ohne <code>.exe</code>). Wenn einer der Prozesse beim Install-Versuch laeuft, bricht die Installation mit einer klaren Fehlermeldung ab statt dass winget auf die Nase faellt. Beispiel fuer PDF24: <code>pdf24-Editor,pdf24-Launcher</code>.</div>
       </div>
       <div class="field" id="edit-entry-field" style="display:none">
         <label>Entry-Point (Installer im Archiv)</label>
@@ -7763,19 +7783,138 @@ function openAgentFromHome(agentId, hostname) {
   setTimeout(() => openAgentDetail(agentId, hostname), 150);
 }
 
-// ── Flotten-Fehler Tab ──────────────────────────────────────────────────────
+// ── Flotten-Fehler Tab (action_log basiert, Ack/Delete + Bulk) ──────────────
+let _errorsCache = [];           // letzte geladene action_log error rows
+let _errorsSelected = new Set(); // ausgewaehlte log_id (number)
+
 async function loadFleetErrors() {
   const el = document.getElementById('main-errors');
   el.innerHTML = '<div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Lade</span></div>';
-  const includeAcked = !!document.getElementById('errors-include-acked')?.checked;
+  const show = document.getElementById('errors-show-filter')?.value || 'open';
   try {
-    const r = await api('GET', `/admin/api/fleet-errors?limit=500&include_acked=${includeAcked?1:0}`);
-    renderFleetErrors(r.errors || []);
+    const r = await api('GET', `/admin/api/errors?show=${encodeURIComponent(show)}&limit=500`);
+    _errorsCache = r.errors || [];
+    _errorsSelected.clear();
+    _errUpdateBulkBar();
+    _errUpdateCountInfo(r.counts || {});
+    renderFleetErrors(_errorsCache);
   } catch (e) {
-    el.innerHTML = `<div class="empty"><h3>Fehler</h3><p>${esc(e.message)}</p></div>`;
+    el.innerHTML = `<div class="empty"><h3>Fehler beim Laden</h3><p>${esc(e.message)}</p></div>`;
   }
 }
 
+function _errUpdateCountInfo(counts) {
+  const el = document.getElementById('errors-count-info');
+  if (!el) return;
+  const open = counts.open || 0;
+  const acked = counts.acked || 0;
+  const total = counts.total || 0;
+  el.textContent = `${open} offen · ${acked} bestätigt · ${total} gesamt`;
+}
+
+function _errUpdateBulkBar() {
+  const bar = document.getElementById('err-bulk-bar');
+  const cnt = document.getElementById('err-bulk-count');
+  if (!bar || !cnt) return;
+  if (_errorsSelected.size > 0) {
+    bar.style.display = 'flex';
+    cnt.textContent = `${_errorsSelected.size} ausgewählt`;
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function errClearSelection() {
+  _errorsSelected.clear();
+  document.querySelectorAll('.err-row-cb').forEach(cb => { cb.checked = false; });
+  const all = document.getElementById('err-select-all');
+  if (all) all.checked = false;
+  _errUpdateBulkBar();
+}
+
+function _errToggleRow(id, checked) {
+  if (checked) _errorsSelected.add(id);
+  else _errorsSelected.delete(id);
+  _errUpdateBulkBar();
+}
+
+function _errToggleAll(checked) {
+  _errorsSelected.clear();
+  if (checked) {
+    _errorsCache.forEach(e => _errorsSelected.add(e.id));
+    document.querySelectorAll('.err-row-cb').forEach(cb => { cb.checked = true; });
+  } else {
+    document.querySelectorAll('.err-row-cb').forEach(cb => { cb.checked = false; });
+  }
+  _errUpdateBulkBar();
+}
+
+async function ackError(logId, btn) {
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '…';
+  }
+  try {
+    await api('POST', `/admin/api/errors/${logId}/ack`);
+    toast('Fehler bestätigt');
+    loadFleetErrors();
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Bestätigen'; }
+  }
+}
+
+function deleteError(logId) {
+  showConfirm(
+    'Fehler löschen',
+    'Dieser Eintrag wird aus dem Action-Log entfernt. Die Aktion kann nicht rückgängig gemacht werden.',
+    async () => {
+      try {
+        await api('DELETE', `/admin/api/errors/${logId}`);
+        toast('Fehler gelöscht');
+        loadFleetErrors();
+      } catch (e) { /* api() hat getoastet */ }
+    },
+    'Löschen', 'btn-danger'
+  );
+}
+
+function bulkAckErrors() {
+  const ids = Array.from(_errorsSelected);
+  if (!ids.length) { toast('Keine Auswahl', true); return; }
+  if (ids.length > 200) { toast('Maximal 200 Einträge pro Aktion', true); return; }
+  showConfirm(
+    `${ids.length} Fehler bestätigen?`,
+    'Die ausgewählten Fehler werden als bestätigt markiert und ausgeblendet. Die Einträge bleiben im Action-Log erhalten.',
+    async () => {
+      try {
+        const r = await api('POST', '/admin/api/errors/bulk-ack', {ids}, {timeoutMs: 60000});
+        toast(`${r.acked || 0} Fehler bestätigt`);
+        loadFleetErrors();
+      } catch (e) { /* api() hat getoastet */ }
+    },
+    'Bestätigen', 'btn-primary'
+  );
+}
+
+function bulkDeleteErrors() {
+  const ids = Array.from(_errorsSelected);
+  if (!ids.length) { toast('Keine Auswahl', true); return; }
+  if (ids.length > 200) { toast('Maximal 200 Einträge pro Aktion', true); return; }
+  showConfirm(
+    `${ids.length} Fehler löschen?`,
+    'Die ausgewählten Einträge werden aus dem Action-Log entfernt. Die Aktion kann nicht rückgängig gemacht werden.',
+    async () => {
+      try {
+        const r = await api('POST', '/admin/api/errors/bulk-delete', {ids}, {timeoutMs: 60000});
+        toast(`${r.deleted || 0} Fehler gelöscht`);
+        loadFleetErrors();
+      } catch (e) { /* api() hat getoastet */ }
+    },
+    'Löschen', 'btn-danger'
+  );
+}
+
+// Behalten fuer Home-Dashboard / Agent-Detail (per-agent latest-error pattern).
 async function ackAgentErrorFromDetail(btn) {
   if (!_currentAgent) return;
   btn.disabled = true;
@@ -7804,47 +7943,40 @@ async function ackAgentError(agentId, btn) {
   }
 }
 
-async function ackAllErrors() {
-  showConfirm(
-    'Alle Fehler bestätigen',
-    'Alle offenen Install-Fehler werden als bestätigt markiert. Sie verschwinden aus der Liste, die Fehler-Details bleiben im Audit-Log erhalten.',
-    async () => {
-      try {
-        const r = await api('POST', '/admin/api/fleet-errors/ack-all');
-        toast(`${r.acked||0} Fehler bestätigt`);
-        loadFleetErrors();
-      } catch (e) {}
-    },
-    'Bestätigen', 'btn-primary'
-  );
-}
-
 function renderFleetErrors(errors) {
   const el = document.getElementById('main-errors');
   if (!errors.length) {
     el.innerHTML = `<div class="empty">
-      <h3>Keine offenen Fehler</h3>
-      <p>Alle letzten Installations-Aktionen waren erfolgreich.</p>
+      <h3>Keine Fehler in dieser Ansicht</h3>
+      <p>Filter anpassen um bestätigte oder ältere Einträge zu zeigen.</p>
     </div>`;
     return;
   }
   const rows = errors.map(e => {
-    const acked = !!e.last_action_error_acked_at;
-    const ackBtn = acked
-      ? `<span class="er-acked" title="Bestätigt am ${esc(e.last_action_error_acked_at || '')}">✓ ack</span>`
-      : `<button class="dist-row-btn" onclick="ackAgentError(${jsStr(e.agent_id)}, this)" title="Fehler bestätigen">✓</button>`;
+    const acked = !!e.error_acked_at;
+    const isSel = _errorsSelected.has(e.id);
+    const errMsg = e.error_summary || '(kein Text)';
+    const ackBlock = acked
+      ? `<span class="er-acked" style="color:var(--fg-4);font-size:11px" title="Bestätigt am ${esc(e.error_acked_at)}">✓ Bestätigt am ${esc(e.error_acked_at)}</span>`
+      : `<button class="dist-row-btn" onclick="ackError(${e.id}, this)" title="Fehler bestätigen">Bestätigen</button>`;
     return `
-    <div class="err-row ${acked ? 'is-acked' : ''}">
+    <div class="err-row ${acked ? 'is-acked' : ''}" style="${acked ? 'opacity:0.6' : ''}">
+      <div class="er-check">
+        <input type="checkbox" class="err-row-cb" data-id="${e.id}" ${isSel ? 'checked' : ''} onchange="_errToggleRow(${e.id}, this.checked)">
+      </div>
       <div class="er-host" onclick="openAgentFromHome(${jsStr(e.agent_id)},${jsStr(e.hostname||'')})">${esc(e.hostname || '—')}</div>
-      <div class="er-pkg"><code>${esc(e.last_action_package || '')}</code></div>
-      <div class="er-action">${esc(e.last_action_action || '')}</div>
-      <div class="er-msg">${esc(e.last_action_error || '')}</div>
-      <div class="er-time" title="${esc(e.last_action_at || '')}">${esc(relTime(e.last_action_at || ''))}</div>
+      <div class="er-pkg" style="${acked ? 'text-decoration:line-through' : ''}"><code>${esc(e.display_name || e.package_name || '')}</code></div>
+      <div class="er-action">${esc(e.action || '')}${e.exit_code != null ? ` <span style="color:var(--fg-4)">(${esc(String(e.exit_code))})</span>` : ''}</div>
+      <div class="er-msg" title="${esc(errMsg)}">${esc(errMsg)}</div>
+      <div class="er-time" title="${esc(e.created_at || '')}">${esc(relTime(e.created_at || ''))}</div>
       <div class="er-actions">
-        ${ackBtn}
-        <button class="dist-row-btn" onclick="retryErrorFromList(${jsStr(e.agent_id)},${jsStr(e.last_action_package||'')},${jsStr(e.last_action_action||'install')},this)">Erneut</button>
-        <button class="icon-btn" title="Voller Output" onclick="openActionOutput(${jsStr(e.agent_id)})">
+        ${ackBlock}
+        <button class="dist-row-btn" onclick="retryErrorRow(${e.id},${jsStr(e.agent_id)},${jsStr(e.package_name||'')},${jsStr(e.action||'install')},this)" ${acked ? 'disabled' : ''}>Erneut</button>
+        <button class="icon-btn" title="Voller Output" onclick="alShowDetail(${e.id})">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        </button>
+        <button class="icon-btn" title="Eintrag löschen" onclick="deleteError(${e.id})" style="color:var(--red)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
         </button>
       </div>
     </div>`;
@@ -7852,6 +7984,7 @@ function renderFleetErrors(errors) {
   el.innerHTML = `
     <div class="err-table">
       <div class="err-row err-head">
+        <div class="er-check"><input type="checkbox" id="err-select-all" onchange="_errToggleAll(this.checked)"></div>
         <div class="er-host">Client</div>
         <div class="er-pkg">Paket</div>
         <div class="er-action">Aktion</div>
@@ -7863,7 +7996,7 @@ function renderFleetErrors(errors) {
     </div>`;
 }
 
-async function retryErrorFromList(agentId, pkgName, action, btn) {
+async function retryErrorRow(logId, agentId, pkgName, action, btn) {
   btn.disabled = true;
   const orig = btn.innerHTML;
   btn.innerHTML = '…';
@@ -7876,6 +8009,11 @@ async function retryErrorFromList(agentId, pkgName, action, btn) {
     btn.disabled = false;
     btn.innerHTML = orig;
   }
+}
+
+// Backward-compat fuer alten Code-Pfad
+function retryErrorFromList(agentId, pkgName, action, btn) {
+  return retryErrorRow(null, agentId, pkgName, action, btn);
 }
 
 // ── Compliance ──────────────────────────────────────────────────────────────
@@ -7995,7 +8133,8 @@ async function submitBulkImport() {
   btn.disabled = true;
   btn.innerHTML = '…';
   try {
-    const r = await api('POST', '/admin/api/winget/bulk-activate', {ids, category: cat});
+    // Bulk kann pro ID einen Catalog-Lookup machen (max 500 IDs) — 5min Timeout.
+    const r = await api('POST', '/admin/api/winget/bulk-activate', {ids, category: cat}, {timeoutMs: 300000});
     const t = r.totals || {};
     toast(`${t.added||0} hinzugefügt · ${t.skipped||0} übersprungen · ${t.errors||0} Fehler`);
     closeBulkImport();
@@ -8345,18 +8484,22 @@ async function exportAuditCsv() {
 
 async function exportErrorsCsv() {
   try {
-    const r = await api('GET', '/admin/api/fleet-errors?limit=1000&include_acked=1');
+    const r = await api('GET', '/admin/api/errors?show=all&limit=1000');
     const rows = Array.isArray(r?.errors) ? r.errors : [];
     exportCsv(`softshelf-fehler-${new Date().toISOString().slice(0,10)}.csv`, [
-      {key:'last_action_at', label:'Zeit'},
+      {key:'created_at', label:'Zeit'},
       {key:'hostname', label:'Hostname'},
       {key:'agent_id', label:'Agent-ID'},
-      {key:'last_action_package', label:'Paket'},
-      {key:'last_action_action', label:'Aktion'},
-      {key:'last_action_error', label:'Fehler'},
-      {key: r => r.last_action_error_acked_at ? 'ja' : 'nein', label:'Bestaetigt'},
+      {key:'pkg_type', label:'Type'},
+      {key:'package_name', label:'Paket'},
+      {key:'display_name', label:'Anzeigename'},
+      {key:'action', label:'Aktion'},
+      {key:'exit_code', label:'Exit-Code'},
+      {key:'error_summary', label:'Fehler'},
+      {key: r => r.error_acked_at ? 'ja' : 'nein', label:'Bestaetigt'},
+      {key:'error_acked_at', label:'Bestaetigt am'},
     ], rows);
-  } catch (e) {}
+  } catch (e) { /* api() hat getoastet */ }
 }
 
 async function exportComplianceCsv() {
@@ -9300,6 +9443,9 @@ function openEditPanel(name) {
   document.querySelector('[data-edit="install_timeout"]').value = pkg.install_timeout || 120;
   document.querySelector('[data-edit="check_reboot"]').checked = !!pkg.check_reboot;
   document.querySelector('[data-edit="hide_uninstall"]').checked = !!pkg.hide_uninstall;
+  document.querySelector('[data-edit="process_check"]').value  = pkg.process_check || '';
+  // process_check Feld nur fuer winget anzeigen
+  document.getElementById('edit-process-check-field').style.display = (pkg.type === 'winget') ? '' : 'none';
   // install_args ist fuer custom UND winget verfuegbar (winget mit Whitelist-validierten Flags)
   const argsField = document.querySelector('[data-edit="install_args"]').closest('.field');
   const argsInput = document.getElementById('edit-install-args');
@@ -9905,14 +10051,21 @@ async function saveEdit() {
     if (isCustom) {
       await api('PATCH', `/admin/api/custom/${encodeURIComponent(_editingName)}`, body);
     } else {
-      // Choco/Winget: PATCH enable endpoint mit name + display_name + category + timeout + reboot
-      await api('PATCH', `/admin/api/enable/${encodeURIComponent(_editingName)}`, {
+      // Choco/Winget: PATCH enable endpoint mit allen relevanten Feldern
+      const enableBody = {
         name: _editingName,
         display_name: body.display_name,
         category: body.category,
         install_timeout: parseInt(body.install_timeout) || 120,
         check_reboot: body.check_reboot || 0,
-      });
+        hide_uninstall: body.hide_uninstall || 0,
+      };
+      // install_args + process_check nur fuer winget mitsenden
+      if (ptype === 'winget') {
+        enableBody.install_args = body.install_args || '';
+        enableBody.process_check = body.process_check || '';
+      }
+      await api('PATCH', `/admin/api/enable/${encodeURIComponent(_editingName)}`, enableBody);
     }
     // Version-Pin speichern (winget/choco)
     if (ptype === 'winget' || ptype === 'choco') {
@@ -12387,22 +12540,51 @@ document.addEventListener('keydown', e => {
   }
 });
 
-async function api(method, path, body) {
+// `_lastToastMsg` + `_lastToastAt` werden in toast() gesetzt; api() prueft
+// das, um identische Doppel-Toasts (api() + caller) zu unterdruecken.
+async function api(method, path, body, options) {
+  options = options || {};
   const headers = {
     'Content-Type': 'application/json',
     'X-Requested-With': 'XMLHttpRequest',
   };
-  const r = await fetch(path, {method, headers, body: body ? JSON.stringify(body) : undefined});
+  // Per-call Timeout via AbortController. Default 30s — lang laufende Calls
+  // (Build, Bulk-Import, Catalog-Refresh) muessen {timeoutMs: 600000}
+  // explizit setzen.
+  const ctrl = new AbortController();
+  const timeoutMs = options.timeoutMs != null ? options.timeoutMs : 30000;
+  const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+  let r;
+  try {
+    r = await fetch(path, {
+      method, headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    clearTimeout(tid);
+    if (e && e.name === 'AbortError') {
+      const msg = `Timeout nach ${Math.round(timeoutMs / 1000)}s`;
+      toast(msg, true);
+      const err = new Error(msg);
+      err.timeout = true;
+      throw err;
+    }
+    const msg = (e && e.message) ? e.message : 'Netzwerkfehler';
+    toast(msg, true);
+    throw e;
+  }
+  clearTimeout(tid);
   if (r.status === 401) {
-    // Session abgelaufen oder ungültig → zurück zum Login
+    // Session abgelaufen oder ungueltig -> zurueck zum Login
     window.location.href = '/admin/login';
     throw new Error('Nicht angemeldet');
   }
   if (!r.ok) {
     let detail = '';
     try {
-      const body = await r.json();
-      const d = body.detail;
+      const errBody = await r.json();
+      const d = errBody.detail;
       if (Array.isArray(d)) {
         // Pydantic v2 validation errors: list of {loc, msg, type, input?}
         detail = d.map(err => {
@@ -12417,7 +12599,9 @@ async function api(method, path, body) {
     } catch { detail = await r.text(); }
     const msg = detail || `HTTP ${r.status}`;
     toast(msg, true);
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = r.status;
+    throw err;
   }
   if (method === 'DELETE') return;
   return r.json();
@@ -12626,7 +12810,17 @@ function jsStr(v) {
 // Toast-Stack: mehrere Toasts koennen gleichzeitig sichtbar sein (wichtig
 // fuer Bulk-Aktionen wie Profile-Apply auf 10 Agents). Der alte singleton-
 // Toast wird als Fallback-Container fuer den Stack wiederverwendet.
+let _lastToastKey = '';
+let _lastToastAt = 0;
 function toast(msg, err=false) {
+  // Dedup: identische Toasts innerhalb von 600ms werden geschluckt.
+  // Schuetzt vor Doppel-Toasts wenn api() UND caller den gleichen Fehler
+  // toasten — zweiter Aufruf erscheint nicht.
+  const now = Date.now();
+  const key = (err ? 'E:' : 'S:') + (msg || '');
+  if (key === _lastToastKey && (now - _lastToastAt) < 600) return;
+  _lastToastKey = key;
+  _lastToastAt = now;
   let stack = document.getElementById('toast-stack');
   if (!stack) {
     stack = document.createElement('div');
@@ -13232,7 +13426,11 @@ async function triggerBuild() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Build läuft…';
   try {
-    const r = await api('POST', '/admin/api/build', {});
+    // Build-Trigger ist asynchron — Server returned innerhalb von Sekunden
+    // mit build_id, der eigentliche Build laeuft in einem Container-Job.
+    // Aber Build-Container-Spawn kann langsam sein (Wine + PyInstaller),
+    // daher 10min Timeout fuer den initialen Trigger.
+    const r = await api('POST', '/admin/api/build', {}, {timeoutMs: 600000});
     toast('Build gestartet (dauert ~1-2 min)');
     // Poll build-status alle 5s
     let attempts = 0;
@@ -13433,9 +13631,7 @@ async function alRetry(logId) {
       toast('Aktion wird wiederholt...');
       loadActionLog();
     }
-  } catch (e) {
-    toast('Retry fehlgeschlagen', true);
-  }
+  } catch (e) { /* api() hat bereits getoastet */ }
 }
 
 async function alDelete(logId) {
@@ -13443,9 +13639,7 @@ async function alDelete(logId) {
     await api('DELETE', '/admin/api/action-log/' + logId);
     toast('Eintrag geloescht');
     loadActionLog();
-  } catch (e) {
-    toast('Loeschen fehlgeschlagen', true);
-  }
+  } catch (e) { /* api() hat bereits getoastet */ }
 }
 
 async function alDeleteAllErrors() {
@@ -13453,9 +13647,7 @@ async function alDeleteAllErrors() {
     const r = await api('DELETE', '/admin/api/action-log?status=error');
     toast(r.deleted + ' Fehler-Eintraege geloescht');
     loadActionLog();
-  } catch (e) {
-    toast('Loeschen fehlgeschlagen', true);
-  }
+  } catch (e) { /* api() hat bereits getoastet */ }
 }
 
 /* ── Install-Polling (ersetzt den simplen 3s-setTimeout) ── */
