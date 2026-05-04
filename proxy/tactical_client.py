@@ -122,6 +122,34 @@ class TacticalClient:
     def _client(self, headers: dict) -> httpx.AsyncClient:
         return httpx.AsyncClient(headers=headers, timeout=30)
 
+    async def find_agent_by_hostname(self, hostname: str) -> dict | None:
+        """Sucht Tactical-Agent ueber Hostname. Liefert {agent_id, hostname,
+        status} oder None. Case-insensitive Match.
+        """
+        if not hostname or not isinstance(hostname, str):
+            return None
+        hn_lower = hostname.strip().lower()
+        if not hn_lower:
+            return None
+        try:
+            base, headers = await self._connection()
+            async with self._client(headers) as c:
+                r = await c.get(f"{base}/agents/")
+                if r.status_code != 200:
+                    return None
+                for a in r.json():
+                    ah = (a.get("hostname") or "").lower()
+                    if ah == hn_lower:
+                        return {
+                            "agent_id": a.get("agent_id"),
+                            "hostname": a.get("hostname"),
+                            "status":   a.get("status", "unknown"),
+                        }
+                return None
+        except Exception as e:
+            logger.warning("find_agent_by_hostname failed for %s: %s", hostname, e)
+            return None
+
     async def check_agent_status(self, agent_id: str) -> dict:
         """Pre-Flight-Check: Agent existiert + online?
         Returns dict mit 'exists', 'status', 'hostname'.
