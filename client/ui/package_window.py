@@ -558,12 +558,157 @@ html, body {{
   font-size: 10px;
   color: var(--fg-5);
 }}
+
+/* ─── Token-Revoked Full-Screen Overlay (401-Handler) ─── */
+.revoked-overlay {{
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px;
+  z-index: 9999;
+}}
+.revoked-overlay.visible {{ display: flex; }}
+.revoked-icon {{
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: var(--red-bg);
+  border: 1px solid var(--red-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 18px;
+  color: var(--red);
+  font-size: 26px;
+  font-weight: 600;
+}}
+.revoked-title {{
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 8px;
+}}
+.revoked-msg {{
+  font-size: 13px;
+  color: var(--fg-3);
+  max-width: 460px;
+  line-height: 1.5;
+  margin-bottom: 22px;
+}}
+.revoked-btn {{
+  background: var(--fg);
+  color: white;
+  border: none;
+  padding: 10px 22px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}}
+.revoked-btn:hover {{ background: var(--fg-2); }}
+.revoked-hint {{
+  margin-top: 16px;
+  font-size: 11px;
+  color: var(--fg-5);
+}}
+.proc-modal-overlay {{
+  position: fixed; inset: 0;
+  background: rgba(9,9,11,.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 9999;
+  animation: proc-fade .15s ease-out;
+}}
+@keyframes proc-fade {{ from {{ opacity: 0; }} to {{ opacity: 1; }} }}
+.proc-modal {{
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px 32px 24px;
+  width: 90%;
+  max-width: 420px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.25);
+}}
+.proc-modal-icon {{
+  width: 48px; height: 48px;
+  border-radius: 50%;
+  background: var(--amber-bg);
+  color: var(--amber);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; font-weight: 700;
+  margin-bottom: 16px;
+}}
+.proc-modal-title {{
+  font-size: 18px; font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 12px;
+}}
+.proc-modal-body {{
+  font-size: 14px;
+  color: var(--fg-3);
+  line-height: 1.5;
+}}
+.proc-modal-body ul {{
+  margin: 10px 0 0 0;
+  padding: 0;
+  list-style: none;
+}}
+.proc-modal-body li {{
+  padding: 4px 0;
+  font-size: 13px;
+}}
+.proc-modal-body code {{
+  background: var(--bg-soft);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--fg-2);
+}}
+.proc-modal-actions {{
+  display: flex; gap: 10px;
+  justify-content: flex-end;
+  margin-top: 22px;
+}}
+.proc-btn {{
+  padding: 9px 18px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--fg-2);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}}
+.proc-btn:hover {{ background: var(--bg-hover); }}
+.proc-btn-retry {{
+  background: var(--fg);
+  color: white;
+  border-color: var(--fg);
+}}
+.proc-btn-retry:hover {{ background: var(--fg-2); }}
 </style>
 </head>
 <body>
 <div class="app">
   <div class="offline-banner" id="offlineBanner">
     Server nicht erreichbar &mdash; Installation nicht m&ouml;glich
+  </div>
+
+  <div class="revoked-overlay" id="revokedOverlay">
+    <div class="revoked-icon">!</div>
+    <div class="revoked-title">Token wurde widerrufen</div>
+    <div class="revoked-msg">
+      Dieses Ger&auml;t ist bei Softshelf nicht mehr autorisiert.
+      Bitte installieren Sie das Software Center neu, um sich erneut zu registrieren.
+    </div>
+    <button class="revoked-btn" id="revokedBtn" onclick="openReinstall()">Neu installieren</button>
+    <div class="revoked-hint" id="revokedHint">Bei Fragen: IT kontaktieren.</div>
   </div>
 
   <div class="header">
@@ -640,9 +785,51 @@ async function loadPackages() {{
     renderPackages();
     setOnlineState(true);
   }} catch (e) {{
-    showError(e.message || 'Verbindungsfehler');
+    const msg = e.message || 'Verbindungsfehler';
+    if (msg.indexOf('__TOKEN_REVOKED__') !== -1) {{
+      showRevokedOverlay();
+      return;
+    }}
+    showError(msg);
     setOnlineState(false);
   }}
+}}
+
+let _revokedShown = false;
+function showRevokedOverlay() {{
+  if (_revokedShown) return;
+  _revokedShown = true;
+  const ov = document.getElementById('revokedOverlay');
+  if (ov) ov.classList.add('visible');
+  // Reinstall-URL asynchron nachladen damit der Button sinnvoll funktioniert
+  (async () => {{
+    try {{
+      const url = await pywebview.api.get_reinstall_url();
+      const btn = document.getElementById('revokedBtn');
+      if (btn) btn.dataset.url = url || '';
+    }} catch (e) {{}}
+  }})();
+}}
+
+async function openReinstall() {{
+  const btn = document.getElementById('revokedBtn');
+  let url = (btn && btn.dataset.url) || '';
+  if (!url) {{
+    try {{ url = await pywebview.api.get_reinstall_url(); }} catch (e) {{}}
+  }}
+  if (!url) {{
+    const hint = document.getElementById('revokedHint');
+    if (hint) hint.textContent = 'Bitte IT-Support kontaktieren — keine Reinstall-URL konfiguriert.';
+    return;
+  }}
+  try {{
+    if (window.pywebview && pywebview.api && pywebview.api.open_external) {{
+      await pywebview.api.open_external(url);
+      return;
+    }}
+  }} catch (e) {{}}
+  // Fallback: browser-internal navigation
+  window.open(url, '_blank');
 }}
 
 function updateCounts() {{
@@ -806,19 +993,70 @@ async function doInstall(name) {{
     showToast('Bitte warten \\u2014 andere Aktion l\\u00E4uft noch.', false);
     return;
   }}
+  // Pre-Install Process-Check: schauen ob blockierende Anwendung lokal laeuft
+  const pkg = (packages || []).find(p => p.name === name);
+  if (pkg && pkg.process_check) {{
+    try {{
+      const running = await pywebview.api.check_running_processes(pkg.process_check);
+      if (running && running.length > 0) {{
+        const proceed = await showProcessRunningDialog(pkg.display_name || name, running);
+        if (!proceed) return;
+      }}
+    }} catch (e) {{
+      // Check fail → einfach weitermachen, Server-side check fangt es notfalls
+    }}
+  }}
   busyPkg = name;
   renderPackages();
   try {{
     const msg = await pywebview.api.install_package(name);
     showToast(msg, true);
-    // Reload after brief delay so server state settles
     setTimeout(loadPackages, 800);
   }} catch (e) {{
-    showToast(e.message || 'Fehler bei Installation', false);
+    const m = e.message || 'Fehler bei Installation';
+    if (m.indexOf('__TOKEN_REVOKED__') !== -1) {{ showRevokedOverlay(); return; }}
+    showToast(m, false);
   }} finally {{
     busyPkg = null;
     renderPackages();
   }}
+}}
+
+function showProcessRunningDialog(displayName, runningNames) {{
+  return new Promise(resolve => {{
+    const ov = document.createElement('div');
+    ov.className = 'proc-modal-overlay';
+    const list = runningNames.map(n => '<li><code>' + n + '.exe</code></li>').join('');
+    ov.innerHTML = `
+      <div class="proc-modal">
+        <div class="proc-modal-icon">!</div>
+        <div class="proc-modal-title">${{displayName}} ist ge\\u00f6ffnet</div>
+        <div class="proc-modal-body">
+          Bitte <strong>${{displayName}}</strong> erst schlie\\u00dfen, sonst kann
+          die Installation/das Update nicht abgeschlossen werden.
+          <ul>${{list}}</ul>
+        </div>
+        <div class="proc-modal-actions">
+          <button class="proc-btn proc-btn-cancel">Abbrechen</button>
+          <button class="proc-btn proc-btn-retry">Ich habe geschlossen</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    const cleanup = (val) => {{ ov.remove(); resolve(val); }};
+    ov.querySelector('.proc-btn-cancel').onclick = () => cleanup(false);
+    ov.querySelector('.proc-btn-retry').onclick = async () => {{
+      // Recheck — wenn noch offen, Modal aktualisieren
+      try {{
+        const still = await pywebview.api.check_running_processes(runningNames.join(','));
+        if (still && still.length > 0) {{
+          ov.querySelector('.proc-modal-title').textContent = displayName + ' ist immer noch ge\\u00f6ffnet';
+          ov.querySelector('.proc-modal-body ul').innerHTML = still.map(n => '<li><code>' + n + '.exe</code></li>').join('');
+          return;
+        }}
+      }} catch(e) {{}}
+      cleanup(true);
+    }};
+  }});
 }}
 
 async function doUninstall(name) {{
@@ -833,7 +1071,9 @@ async function doUninstall(name) {{
     showToast(msg, true);
     setTimeout(loadPackages, 800);
   }} catch (e) {{
-    showToast(e.message || 'Fehler bei Deinstallation', false);
+    const m = e.message || 'Fehler bei Deinstallation';
+    if (m.indexOf('__TOKEN_REVOKED__') !== -1) {{ showRevokedOverlay(); return; }}
+    showToast(m, false);
   }} finally {{
     busyPkg = null;
     renderPackages();
@@ -903,6 +1143,24 @@ function escAttr(s) {{
 
 # ─────────────────────────────────────────────────────── Python API Bridge ────
 
+_TOKEN_REVOKED_MARKER = "__TOKEN_REVOKED__"
+
+
+def _format_http_error(e: Exception) -> str:
+    """Konvertiert httpx-Fehler in eine UI-taugliche Fehlermeldung.
+    401 -> Marker damit das Frontend ein Overlay zeigt statt Toast."""
+    import httpx
+    if isinstance(e, httpx.HTTPStatusError):
+        if e.response.status_code == 401:
+            return _TOKEN_REVOKED_MARKER
+        try:
+            detail = e.response.json().get("detail", str(e))
+        except Exception:
+            detail = str(e)
+        return f"HTTP {e.response.status_code}: {detail}"
+    return str(e)
+
+
 class PackageApi:
     """JS-to-Python bridge exposed via pywebview js_api."""
 
@@ -910,7 +1168,9 @@ class PackageApi:
         self._api = api_client
 
     def get_packages(self) -> list[dict]:
-        """Returns package list as list of dicts for JS consumption."""
+        """Returns package list as list of dicts for JS consumption.
+        Bei 401 wird `__TOKEN_REVOKED__` geraised damit das Frontend
+        das Overlay statt eines Toasts zeigt."""
         try:
             pkgs = self._api.get_packages()
             return [
@@ -925,39 +1185,75 @@ class PackageApi:
                     "installed_version_label": p.installed_version_label,
                     "current_version_label": p.current_version_label,
                     "update_available": p.update_available,
+                    "hide_uninstall": getattr(p, "hide_uninstall", False),
+                    "process_check": getattr(p, "process_check", "") or "",
                 }
                 for p in pkgs
             ]
         except Exception as e:
-            raise Exception(str(e))
+            raise Exception(_format_http_error(e))
+
+    def check_running_processes(self, names_csv: str) -> list[str]:
+        """Lokale Prozesspruefung. Liefert Liste der gerade laufenden
+        Prozessnamen die in `names_csv` (Komma-separiert) enthalten sind.
+        `.exe` wird abgestrippt fuer den Vergleich, da tasklist beides liefert."""
+        if not names_csv or not names_csv.strip():
+            return []
+        wanted = set()
+        for n in names_csv.replace(";", ",").split(","):
+            n = n.strip()
+            if not n:
+                continue
+            if n.lower().endswith(".exe"):
+                n = n[:-4]
+            wanted.add(n.lower())
+        if not wanted:
+            return []
+        try:
+            import subprocess
+            # tasklist /FO CSV /NH liefert: "name.exe","PID","Session",...
+            r = subprocess.run(
+                ["tasklist", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, timeout=8,
+                creationflags=0x08000000,  # CREATE_NO_WINDOW
+            )
+            running = set()
+            for line in r.stdout.splitlines():
+                # erste Spalte = Name in quotes
+                if not line.startswith('"'):
+                    continue
+                end = line.find('"', 1)
+                if end <= 1:
+                    continue
+                pname = line[1:end]
+                if pname.lower().endswith(".exe"):
+                    pname = pname[:-4]
+                running.add(pname.lower())
+            return sorted(n for n in wanted if n in running)
+        except Exception:
+            return []
 
     def install_package(self, name: str) -> str:
         """Trigger install via proxy."""
         try:
             return self._api.install_package(name)
         except Exception as e:
-            import httpx
-            if isinstance(e, httpx.HTTPStatusError):
-                try:
-                    detail = e.response.json().get("detail", str(e))
-                except Exception:
-                    detail = str(e)
-                raise Exception(f"HTTP {e.response.status_code}: {detail}")
-            raise Exception(str(e))
+            raise Exception(_format_http_error(e))
 
     def uninstall_package(self, name: str) -> str:
         """Trigger uninstall via proxy."""
         try:
             return self._api.uninstall_package(name)
         except Exception as e:
-            import httpx
-            if isinstance(e, httpx.HTTPStatusError):
-                try:
-                    detail = e.response.json().get("detail", str(e))
-                except Exception:
-                    detail = str(e)
-                raise Exception(f"HTTP {e.response.status_code}: {detail}")
-            raise Exception(str(e))
+            raise Exception(_format_http_error(e))
+
+    def get_reinstall_url(self) -> str:
+        """Optional reinstall URL aus Client-Config (default leer)."""
+        try:
+            cfg = self._api.get_client_config()
+            return cfg.get("reinstall_url", "") or ""
+        except Exception:
+            return ""
 
 
 # ────────────────────────────────────────────────────── Window Management ─────
