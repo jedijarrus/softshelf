@@ -1323,7 +1323,7 @@ async def get_agent_by_hostname(hostname: str) -> dict | None:
         async with db.execute(
             "SELECT agent_id, hostname, registered_at, last_seen, token_version, ring "
             "FROM agents WHERE LOWER(hostname) = LOWER(?) "
-            "ORDER BY last_seen DESC LIMIT 1",
+            "ORDER BY last_seen DESC, agent_id ASC LIMIT 1",
             (hostname,),
         ) as cur:
             row = await cur.fetchone()
