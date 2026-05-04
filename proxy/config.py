@@ -177,6 +177,20 @@ RUNTIME_KEYS: dict[str, dict] = {
         "required": False,
         "default": "",
     },
+    "trusted_proxies": {
+        "label": "Trusted Reverse-Proxy IPs",
+        "help": (
+            "Komma-separierte IPs/Hostnames der vertrauenswuerdigen Reverse-"
+            "Proxies (z.B. Caddy, Traefik). Nur von diesen IPs wird der "
+            "X-Forwarded-For-Header akzeptiert. Beispiel: "
+            "'10.180.191.21,10.0.0.5'. Loopback (127.0.0.1, ::1) ist immer "
+            "trusted. Aenderung wirkt nach max. 30s ohne Restart."
+        ),
+        "type": "string",
+        "secret": False,
+        "required": False,
+        "default": "",
+    },
     "publisher": {
         "label": "Publisher (Apps & Features)",
         "help": (
