@@ -8,7 +8,6 @@ import html
 import logging
 import os
 import re
-import socket
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
@@ -626,25 +625,26 @@ def _landing_client_ip(request: Request) -> str:
     return peer
 
 
-def _resolve_caller_hostname(request: Request) -> tuple[str | None, str | None]:
-    """Reverse-DNS Lookup auf der Client-IP. Liefert (short_hostname, error).
-    short_hostname = None bei Fehler. error = None bei Erfolg.
+async def _resolve_caller_agent(request: Request) -> tuple[dict | None, str | None]:
+    """Tactical-by-IP Lookup auf der Client-IP. Liefert (agent_brief, error).
+    agent_brief = {agent_id, hostname, status} oder None bei Fehler.
 
-    Validiert das Ergebnis gegen die strikte RFC-1123-Hostname-Regex damit
-    Tactical-/DB-Lookups nur mit sauberen Werten passieren.
+    Bevorzugte Detection: Tactical kennt von jedem registrierten Agent die
+    local_ips. DNS PTR-Records sind im LAN oft unzuverlaessig. Tactical-Match
+    ist authoritativ — wenn IP nicht in Tactical, ist Rechner schlicht nicht
+    verwaltet.
     """
     client_ip = _landing_client_ip(request)
     if not client_ip:
         return (None, "no_client_ip")
-    try:
-        resolved = socket.gethostbyaddr(client_ip)[0]
-    except Exception:
-        return (None, "reverse_dns_failed")
-    # Nur Hostname-Teil ohne FQDN-Domain
-    short = resolved.split(".")[0]
+    agent = await TacticalClient().find_agent_by_ip(client_ip)
+    if agent is None:
+        return (None, "not_in_tactical")
+    short = (agent.get("hostname") or "").split(".")[0]
     if not short or not _HOSTNAME_RE.fullmatch(short):
         return (None, "invalid_hostname")
-    return (short, None)
+    agent["hostname"] = short
+    return (agent, None)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -682,28 +682,34 @@ async def landing_page():
 async def landing_status(request: Request):
     """Status-Lookup fuer Landing-Page.
 
-    Hostname wird ausschliesslich per reverse-DNS auf der Client-IP ermittelt.
-    Kein User-Input — verhindert Auskundschaften beliebiger Hostnamen.
+    Detection per Tactical-by-IP (DNS unzuverlaessig im LAN). Wenn die
+    Quell-IP nicht zu einem Tactical-Agent passt → Rechner nicht verwaltet.
 
     Antwort enthaelt KEINE sensitiven Felder (agent_id, last_seen) — die
     Landing-Page ist oeffentlich erreichbar.
     """
-    hn, err = _resolve_caller_hostname(request)
-    if not hn:
+    agent, err = await _resolve_caller_agent(request)
+    if not agent:
+        # not_in_tactical = noch keinen Eintrag → Rechner unverwaltet
+        if err == "not_in_tactical":
+            return {
+                "ok": True,
+                "hostname": None,
+                "detected_via": "tactical-by-ip",
+                "in_tactical": False,
+                "tactical_status": None,
+                "in_softshelf": False,
+                "kiosk_online": False,
+            }
         return {
             "ok": False,
             "error": "no_hostname",
-            "hostname": "",
+            "hostname": None,
             "detected_via": None,
             "reason": err,
         }
 
-    # Tactical-Lookup (best effort, kein Hard-Fail)
-    tactical_info = None
-    try:
-        tactical_info = await TacticalClient().find_agent_by_hostname(hn)
-    except Exception as e:
-        logger.warning("landing tactical lookup failed: %s", e)
+    hn = agent["hostname"]
 
     # Softshelf-DB Lookup
     sf_agent = None
@@ -726,9 +732,9 @@ async def landing_status(request: Request):
     return {
         "ok": True,
         "hostname": hn,
-        "detected_via": "reverse-dns",
-        "in_tactical":  bool(tactical_info),
-        "tactical_status": tactical_info.get("status") if tactical_info else None,
+        "detected_via": "tactical-by-ip",
+        "in_tactical":  True,
+        "tactical_status": agent.get("status"),
         "in_softshelf": bool(sf_agent),
         "kiosk_online": kiosk_online,
     }
@@ -739,20 +745,20 @@ async def landing_trigger_install(request: Request):
     """Triggert das Tactical-Script `Kiosk Install` auf dem aufrufenden Rechner.
 
     Sicherheit:
-      - Hostname wird ausschliesslich per reverse-DNS auf der Client-IP ermittelt.
-      - Agent muss in Tactical sein.
+      - Hostname/Agent kommt aus Tactical-by-IP-Match (DNS-unabhaengig).
       - Agent darf NICHT bereits in Softshelf registriert sein (verhindert Re-Trigger).
       - Pro Hostname max 1 Trigger / 5 Minuten (Cooldown, Lock-protected).
       - Per-IP Rate-Limit (Middleware).
       - CSRF-Schutz (Middleware).
     """
-    hn, err = _resolve_caller_hostname(request)
-    if not hn:
+    agent, err = await _resolve_caller_agent(request)
+    if not agent:
         if err == "no_client_ip":
             raise HTTPException(status_code=400, detail="Client-IP nicht ermittelbar")
-        if err == "reverse_dns_failed":
-            raise HTTPException(status_code=400, detail="Hostname nicht ermittelbar (reverse-DNS fehlgeschlagen)")
+        if err == "not_in_tactical":
+            raise HTTPException(status_code=404, detail="Rechner nicht in Tactical RMM")
         raise HTTPException(status_code=400, detail="Hostname-Format ungueltig")
+    hn = agent["hostname"]
 
     # Lock schuetzt cooldown-check + cooldown-set vor TOCTOU. Eager-Set:
     # wir markieren die Cooldown SOFORT nach dem Check (vor dem Tactical-
@@ -776,15 +782,10 @@ async def landing_trigger_install(request: Request):
     if sf_agent:
         raise HTTPException(status_code=409, detail="Self-Service-Portal ist bereits installiert")
 
-    # In Tactical?
+    # Trigger script — agent.agent_id kennen wir bereits aus Tactical-by-IP
     tc = TacticalClient()
-    tactical_info = await tc.find_agent_by_hostname(hn)
-    if not tactical_info or not tactical_info.get("agent_id"):
-        raise HTTPException(status_code=404, detail="Rechner nicht in Tactical RMM")
-
-    # Trigger script
     result = await tc.run_script_by_name(
-        tactical_info["agent_id"],
+        agent["agent_id"],
         _LANDING_INSTALL_SCRIPT_NAME,
         timeout=600,
     )
@@ -793,7 +794,7 @@ async def landing_trigger_install(request: Request):
             raise HTTPException(status_code=500, detail=f"Script '{_LANDING_INSTALL_SCRIPT_NAME}' in Tactical nicht gefunden")
         raise HTTPException(status_code=502, detail=f"Tactical-Fehler: {result.get('status')}")
 
-    logger.info("landing install triggered: hostname=%s agent_id=%s", hn, tactical_info["agent_id"][:12])
+    logger.info("landing install triggered: hostname=%s agent_id=%s", hn, agent["agent_id"][:12])
     response: dict = {"ok": True, "hostname": hn, "estimated_seconds": 120}
     if result.get("status") == "dispatched_timeout":
         response["warning"] = (
