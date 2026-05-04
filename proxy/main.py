@@ -8,7 +8,7 @@ import os
 import re
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -585,6 +585,90 @@ async def health(request: Request):
     except Exception:
         pass  # kein gueltiges Token — kein pending_actions, das ist ok
     return result
+
+
+_LANDING_PATH = os.path.join(os.path.dirname(__file__), "templates", "landing.html")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def landing_page():
+    """Public Landing-Page. Erkennt Hostname (per JS via reverse-DNS) und
+    zeigt passenden Status (Tactical/Softshelf) plus Install-CTA an."""
+    try:
+        with open(_LANDING_PATH, encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    except FileNotFoundError:
+        return RedirectResponse(url="/admin", status_code=302)
+
+
+@app.get("/api/v1/landing-status")
+async def landing_status(request: Request, hostname: str = Query(default="", max_length=64)):
+    """Status-Lookup fuer Landing-Page.
+
+    Wenn kein hostname Parameter: versucht reverse-DNS auf Client-IP.
+    Liefert in_tactical, in_softshelf, kiosk_online, agent_id, last_seen.
+    """
+    hn = (hostname or "").strip()
+    detected_via = None
+
+    if not hn:
+        # Reverse-DNS auf Client-IP versuchen
+        client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
+        if client_ip:
+            try:
+                import socket
+                resolved = socket.gethostbyaddr(client_ip)[0]
+                # Nur Hostname-Teil ohne FQDN-Domain (CON5010-T16G2.consenso.de -> CON5010-T16G2)
+                hn = resolved.split(".")[0]
+                detected_via = "reverse-dns"
+            except Exception:
+                pass
+
+    if not hn or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}", hn):
+        return {
+            "ok": False,
+            "error": "no_hostname",
+            "hostname": hn,
+            "detected_via": detected_via,
+        }
+
+    # Tactical-Lookup (best effort, kein Hard-Fail)
+    tactical_info = None
+    try:
+        from tactical_client import TacticalClient
+        tactical_info = await TacticalClient().find_agent_by_hostname(hn)
+    except Exception as e:
+        logger.warning("landing tactical lookup failed: %s", e)
+
+    # Softshelf-DB Lookup
+    sf_agent = None
+    try:
+        sf_agent = await database.get_agent_by_hostname(hn)
+    except Exception as e:
+        logger.warning("landing softshelf lookup failed: %s", e)
+
+    kiosk_online = False
+    last_seen = None
+    if sf_agent and sf_agent.get("last_seen"):
+        from datetime import datetime, timezone, timedelta
+        try:
+            ls = datetime.strptime(sf_agent["last_seen"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            kiosk_online = (datetime.now(timezone.utc) - ls) < timedelta(minutes=5)
+            last_seen = sf_agent["last_seen"]
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "hostname": hn,
+        "detected_via": detected_via,
+        "in_tactical":  bool(tactical_info),
+        "tactical_status": tactical_info.get("status") if tactical_info else None,
+        "in_softshelf": bool(sf_agent),
+        "kiosk_online": kiosk_online,
+        "agent_id": sf_agent.get("agent_id") if sf_agent else None,
+        "last_seen": last_seen,
+    }
 
 
 @app.get("/download/{filename}")
