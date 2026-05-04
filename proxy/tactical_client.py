@@ -36,40 +36,24 @@ _RETRYABLE_STATUS = {500, 502, 503, 504}
 MAX_CONCURRENT_COMMANDS = 8
 _cmd_semaphore: asyncio.Semaphore | None = None
 
-# In-Process LRU-Cache fuer find_agent_by_hostname (TTL 60s).
-# Keyed: lowercased hostname. Value: (cached_at_ts, result_dict_or_None).
-# Kein functools.lru_cache weil wir TTL brauchen (hostnames koennen sich
-# in Tactical aendern, kein indefinite cache).
-_HOSTNAME_LOOKUP_TTL_S = 60
-_hostname_cache: dict[str, tuple[float, dict | None]] = {}
-_HOSTNAME_CACHE_MAX = 256
+# In-Process Cache fuer die Agent-Liste (TTL 60s). Lookups by hostname/IP
+# treffen denselben Cache statt jeweils /agents/ separat zu hitten.
+_AGENTS_LIST_TTL_S = 60
+_agents_list_cache: dict[str, tuple[float, list]] = {}  # key="all" → (ts, agents)
 
 
-def _hostname_cache_get(key: str) -> tuple[bool, dict | None]:
-    """Returns (hit, value). Hit=False wenn nicht im Cache oder expired."""
-    entry = _hostname_cache.get(key)
+def _agents_cache_get() -> list | None:
+    entry = _agents_list_cache.get("all")
     if not entry:
-        return (False, None)
-    cached_at, value = entry
-    if _time.time() - cached_at > _HOSTNAME_LOOKUP_TTL_S:
-        _hostname_cache.pop(key, None)
-        return (False, None)
-    return (True, value)
+        return None
+    ts, value = entry
+    if _time.time() - ts > _AGENTS_LIST_TTL_S:
+        return None
+    return value
 
 
-def _hostname_cache_put(key: str, value: dict | None) -> None:
-    # Simple size cap: wenn voll, alle expired entries pruenen, sonst aeltestes raus.
-    if len(_hostname_cache) >= _HOSTNAME_CACHE_MAX:
-        now = _time.time()
-        expired = [k for k, (t, _) in _hostname_cache.items()
-                   if now - t > _HOSTNAME_LOOKUP_TTL_S]
-        for k in expired:
-            _hostname_cache.pop(k, None)
-        if len(_hostname_cache) >= _HOSTNAME_CACHE_MAX:
-            # immer noch voll → aeltesten Eintrag droppen
-            oldest = min(_hostname_cache.items(), key=lambda kv: kv[1][0])[0]
-            _hostname_cache.pop(oldest, None)
-    _hostname_cache[key] = (_time.time(), value)
+def _agents_cache_put(agents: list) -> None:
+    _agents_list_cache["all"] = (_time.time(), agents)
 
 # Queue-Tracking: was laeuft, was wartet
 _active_commands: list[dict] = []   # [{agent_id, hostname, action, started_at}]
@@ -157,46 +141,74 @@ class TacticalClient:
     def _client(self, headers: dict) -> httpx.AsyncClient:
         return httpx.AsyncClient(headers=headers, timeout=30)
 
-    async def find_agent_by_hostname(self, hostname: str) -> dict | None:
-        """Sucht Tactical-Agent ueber Hostname. Liefert {agent_id, hostname,
-        status} oder None. Case-insensitive Match.
-
-        In-Process Cache (TTL 60s): /agents/ zieht die ganze Fleet-Liste —
-        bei haeufigen Polls (Landing-Page) sonst sinnlose Last auf Tactical.
-        """
-        if not hostname or not isinstance(hostname, str):
-            return None
-        hn_lower = hostname.strip().lower()
-        if not hn_lower:
-            return None
-        # Cache-Check
-        hit, cached = _hostname_cache_get(hn_lower)
-        if hit:
+    async def _list_agents_cached(self) -> list | None:
+        """Liefert /agents/ — gecachet 60s. None bei API-Fehler."""
+        cached = _agents_cache_get()
+        if cached is not None:
             return cached
         try:
             base, headers = await self._connection()
             async with self._client(headers) as c:
                 r = await c.get(f"{base}/agents/")
                 if r.status_code != 200:
-                    # Negative Lookups NICHT cachen — das waere ein DoS-Vektor
-                    # bei kurzfristigen Tactical-Ausfaellen.
                     return None
-                for a in r.json():
-                    ah = (a.get("hostname") or "").lower()
-                    if ah == hn_lower:
-                        result = {
-                            "agent_id": a.get("agent_id"),
-                            "hostname": a.get("hostname"),
-                            "status":   a.get("status", "unknown"),
-                        }
-                        _hostname_cache_put(hn_lower, result)
-                        return result
-                # Nicht gefunden → mit None cachen (gueltige Antwort vom API)
-                _hostname_cache_put(hn_lower, None)
-                return None
+                agents = r.json()
+                _agents_cache_put(agents)
+                return agents
         except Exception as e:
-            logger.warning("find_agent_by_hostname failed for %s: %s", hostname, e)
+            logger.warning("_list_agents_cached failed: %s", e)
             return None
+
+    @staticmethod
+    def _agent_to_brief(a: dict) -> dict:
+        return {
+            "agent_id": a.get("agent_id"),
+            "hostname": a.get("hostname"),
+            "status":   a.get("status", "unknown"),
+        }
+
+    async def find_agent_by_hostname(self, hostname: str) -> dict | None:
+        """Sucht Tactical-Agent ueber Hostname (case-insensitive)."""
+        if not hostname or not isinstance(hostname, str):
+            return None
+        hn_lower = hostname.strip().lower()
+        if not hn_lower:
+            return None
+        agents = await self._list_agents_cached()
+        if agents is None:
+            return None
+        for a in agents:
+            if (a.get("hostname") or "").lower() == hn_lower:
+                return self._agent_to_brief(a)
+        return None
+
+    async def find_agent_by_ip(self, ip: str) -> dict | None:
+        """Sucht Tactical-Agent ueber lokale IP. Tactical liefert local_ips als
+        Whitespace-/Komma-separierte Liste je Agent. Erfolgreich = exakte
+        IP-String-Uebereinstimmung. Mehrfach-Treffer (z.B. zwei Agents mit
+        derselben IP nach Re-Image): erstes online > erstes offline.
+        """
+        if not ip or not isinstance(ip, str):
+            return None
+        ip_clean = ip.strip()
+        if not ip_clean:
+            return None
+        agents = await self._list_agents_cached()
+        if agents is None:
+            return None
+        candidates = []
+        for a in agents:
+            raw = a.get("local_ips") or ""
+            if not raw:
+                continue
+            ips = [p.strip() for p in raw.replace(",", " ").split()]
+            if ip_clean in ips:
+                candidates.append(a)
+        if not candidates:
+            return None
+        # Online bevorzugt
+        candidates.sort(key=lambda a: (0 if a.get("status") == "online" else 1))
+        return self._agent_to_brief(candidates[0])
 
     async def check_agent_status(self, agent_id: str) -> dict:
         """Pre-Flight-Check: Agent existiert + online?
