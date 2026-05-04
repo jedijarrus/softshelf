@@ -239,6 +239,49 @@ class TacticalClient:
             r.raise_for_status()
             return r.text
 
+    async def list_scripts(self) -> list[dict]:
+        """Liefert alle Scripts aus Tactical: [{id, name, ...}, ...]."""
+        base, headers = await self._connection()
+        async with self._client(headers) as c:
+            r = await c.get(f"{base}/scripts/")
+            r.raise_for_status()
+            return r.json()
+
+    async def find_script_id_by_name(self, name: str) -> int | None:
+        """Sucht Script-ID per case-insensitive Namen-Match. None wenn nicht gefunden."""
+        if not name:
+            return None
+        target = name.strip().lower()
+        try:
+            scripts = await self.list_scripts()
+        except Exception as e:
+            logger.warning("list_scripts failed: %s", e)
+            return None
+        for s in scripts:
+            if (s.get("name") or "").strip().lower() == target:
+                return s.get("id")
+        return None
+
+    async def run_script_by_name(self, agent_id: str, script_name: str, timeout: int = 600) -> dict:
+        """Triggert einen Tactical-Script nach Name auf einem Agent.
+        Liefert {ok, status, body}. Wirft keine Exception."""
+        _check_agent(agent_id)
+        sid = await self.find_script_id_by_name(script_name)
+        if sid is None:
+            return {"ok": False, "status": "script_not_found", "body": script_name}
+        base, headers = await self._connection()
+        url = f"{base}/agents/{agent_id}/runscript/"
+        payload = {"script": sid, "output": "wait", "args": [], "timeout": timeout}
+        try:
+            async with self._client(headers) as c:
+                r = await c.post(url, json=payload)
+                if r.status_code >= 400:
+                    return {"ok": False, "status": f"http_{r.status_code}", "body": r.text[:300]}
+                return {"ok": True, "status": "dispatched", "body": r.text[:300], "script_id": sid}
+        except Exception as e:
+            logger.warning("run_script failed: %s", e)
+            return {"ok": False, "status": "error", "body": str(e)[:300]}
+
     async def run_command(
         self,
         agent_id: str,

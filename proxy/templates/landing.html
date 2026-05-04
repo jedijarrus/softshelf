@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Self-Service Portal · Consenso</title>
+<title>{{PORTAL_TITLE}}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -360,8 +360,8 @@ kbd {
 
 <header class="topbar">
   <div class="brand">
-    <img src="/api/v1/icon" class="brand-img" alt="consenso" onerror="this.style.display='none'">
-    <div class="brand-text">consenso<span class="sub"> · self-service portal</span></div>
+    <img src="/api/v1/icon" class="brand-img" alt="" onerror="this.style.display='none'">
+    <div class="brand-text">{{PORTAL_TITLE}}</div>
   </div>
   <a href="/admin" class="admin-link">Admin →</a>
 </header>
@@ -411,7 +411,7 @@ kbd {
 </div>
 
 <footer class="foot">
-  <span>© Consenso Consulting GmbH</span>
+  <span>© {{PORTAL_TITLE}}</span>
   <span id="version-tag">·</span>
 </footer>
 
@@ -528,18 +528,18 @@ function renderResult(s) {
         <div class="cta-title">Self-Service-Portal noch nicht installiert</div>
         <div class="cta-desc">
           Dein Rechner <strong>${esc(s.hostname)}</strong> wird verwaltet, aber das Self-Service-Portal läuft noch nicht.
-          Lade den Installer und führe ihn aus &mdash; dauert ungefähr eine Minute.
+          Klick auf <em>Jetzt installieren</em> — wir starten die Installation automatisch im Hintergrund über die zentrale Verwaltung. Dauert etwa 2 Minuten.
         </div>
-        <div class="btn-row">
-          <a class="btn" href="/download/Softshelf-setup.exe" download>
+        <div class="btn-row" id="install-btn-row">
+          <button class="btn" id="install-trigger-btn" onclick="triggerInstall()">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
             </svg>
-            Installer herunterladen
-          </a>
+            Jetzt installieren
+          </button>
         </div>
+        <div id="install-progress-area" style="display:none; margin-top:20px"></div>
       </div>`;
-    loadFleetPreview();
     return;
   }
 
@@ -559,6 +559,98 @@ function renderResult(s) {
     </div>
   `;
   loadFleetPreview();
+}
+
+async function triggerInstall() {
+  const btn = document.getElementById('install-trigger-btn');
+  const area = document.getElementById('install-progress-area');
+  if (!btn || !area) return;
+  btn.disabled = true;
+  btn.style.opacity = '0.6';
+  btn.style.cursor = 'not-allowed';
+  area.style.display = 'block';
+  area.innerHTML = '<div style="display:flex;align-items:center;gap:10px;color:var(--fg-3);font-size:13px"><div class="spinner"></div><span>Installation wird angefordert…</span></div>';
+
+  try {
+    const r = await fetch('/api/v1/landing-trigger-install', { method: 'POST' });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      area.innerHTML = `<div style="color:var(--red);font-size:13px;background:var(--red-bg);border:1px solid var(--red-bd);padding:10px 14px;border-radius:var(--r)">Fehler: ${esc(err.detail || r.statusText)}</div>`;
+      btn.disabled = false; btn.style.opacity = ''; btn.style.cursor = '';
+      return;
+    }
+    const data = await r.json();
+    startInstallCountdown(data.estimated_seconds || 120);
+  } catch (e) {
+    area.innerHTML = `<div style="color:var(--red);font-size:13px">Netzwerkfehler: ${esc(String(e))}</div>`;
+    btn.disabled = false; btn.style.opacity = ''; btn.style.cursor = '';
+  }
+}
+
+function startInstallCountdown(totalSeconds) {
+  const area = document.getElementById('install-progress-area');
+  const btnRow = document.getElementById('install-btn-row');
+  if (btnRow) btnRow.style.display = 'none';
+  if (!area) return;
+
+  area.innerHTML = `
+    <div style="background:var(--bg-card);border:1px solid var(--green-bd);border-radius:var(--r-lg);padding:20px;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+        <div class="spinner" style="border-top-color:var(--green)"></div>
+        <div>
+          <div style="font-weight:600;font-size:15px;color:var(--fg)">Installation läuft</div>
+          <div style="font-size:12px;color:var(--fg-4)">Tactical RMM führt das Setup als SYSTEM aus.</div>
+        </div>
+        <div style="margin-left:auto;font-family:var(--mono);font-size:24px;font-weight:600;color:var(--green)" id="countdown">02:00</div>
+      </div>
+      <div style="height:6px;background:var(--bg-soft);border-radius:3px;overflow:hidden">
+        <div id="countdown-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--green),#22c55e);transition:width 1s linear"></div>
+      </div>
+      <div style="margin-top:14px;font-size:12px;color:var(--fg-4)">
+        Sobald der Client läuft, wird diese Seite automatisch aktualisiert.
+      </div>
+    </div>
+  `;
+
+  let elapsed = 0;
+  const total = totalSeconds;
+  const tick = setInterval(async () => {
+    elapsed += 1;
+    const remain = Math.max(0, total - elapsed);
+    const m = Math.floor(remain / 60).toString().padStart(2, '0');
+    const sec = (remain % 60).toString().padStart(2, '0');
+    const cd = document.getElementById('countdown');
+    if (cd) cd.textContent = `${m}:${sec}`;
+    const bar = document.getElementById('countdown-bar');
+    if (bar) bar.style.width = `${Math.min(100, (elapsed/total)*100)}%`;
+
+    // Recheck status alle 15s ab Sekunde 30
+    if (elapsed >= 30 && elapsed % 15 === 0) {
+      const s = await loadStatus();
+      if (s.ok && s.in_softshelf) {
+        clearInterval(tick);
+        renderResult(s);
+        showStatusGrid(s);
+        return;
+      }
+    }
+
+    if (elapsed >= total) {
+      clearInterval(tick);
+      // letzter Recheck
+      const s = await loadStatus();
+      if (s.ok && s.in_softshelf) {
+        renderResult(s); showStatusGrid(s); return;
+      }
+      area.innerHTML = `
+        <div style="background:var(--amber-bg);border:1px solid var(--amber-bd);border-radius:var(--r-lg);padding:18px">
+          <div style="font-weight:600;color:var(--fg);margin-bottom:6px">Installation dauert noch an</div>
+          <div style="font-size:13px;color:var(--fg-3)">Lade die Seite gleich neu — der Client meldet sich gerade beim Server an.</div>
+          <button class="btn" style="margin-top:12px" onclick="location.reload()">Seite neu laden</button>
+        </div>
+      `;
+    }
+  }, 1000);
 }
 
 async function loadFleetPreview() {
