@@ -34,6 +34,9 @@ class Package(BaseModel):
     current_version_label: str | None = None
     update_available: bool = False
     hide_uninstall: bool = False
+    # Komma-separierte Prozessnamen die VOR Install lokal geprueft werden.
+    # Kiosk-Client zeigt Modal "Bitte X schliessen" wenn ein Prozess matcht.
+    process_check: str = ""
 
 
 @router.get("/packages", response_model=list[Package])
@@ -143,6 +146,7 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
                 current_version_label=current_label,
                 update_available=update_avail,
                 hide_uninstall=bool(row.get("hide_uninstall")),
+                process_check=row.get("process_check") or "",
             ))
             continue
 
