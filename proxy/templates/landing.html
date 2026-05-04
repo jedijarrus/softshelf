@@ -338,6 +338,17 @@ footer.foot a:hover { color: var(--fg); }
   .cta-card { padding: 24px 20px; }
 }
 
+kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--fg-2);
+}
+
 .fade-in { animation: fadeIn .25s ease-out; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 </style>
@@ -533,7 +544,6 @@ function renderResult(s) {
   }
 
   // installed!
-  const onlineLabel = s.kiosk_online ? 'Aktiv und verbunden' : 'Installiert &mdash; aber gerade nicht erreichbar';
   area.innerHTML = `
     <div class="cta-card ok fade-in">
       <div class="cta-icon">
@@ -543,16 +553,8 @@ function renderResult(s) {
       </div>
       <div class="cta-title">Alles bereit</div>
       <div class="cta-desc">
-        <strong>${esc(s.hostname)}</strong> &mdash; ${onlineLabel}.
-        Öffne das Tray-Icon (Taskleiste, rechte Seite) um die Software-Liste zu sehen.
-      </div>
-      <div class="btn-row">
-        <a class="btn" href="softshelf://open" id="open-kiosk">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 3h7v7M10 14L21 3M21 14v5a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h5"/>
-          </svg>
-          Self-Service öffnen
-        </a>
+        <strong>${esc(s.hostname)}</strong> ist verbunden. Das Self-Service-Portal läuft im Hintergrund.
+        Öffne es per Klick auf das Tray-Icon unten rechts in der Taskleiste (ggf. erst auf den kleinen Pfeil <kbd>^</kbd>).
       </div>
     </div>
   `;
