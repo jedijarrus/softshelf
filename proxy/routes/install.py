@@ -463,11 +463,39 @@ function Find-WingetExe {
 """
 
 
+# Whitelist erlaubter winget-Extra-Flags fuer install_args (Per-Paket-Override).
+# Schliesst alles aus was Shell-Injection oder unsichere Flags ermoeglichen
+# koennte. Erweitern wenn echter Bedarf da ist.
+_WINGET_EXTRA_FLAGS_ALLOWED = {
+    "--skip-dependencies",
+    "--ignore-security-hash",
+    "--include-pinned",
+    "--include-unknown",
+    "--allow-reboot",
+    "--no-upgrade",
+}
+
+
+def _sanitize_winget_extra_args(raw: str) -> str:
+    """Filtert install_args fuer winget gegen Whitelist. Gibt nur die
+    erlaubten Flags zurueck, einzeln durch Space getrennt."""
+    if not raw:
+        return ""
+    out = []
+    for tok in raw.split():
+        if tok in _WINGET_EXTRA_FLAGS_ALLOWED:
+            out.append(tok)
+        else:
+            logger.warning("winget extra-arg blocked (not whitelisted): %r", tok)
+    return " ".join(out)
+
+
 def _build_winget_command(
     action: str,
     winget_id: str,
     version: str | None = None,
     include_scope_machine: bool = True,
+    extra_args: str = "",
 ) -> str:
     """
     Baut den PowerShell-Wrapper für winget install/upgrade/uninstall.
@@ -498,6 +526,7 @@ def _build_winget_command(
         if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._\-]{0,49}", version):
             raise HTTPException(status_code=400, detail="Ungültige winget-Version")
         version_arg = f"--version '{version}' "
+    safe_extra = _sanitize_winget_extra_args(extra_args)
     if action == "uninstall":
         # --force erlaubt uninstall auch bei fehlender ARP-UninstallString
         # (z. B. Store-Apps), --accept-source-agreements für frische Sources.
@@ -505,13 +534,15 @@ def _build_winget_command(
             f"uninstall --id '{safe_id}' --silent --force "
             f"--accept-source-agreements --disable-interactivity -h"
         )
+        if safe_extra:
+            winget_args = f"{winget_args} {safe_extra}"
     else:
         scope_arg = "--scope machine " if include_scope_machine else ""
         winget_args = (
             f"{action} --id '{safe_id}' --source winget {scope_arg}--silent "
             f"--accept-package-agreements --accept-source-agreements "
             f"--disable-interactivity -h "
-            f"{version_arg}"
+            f"{version_arg}{safe_extra}"
         ).strip()
 
     # Selbe Marker-Strategie wie beim choco-Wrapper: wir exitieren IMMER
@@ -804,9 +835,11 @@ async def install_package(
         scope = pkg.get("winget_scope") or "auto"
         ver = pkg.get("version_pin")
         include_scope_machine = scope != "user"
+        extra = pkg.get("install_args") or ""
         inner_cmd = _build_winget_command(
             action, body.package_name, ver,
             include_scope_machine=include_scope_machine,
+            extra_args=extra,
         )
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -887,7 +920,10 @@ async def uninstall_package(
 
     if ptype == "winget":
         _check_winget_id(body.package_name)
-        inner_cmd = _build_winget_command("uninstall", body.package_name)
+        inner_cmd = _build_winget_command(
+            "uninstall", body.package_name,
+            extra_args=pkg.get("install_args") or "",
+        )
         scope = pkg.get("winget_scope") or "auto"
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -988,9 +1024,11 @@ async def dispatch_install_for_agent(
         ver = version_pin or pkg.get("version_pin")
         scope = pkg.get("winget_scope") or "auto"
         include_scope_machine = scope != "user"
+        extra = pkg.get("install_args") or ""
         inner_cmd = _build_winget_command(
             action, package_name, ver,
             include_scope_machine=include_scope_machine,
+            extra_args=extra,
         )
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -1072,7 +1110,10 @@ async def dispatch_uninstall_for_agent(
 
     if ptype == "winget":
         _check_winget_id(package_name)
-        inner_cmd = _build_winget_command("uninstall", package_name)
+        inner_cmd = _build_winget_command(
+            "uninstall", package_name,
+            extra_args=pkg.get("install_args") or "",
+        )
         scope = pkg.get("winget_scope") or "auto"
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -1288,8 +1329,11 @@ async def receive_callback(job_id: str, body: CallbackPayload):
             winget_id = meta.get("winget_id", entry["package_name"])
             ver = meta.get("version")
             logger.info("winget per-user retry: %s auf %s", winget_id, entry["hostname"])
+            # extra_args aus pkg-Setting nachladen (auch im Retry-Pfad)
+            retry_pkg = await database.get_package(winget_id)
             inner_cmd = _build_winget_command(
                 entry["action"], winget_id, ver, include_scope_machine=False,
+                extra_args=(retry_pkg or {}).get("install_args") or "",
             )
             retry_job = _generate_job_id()
             retry_cmd = await _build_script_and_bootstrap(inner_cmd, retry_job)
