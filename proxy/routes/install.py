@@ -490,12 +490,54 @@ def _sanitize_winget_extra_args(raw: str) -> str:
     return " ".join(out)
 
 
+_PROCESS_NAME_RE = re.compile(r"^[A-Za-z0-9._\-]{1,80}$")
+
+
+def _build_process_check_block(process_check: str) -> str:
+    """Baut PowerShell-Pre-Check Block: prueft ob bestimmte Prozesse laufen.
+    Gibt leeren String zurueck wenn keine Prozessnamen gegeben sind.
+
+    process_check = komma-separierte Liste von Prozessnamen (mit oder ohne .exe).
+    Get-Process erwartet Namen ohne .exe — strippen wir hier ab.
+
+    Bei Match: SOFTSHELF_PROCESS_RUNNING Marker + exit 9020 (custom soft-error code).
+    """
+    if not process_check or not process_check.strip():
+        return ""
+    raw_names = [n.strip() for n in process_check.replace(";", ",").split(",")]
+    safe_names = []
+    for n in raw_names:
+        if not n:
+            continue
+        if n.lower().endswith(".exe"):
+            n = n[:-4]
+        if not _PROCESS_NAME_RE.fullmatch(n):
+            logger.warning("process_check: invalid name skipped: %r", n)
+            continue
+        safe_names.append(n)
+    if not safe_names:
+        return ""
+    # PowerShell Array-Literal — alle Namen einzeln quoten
+    quoted = ",".join(f"'{n}'" for n in safe_names)
+    return f"""
+$processCheckNames = @({quoted})
+$running = @(Get-Process -Name $processCheckNames -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name -Unique)
+if ($running.Count -gt 0) {{
+    _sfProgress ("SOFTSHELF_PROCESS_RUNNING:" + ($running -join ','))
+    _sfProgress ("Anwendung laeuft noch und kann nicht aktualisiert werden: " + ($running -join ', '))
+    cmd /c "exit 9020"
+    return
+}}
+"""
+
+
 def _build_winget_command(
     action: str,
     winget_id: str,
     version: str | None = None,
     include_scope_machine: bool = True,
     extra_args: str = "",
+    process_check: str = "",
 ) -> str:
     """
     Baut den PowerShell-Wrapper für winget install/upgrade/uninstall.
@@ -551,6 +593,12 @@ def _build_winget_command(
     # winget-stdout (inkl. Soft-Error-Texten wie „install technology is
     # different" oder „No available upgrade found") garantiert bei uns,
     # statt von einem PowerShell Write-Error-Record überdeckt zu werden.
+    # Process-Check nur fuer install/upgrade — bei uninstall ist es teilweise
+    # erwartet dass die App noch laeuft (Cleanup-Use-Case).
+    process_check_block = ""
+    if action in ("install", "upgrade") and process_check:
+        process_check_block = _build_process_check_block(process_check)
+
     return f"""$ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 {_PS_FIND_WINGET}
@@ -560,6 +608,7 @@ if (-not $wingetExe) {{
     cmd /c "exit 9009"
 }}
 if ($wingetExe) {{
+    {process_check_block}
     _sfProgress "Starte winget {winget_args.split()[0]}..."
     $out = (& $wingetExe {winget_args} 2>&1) -join "`n"
     _sfProgress $out
@@ -583,6 +632,10 @@ _WINGET_SUCCESS_HINTS: list[str] = [
 
 # Patterns die als HARD ERROR gewertet werden (auch bei "Erfolgs"-ExitCode).
 _WINGET_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
+    (
+        "softshelf_process_running:",
+        "Anwendung laeuft noch. Bitte alle Fenster schliessen und nochmal versuchen.",
+    ),
     (
         "install technology is different",
         "winget kann nicht in-place upgraden — die neue Version verwendet "
@@ -820,7 +873,7 @@ async def install_package(
     # ein winget-Paket ist.
     pkg = await database.get_package(body.package_name)
     if not pkg:
-        raise HTTPException(status_code=403, detail="Paket nicht freigegeben")
+        raise HTTPException(status_code=404, detail="Paket nicht freigegeben")
 
     ptype = pkg.get("type") or "choco"
 
@@ -840,6 +893,7 @@ async def install_package(
             action, body.package_name, ver,
             include_scope_machine=include_scope_machine,
             extra_args=extra,
+            process_check=pkg.get("process_check") or "",
         )
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -914,7 +968,7 @@ async def uninstall_package(
 
     pkg = await database.get_package(body.package_name)
     if not pkg:
-        raise HTTPException(status_code=403, detail="Paket nicht freigegeben")
+        raise HTTPException(status_code=404, detail="Paket nicht freigegeben")
 
     ptype = pkg.get("type") or "choco"
 
@@ -1029,6 +1083,7 @@ async def dispatch_install_for_agent(
             action, package_name, ver,
             include_scope_machine=include_scope_machine,
             extra_args=extra,
+            process_check=pkg.get("process_check") or "",
         )
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -1334,6 +1389,7 @@ async def receive_callback(job_id: str, body: CallbackPayload):
             inner_cmd = _build_winget_command(
                 entry["action"], winget_id, ver, include_scope_machine=False,
                 extra_args=(retry_pkg or {}).get("install_args") or "",
+                process_check=(retry_pkg or {}).get("process_check") or "",
             )
             retry_job = _generate_job_id()
             retry_cmd = await _build_script_and_bootstrap(inner_cmd, retry_job)
