@@ -2123,7 +2123,9 @@ class PackageStagedBody(BaseModel):
 
 
 class PackageHiddenBody(BaseModel):
-    hidden: bool
+    # 0 = sichtbar, 1 = nur installiert, 2 = komplett ausgeblendet.
+    # Backward-compat: bool (true = 1).
+    hidden: int = Field(ge=0, le=2)
 
 
 class PackageAutoAdvanceBody(BaseModel):
