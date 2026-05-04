@@ -589,16 +589,25 @@ async def health(request: Request):
 
 _LANDING_PATH = os.path.join(os.path.dirname(__file__), "templates", "landing.html")
 
+# Rate-Limit fuer Landing-Install: pro Hostname max 1 Trigger / 5 Minuten
+_LANDING_INSTALL_DEDUPE: dict[str, float] = {}
+_LANDING_INSTALL_COOLDOWN_S = 300
+_LANDING_INSTALL_SCRIPT_NAME = "Kiosk Install"
+
 
 @app.get("/", response_class=HTMLResponse)
 async def landing_page():
-    """Public Landing-Page. Erkennt Hostname (per JS via reverse-DNS) und
-    zeigt passenden Status (Tactical/Softshelf) plus Install-CTA an."""
+    """Public Landing-Page mit reverse-DNS Status-Detection."""
     try:
         with open(_LANDING_PATH, encoding="utf-8") as f:
-            return HTMLResponse(f.read())
+            page = f.read()
     except FileNotFoundError:
         return RedirectResponse(url="/admin", status_code=302)
+    import html as _html
+    title = await runtime_value("admin_portal_title") or "Self-Service Portal"
+    title_safe = _html.escape(title, quote=True)
+    page = page.replace("{{PORTAL_TITLE}}", title_safe)
+    return HTMLResponse(page)
 
 
 @app.get("/api/v1/landing-status")
@@ -668,6 +677,66 @@ async def landing_status(request: Request):
         "agent_id": sf_agent.get("agent_id") if sf_agent else None,
         "last_seen": last_seen,
     }
+
+
+@app.post("/api/v1/landing-trigger-install")
+async def landing_trigger_install(request: Request):
+    """Triggert das Tactical-Script `Kiosk Install` auf dem aufrufenden Rechner.
+
+    Sicherheit:
+      - Hostname wird ausschliesslich per reverse-DNS auf der Client-IP ermittelt.
+      - Agent muss in Tactical sein.
+      - Agent darf NICHT bereits in Softshelf registriert sein (verhindert Re-Trigger).
+      - Pro Hostname max 1 Trigger / 5 Minuten (Cooldown).
+    """
+    import time as _time
+    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
+    if not client_ip:
+        raise HTTPException(status_code=400, detail="Client-IP nicht ermittelbar")
+
+    try:
+        import socket
+        resolved = socket.gethostbyaddr(client_ip)[0]
+        hn = resolved.split(".")[0]
+    except Exception:
+        raise HTTPException(status_code=400, detail="Hostname nicht ermittelbar (reverse-DNS fehlgeschlagen)")
+
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}", hn):
+        raise HTTPException(status_code=400, detail="Hostname-Format ungueltig")
+
+    # Cooldown
+    now = _time.time()
+    last = _LANDING_INSTALL_DEDUPE.get(hn.lower(), 0)
+    if now - last < _LANDING_INSTALL_COOLDOWN_S:
+        wait_s = int(_LANDING_INSTALL_COOLDOWN_S - (now - last))
+        raise HTTPException(status_code=429, detail=f"Bitte {wait_s}s warten")
+
+    # In Softshelf?
+    sf_agent = await database.get_agent_by_hostname(hn)
+    if sf_agent:
+        raise HTTPException(status_code=409, detail="Self-Service-Portal ist bereits installiert")
+
+    # In Tactical?
+    from tactical_client import TacticalClient
+    tc = TacticalClient()
+    tactical_info = await tc.find_agent_by_hostname(hn)
+    if not tactical_info or not tactical_info.get("agent_id"):
+        raise HTTPException(status_code=404, detail="Rechner nicht in Tactical RMM")
+
+    # Trigger script
+    result = await tc.run_script_by_name(
+        tactical_info["agent_id"],
+        _LANDING_INSTALL_SCRIPT_NAME,
+        timeout=600,
+    )
+    if not result.get("ok"):
+        if result.get("status") == "script_not_found":
+            raise HTTPException(status_code=500, detail=f"Script '{_LANDING_INSTALL_SCRIPT_NAME}' in Tactical nicht gefunden")
+        raise HTTPException(status_code=502, detail=f"Tactical-Fehler: {result.get('status')}")
+
+    _LANDING_INSTALL_DEDUPE[hn.lower()] = now
+    logger.info("landing install triggered: hostname=%s agent_id=%s", hn, tactical_info["agent_id"][:12])
+    return {"ok": True, "hostname": hn, "estimated_seconds": 120}
 
 
 @app.get("/download/{filename}")
