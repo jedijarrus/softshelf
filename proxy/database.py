@@ -1316,6 +1316,20 @@ async def get_agent(agent_id: str) -> dict | None:
             return dict(row) if row else None
 
 
+async def get_agent_by_hostname(hostname: str) -> dict | None:
+    """Case-insensitive Hostname-Lookup. Bei Mehrfach-Treffern: neuester last_seen."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT agent_id, hostname, registered_at, last_seen, token_version, ring "
+            "FROM agents WHERE LOWER(hostname) = LOWER(?) "
+            "ORDER BY last_seen DESC LIMIT 1",
+            (hostname,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
 async def get_active_rollout_phases() -> dict[str, int]:
     """Map package_name → current_phase fuer alle aktiven Rollouts.
     Fuer Kiosk-Filter: zeigt einen Update nur wenn sein Ring erreicht ist."""
