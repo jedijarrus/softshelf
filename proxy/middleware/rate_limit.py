@@ -36,18 +36,52 @@ LIMITS: dict[str, tuple[int, int]] = {
     "landing_trigger": (3,  60),
 }
 
-# Loopback-IPs deren X-Forwarded-For wir akzeptieren (Reverse-Proxy lokal).
-# Public-API (TRUSTED_PROXIES, is_trusted_peer) statt _-Prefix damit andere
-# Module nicht in private Symbole greifen.
-TRUSTED_PROXIES = {"127.0.0.1", "::1", "localhost"}
-# Backward-compat Alias — entfernen sobald keine Konsumenten mehr da sind.
+# Loopback-IPs immer vertrauenswuerdig.
+_DEFAULT_TRUSTED_PROXIES = {"127.0.0.1", "::1", "localhost"}
+# Cache fuer trusted-proxies Setting (DB-Wert union mit defaults). 30s TTL.
+_TRUSTED_PROXIES_CACHE: tuple[float, set[str]] = (0.0, set(_DEFAULT_TRUSTED_PROXIES))
+
+
+async def _load_trusted_proxies() -> set[str]:
+    """Liest runtime-setting `trusted_proxies` (Komma-separierte IPs/Hostnames)
+    und vereint mit den hardcoded Loopback-Defaults. Cached 30s damit jeder
+    Request nicht die DB hittet."""
+    global _TRUSTED_PROXIES_CACHE
+    now = time.time()
+    cached_at, cached_set = _TRUSTED_PROXIES_CACHE
+    if now - cached_at < 30:
+        return cached_set
+    try:
+        from config import runtime_value
+        raw = (await runtime_value("trusted_proxies")) or ""
+        extra = {p.strip() for p in raw.replace(";", ",").split(",") if p.strip()}
+    except Exception:
+        extra = set()
+    result = set(_DEFAULT_TRUSTED_PROXIES) | extra
+    _TRUSTED_PROXIES_CACHE = (now, result)
+    return result
+
+
+# Snapshot fuer sync-Callsites (z.B. is_trusted_peer ohne await).
+# Wird vom rate-limit-Middleware bei jedem ersten Request des 30s-Fensters
+# refreshed. Garantiert eventuell-konsistent.
+TRUSTED_PROXIES: set[str] = set(_DEFAULT_TRUSTED_PROXIES)
+# Backward-compat Alias.
 _TRUSTED_PROXIES = TRUSTED_PROXIES
 
 
 def is_trusted_peer(host: str) -> bool:
-    """Prueft ob die TCP-Peer-IP ein vertrauenswuerdiger Reverse-Proxy ist
-    (also: ihr X-Forwarded-For-Header darf gelesen werden)."""
+    """Sync-Check gegen den TRUSTED_PROXIES-Snapshot. Snapshot wird vom
+    Rate-Limit-Middleware via `_load_trusted_proxies()` regelmaessig refreshed."""
     return host in TRUSTED_PROXIES
+
+
+async def refresh_trusted_proxies_snapshot() -> None:
+    """Lifespan/Middleware-Hook: aktualisiert den globalen Snapshot."""
+    global TRUSTED_PROXIES
+    new = await _load_trusted_proxies()
+    TRUSTED_PROXIES.clear()
+    TRUSTED_PROXIES.update(new)
 
 # Anzahl Requests bevor wir einen Cleanup-Sweep machen (cheap GC)
 _SWEEP_INTERVAL = 500
@@ -126,6 +160,13 @@ def _real_peer_ip(request: Request) -> str:
 
 async def rate_limit_middleware(request: Request, call_next):
     global _request_counter
+    # Trusted-Proxies-Snapshot opportunistisch refreshen (cached 30s in
+    # _load_trusted_proxies). So sieht is_trusted_peer immer einen aktuellen
+    # Wert ohne dass jeder Request die DB hittet.
+    try:
+        await refresh_trusted_proxies_snapshot()
+    except Exception:
+        pass
     bucket = _bucket_for(request.url.path)
     if bucket:
         # Fuer Landing-Buckets: echte Peer-IP (kein XFF-Trust), damit ein
