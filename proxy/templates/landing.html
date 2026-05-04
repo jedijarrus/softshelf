@@ -75,19 +75,11 @@ header.topbar {
   margin-bottom: 48px;
 }
 .brand { display: flex; align-items: center; gap: 11px; }
-.brand-mark {
+.brand-img {
   width: 30px; height: 30px;
   border-radius: var(--r);
-  background: var(--fg);
-  position: relative;
   flex-shrink: 0;
-}
-.brand-mark::after {
-  content: '';
-  position: absolute;
-  inset: 6px;
-  border: 2px solid var(--bg-card);
-  border-radius: 1px;
+  object-fit: contain;
 }
 .brand-text { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 .brand-text .sub { font-weight: 400; color: var(--fg-4); margin-left: 2px; }
@@ -357,7 +349,7 @@ footer.foot a:hover { color: var(--fg); }
 
 <header class="topbar">
   <div class="brand">
-    <div class="brand-mark"></div>
+    <img src="/api/v1/icon" class="brand-img" alt="consenso" onerror="this.style.display='none'">
     <div class="brand-text">consenso<span class="sub"> · self-service portal</span></div>
   </div>
   <a href="/admin" class="admin-link">Admin →</a>
@@ -380,13 +372,6 @@ footer.foot a:hover { color: var(--fg); }
       <div class="host-label">Dein Computer</div>
       <div class="host-name unknown" id="host-name">erkenne…</div>
     </div>
-    <button class="host-edit" id="host-edit-btn" onclick="toggleEdit()" style="display:none">Anderer Rechner</button>
-  </div>
-
-  <div id="host-edit-form" style="display:none; margin-top:14px; gap:8px; align-items:center;">
-    <input type="text" class="host-input" id="host-input" placeholder="HOSTNAME-EINGEBEN" autocomplete="off" spellcheck="false" maxlength="63">
-    <button class="btn" onclick="recheck()">Prüfen</button>
-    <button class="btn ghost" onclick="cancelEdit()">Abbrechen</button>
   </div>
 
   <div class="status-grid" id="status-grid" style="display:none">
@@ -461,12 +446,11 @@ function showHostName(hn, detected_via) {
   if (hn) {
     el.textContent = hn;
     el.classList.remove('unknown');
-    el.title = detected_via === 'reverse-dns' ? 'Erkannt via Reverse-DNS' : 'Manuell eingegeben';
+    el.title = 'Erkannt via Reverse-DNS';
   } else {
     el.textContent = 'unbekannt';
     el.classList.add('unknown');
   }
-  document.getElementById('host-edit-btn').style.display = '';
 }
 
 function showStatusGrid(s) {
@@ -511,9 +495,9 @@ function renderResult(s) {
           </svg>
         </div>
         <div class="cta-title">Rechner nicht erkannt</div>
-        <div class="cta-desc">Wir konnten deinen Hostname nicht automatisch ermitteln. Tippe ihn oben ein, dann prüfen wir den Status.</div>
+        <div class="cta-desc">Wir konnten deinen Hostname nicht automatisch ermitteln. Bitte wende dich an die IT-Abteilung wenn du Hilfe benötigst.</div>
         <div class="btn-row">
-          <button class="btn" onclick="toggleEdit()">Hostname eingeben</button>
+          <a class="btn" href="mailto:it@consenso.de?subject=Self-Service-Portal%20Hostname%20nicht%20erkannt">IT kontaktieren</a>
         </div>
       </div>`;
     return;
@@ -534,7 +518,6 @@ function renderResult(s) {
         </div>
         <div class="btn-row">
           <a class="btn" href="mailto:it@consenso.de?subject=Rechner%20${encodeURIComponent(s.hostname)}%20nicht%20verwaltet">IT kontaktieren</a>
-          <button class="btn ghost" onclick="toggleEdit()">Anderer Rechner</button>
         </div>
       </div>`;
     return;
@@ -560,7 +543,6 @@ function renderResult(s) {
             </svg>
             Installer herunterladen
           </a>
-          <button class="btn ghost" onclick="toggleEdit()">Anderer Rechner</button>
         </div>
       </div>`;
     loadFleetPreview();
@@ -615,39 +597,6 @@ async function loadFleetPreview() {
     `);
   } catch(e) {}
 }
-
-function toggleEdit() {
-  const f = document.getElementById('host-edit-form');
-  const isOpen = f.style.display === 'flex';
-  f.style.display = isOpen ? 'none' : 'flex';
-  if (!isOpen) {
-    const inp = document.getElementById('host-input');
-    inp.value = _state?.hostname || '';
-    inp.focus();
-    inp.select();
-  }
-}
-function cancelEdit() {
-  document.getElementById('host-edit-form').style.display = 'none';
-}
-async function recheck() {
-  const hn = document.getElementById('host-input').value.trim();
-  if (!hn) return;
-  document.getElementById('host-edit-form').style.display = 'none';
-  document.getElementById('result-area').innerHTML = '<div class="loading"><div class="spinner"></div><span>Prüfe ' + esc(hn) + '…</span></div>';
-  document.getElementById('host-name').textContent = hn;
-  const s = await loadStatus(hn);
-  _state = s;
-  if (s.ok) {
-    showHostName(s.hostname, s.detected_via);
-    showStatusGrid(s);
-  }
-  renderResult(s);
-}
-
-document.getElementById('host-input')?.addEventListener('keydown', e => {
-  if (e.key === 'Enter') recheck();
-});
 
 (async () => {
   const s = await loadStatus();

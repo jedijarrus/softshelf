@@ -602,27 +602,26 @@ async def landing_page():
 
 
 @app.get("/api/v1/landing-status")
-async def landing_status(request: Request, hostname: str = Query(default="", max_length=64)):
+async def landing_status(request: Request):
     """Status-Lookup fuer Landing-Page.
 
-    Wenn kein hostname Parameter: versucht reverse-DNS auf Client-IP.
-    Liefert in_tactical, in_softshelf, kiosk_online, agent_id, last_seen.
+    Hostname wird ausschliesslich per reverse-DNS auf der Client-IP ermittelt.
+    Kein User-Input — verhindert Auskundschaften beliebiger Hostnamen.
     """
-    hn = (hostname or "").strip()
+    hn = ""
     detected_via = None
 
-    if not hn:
-        # Reverse-DNS auf Client-IP versuchen
-        client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
-        if client_ip:
-            try:
-                import socket
-                resolved = socket.gethostbyaddr(client_ip)[0]
-                # Nur Hostname-Teil ohne FQDN-Domain (CON5010-T16G2.consenso.de -> CON5010-T16G2)
-                hn = resolved.split(".")[0]
-                detected_via = "reverse-dns"
-            except Exception:
-                pass
+    # Reverse-DNS auf Client-IP
+    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
+    if client_ip:
+        try:
+            import socket
+            resolved = socket.gethostbyaddr(client_ip)[0]
+            # Nur Hostname-Teil ohne FQDN-Domain (CON5010-T16G2.consenso.de -> CON5010-T16G2)
+            hn = resolved.split(".")[0]
+            detected_via = "reverse-dns"
+        except Exception:
+            pass
 
     if not hn or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}", hn):
         return {
