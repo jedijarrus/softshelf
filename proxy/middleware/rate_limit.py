@@ -28,10 +28,26 @@ LIMITS: dict[str, tuple[int, int]] = {
     "admin_login": (10,  60),
     "admin_api":  (600, 60),
     "admin":      (120, 60),
+    # Landing-Endpoints: oeffentlich, kein Auth — strikte Per-IP Limits.
+    # Status: 20/min damit polling waehrend Install nicht sofort knockt.
+    # Trigger: 3/min — verhindert Trigger-Sturm (zusaetzlich zum 5-Min-Cooldown
+    # pro Hostname im main.py).
+    "landing_status":  (20, 60),
+    "landing_trigger": (3,  60),
 }
 
-# Loopback-IPs deren X-Forwarded-For wir akzeptieren (Reverse-Proxy lokal)
-_TRUSTED_PROXIES = {"127.0.0.1", "::1", "localhost"}
+# Loopback-IPs deren X-Forwarded-For wir akzeptieren (Reverse-Proxy lokal).
+# Public-API (TRUSTED_PROXIES, is_trusted_peer) statt _-Prefix damit andere
+# Module nicht in private Symbole greifen.
+TRUSTED_PROXIES = {"127.0.0.1", "::1", "localhost"}
+# Backward-compat Alias — entfernen sobald keine Konsumenten mehr da sind.
+_TRUSTED_PROXIES = TRUSTED_PROXIES
+
+
+def is_trusted_peer(host: str) -> bool:
+    """Prueft ob die TCP-Peer-IP ein vertrauenswuerdiger Reverse-Proxy ist
+    (also: ihr X-Forwarded-For-Header darf gelesen werden)."""
+    return host in TRUSTED_PROXIES
 
 # Anzahl Requests bevor wir einen Cleanup-Sweep machen (cheap GC)
 _SWEEP_INTERVAL = 500
@@ -94,14 +110,31 @@ def _bucket_for(path: str) -> str | None:
     # Rest (/admin, static assets) → moderater Bucket
     if path == "/admin" or path.startswith("/admin/"):
         return "admin"
+    # Oeffentliche Landing-Endpoints (kein Auth) → strikte Per-IP Limits.
+    if path == "/api/v1/landing-status":
+        return "landing_status"
+    if path == "/api/v1/landing-trigger-install":
+        return "landing_trigger"
     return None
+
+
+def _real_peer_ip(request: Request) -> str:
+    """Echter TCP-Peer (NICHT XFF). Verwendet fuer landing-Buckets damit ein
+    Angreifer nicht via gespoofter XFF Header die Limits umgehen kann."""
+    return request.client.host if request.client else "unknown"
 
 
 async def rate_limit_middleware(request: Request, call_next):
     global _request_counter
     bucket = _bucket_for(request.url.path)
     if bucket:
-        ip = _client_ip(request)
+        # Fuer Landing-Buckets: echte Peer-IP (kein XFF-Trust), damit ein
+        # Angreifer nicht durch gespoofte Headers die Limits umgehen kann.
+        # Fuer Admin/Register: weiter XFF-Trust von loopback erlauben.
+        if bucket in ("landing_status", "landing_trigger"):
+            ip = _real_peer_ip(request)
+        else:
+            ip = _client_ip(request)
         if not _check(ip, bucket):
             return JSONResponse(
                 status_code=429,

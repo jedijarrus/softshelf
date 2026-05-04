@@ -412,18 +412,30 @@ kbd {
 
 <footer class="foot">
   <span>© {{PORTAL_TITLE}}</span>
-  <span id="version-tag">·</span>
 </footer>
 
 </div>
 
 <script>
 let _state = null;
+// SUPPORT_EMAIL wird vom Server-Renderer als JSON-Literal substituiert
+// ({{SUPPORT_EMAIL_JS}} = json.dumps(value)). Damit ist jeder String JS-safe
+// auch ohne Server-side Validation. Leerstring → 'IT kontaktieren'-Buttons
+// werden ausgeblendet.
+const SUPPORT_EMAIL = {{SUPPORT_EMAIL_JS}};
 
 function esc(s) {
   return String(s == null ? '' : s)
     .replaceAll('&','&amp;').replaceAll('<','&lt;')
     .replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
+}
+
+function supportButton(subject) {
+  // Renders mailto-link as 'IT kontaktieren' if SUPPORT_EMAIL is set,
+  // empty string otherwise. subject is URL-encoded by caller.
+  if (!SUPPORT_EMAIL) return '';
+  const href = 'mailto:' + encodeURIComponent(SUPPORT_EMAIL) + '?subject=' + subject;
+  return '<a class="btn" href="' + esc(href) + '">IT kontaktieren</a>';
 }
 
 async function loadStatus(hostname) {
@@ -491,7 +503,7 @@ function renderResult(s) {
         <div class="cta-title">Rechner nicht erkannt</div>
         <div class="cta-desc">Wir konnten deinen Hostname nicht automatisch ermitteln. Bitte wende dich an die IT-Abteilung wenn du Hilfe benötigst.</div>
         <div class="btn-row">
-          <a class="btn" href="mailto:it@consenso.de?subject=Self-Service-Portal%20Hostname%20nicht%20erkannt">IT kontaktieren</a>
+          ${supportButton(encodeURIComponent('Self-Service-Portal Hostname nicht erkannt'))}
         </div>
       </div>`;
     return;
@@ -511,7 +523,7 @@ function renderResult(s) {
           Bitte wende dich an die IT-Abteilung, damit dein Rechner aufgenommen werden kann.
         </div>
         <div class="btn-row">
-          <a class="btn" href="mailto:it@consenso.de?subject=Rechner%20${encodeURIComponent(s.hostname)}%20nicht%20verwaltet">IT kontaktieren</a>
+          ${supportButton('Rechner%20' + encodeURIComponent(s.hostname) + '%20nicht%20verwaltet')}
         </div>
       </div>`;
     return;
@@ -558,7 +570,6 @@ function renderResult(s) {
       </div>
     </div>
   `;
-  loadFleetPreview();
 }
 
 async function triggerInstall() {
@@ -572,7 +583,13 @@ async function triggerInstall() {
   area.innerHTML = '<div style="display:flex;align-items:center;gap:10px;color:var(--fg-3);font-size:13px"><div class="spinner"></div><span>Installation wird angefordert…</span></div>';
 
   try {
-    const r = await fetch('/api/v1/landing-trigger-install', { method: 'POST' });
+    const r = await fetch('/api/v1/landing-trigger-install', {
+      method: 'POST',
+      // X-Requested-With macht den Request fuer CSRF-Middleware sichtbar als
+      // same-origin AJAX (Browser senden den Header nicht automatisch
+      // cross-origin) — entspricht dem Schema von /admin/api/*.
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       area.innerHTML = `<div style="color:var(--red);font-size:13px;background:var(--red-bg);border:1px solid var(--red-bd);padding:10px 14px;border-radius:var(--r)">Fehler: ${esc(err.detail || r.statusText)}</div>`;
@@ -580,6 +597,11 @@ async function triggerInstall() {
       return;
     }
     const data = await r.json();
+    if (data.warning) {
+      // Soft-warning: Tactical hat nicht innerhalb 60s geantwortet, Install
+      // laeuft trotzdem moeglicherweise. Polling-Loop deckt den Erfolg ab.
+      console.info('landing trigger warning:', data.warning);
+    }
     startInstallCountdown(data.estimated_seconds || 120);
   } catch (e) {
     area.innerHTML = `<div style="color:var(--red);font-size:13px">Netzwerkfehler: ${esc(String(e))}</div>`;
@@ -651,27 +673,6 @@ function startInstallCountdown(totalSeconds) {
       `;
     }
   }, 1000);
-}
-
-async function loadFleetPreview() {
-  // Optional: zeige Beispiel-Pakete aus der Whitelist (read-only)
-  // Wenn der Endpoint nicht existiert, einfach ueberspringen
-  try {
-    const r = await fetch('/api/v1/landing-packages-preview');
-    if (!r.ok) return;
-    const data = await r.json();
-    if (!data.packages || !data.packages.length) return;
-    const grid = data.packages.slice(0, 12).map(p => `
-      <div class="pkg-tile">
-        <div class="dot"></div>
-        <div class="name">${esc(p.display_name)}</div>
-        <div class="ver">${esc(p.type)}</div>
-      </div>`).join('');
-    document.getElementById('result-area').insertAdjacentHTML('beforeend', `
-      <h3 class="section-title">Verfügbare Software</h3>
-      <div class="pkg-grid">${grid}</div>
-    `);
-  } catch(e) {}
 }
 
 (async () => {

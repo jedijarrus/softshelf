@@ -166,6 +166,17 @@ RUNTIME_KEYS: dict[str, dict] = {
         "required": False,
         "default": "Softshelf",
     },
+    "support_email": {
+        "label": "Support-E-Mail",
+        "help": (
+            "E-Mail-Adresse die auf der Landing-Page als 'IT kontaktieren' "
+            "Link verwendet wird. Wenn leer, wird der Button ausgeblendet."
+        ),
+        "type": "string",
+        "secret": False,
+        "required": False,
+        "default": "",
+    },
     "publisher": {
         "label": "Publisher (Apps & Features)",
         "help": (

@@ -3,10 +3,15 @@ Softshelf — Proxy
 Starten: uvicorn main:app --host 0.0.0.0 --port 8765
 Admin:   http(s)://<server>:8765/admin
 """
+import asyncio
+import html
 import logging
 import os
 import re
+import socket
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -26,7 +31,9 @@ from config import RUNTIME_KEYS, get_settings, runtime_int, runtime_value
 from middleware.audit_logger import audit_log_middleware
 from middleware.csrf import csrf_middleware
 from middleware.rate_limit import rate_limit_middleware
+from middleware.rate_limit import is_trusted_peer as _is_trusted_peer
 from routes import packages, install, admin, register
+from tactical_client import TacticalClient
 
 logger = logging.getLogger("softshelf")
 
@@ -205,7 +212,6 @@ async def _rollout_auto_advance_tick():
     Fehler-Rate = offene (un-acked) Fehler mit
     last_action_package == rollout.package_name / Agents-in-Stage.
     """
-    from datetime import datetime, timezone, timedelta
     try:
         from config import runtime_value
         # Per-Transition Wartezeit: 1→2 vs 2→3 separat konfigurierbar.
@@ -320,7 +326,6 @@ async def _rollout_auto_advance_tick():
 async def _scheduled_jobs_tick():
     """Minuetlicher Tick: checkt pending scheduled_jobs deren run_at <= now,
     fuehrt sie aus und markiert als done/failed."""
-    from datetime import datetime, timezone
     try:
         pending = await database.list_pending_scheduled_jobs()
         now = datetime.now(timezone.utc)
@@ -589,10 +594,57 @@ async def health(request: Request):
 
 _LANDING_PATH = os.path.join(os.path.dirname(__file__), "templates", "landing.html")
 
-# Rate-Limit fuer Landing-Install: pro Hostname max 1 Trigger / 5 Minuten
+# Rate-Limit fuer Landing-Install: pro Hostname max 1 Trigger / 5 Minuten.
+# _LANDING_INSTALL_DEDUPE wird per Lock geschuetzt (Race-Condition I1).
+# TTL-Pruning beim Check (I3) verhindert unbeschraenktes Wachstum.
 _LANDING_INSTALL_DEDUPE: dict[str, float] = {}
 _LANDING_INSTALL_COOLDOWN_S = 300
 _LANDING_INSTALL_SCRIPT_NAME = "Kiosk Install"
+_LANDING_INSTALL_LOCK = asyncio.Lock()
+
+# RFC 1123 strict: Buchstabe/Ziffer am Anfang+Ende, Bindestriche dazwischen,
+# 1-63 Zeichen. Schliesst Punkte aus damit niemand FQDNs einschmuggelt
+# (wir splitten ja schon vor dem Match auf den ersten Punkt).
+_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+
+def _landing_client_ip(request: Request) -> str:
+    """Echte Client-IP fuer Landing-Endpoints. XFF wird NUR akzeptiert wenn
+    der TCP-Peer in der Trusted-Proxy-Liste steht (loopback/lokaler Reverse-
+    Proxy). Sonst trivial spoofbar.
+
+    Trusted-Liste wird aus middleware.rate_limit.is_trusted_peer uebernommen,
+    damit Rate-Limit + Landing dieselbe Definition haben.
+    """
+    peer = request.client.host if request.client else ""
+    if _is_trusted_peer(peer):
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            first = xff.split(",")[0].strip()
+            if first:
+                return first
+    return peer
+
+
+def _resolve_caller_hostname(request: Request) -> tuple[str | None, str | None]:
+    """Reverse-DNS Lookup auf der Client-IP. Liefert (short_hostname, error).
+    short_hostname = None bei Fehler. error = None bei Erfolg.
+
+    Validiert das Ergebnis gegen die strikte RFC-1123-Hostname-Regex damit
+    Tactical-/DB-Lookups nur mit sauberen Werten passieren.
+    """
+    client_ip = _landing_client_ip(request)
+    if not client_ip:
+        return (None, "no_client_ip")
+    try:
+        resolved = socket.gethostbyaddr(client_ip)[0]
+    except Exception:
+        return (None, "reverse_dns_failed")
+    # Nur Hostname-Teil ohne FQDN-Domain
+    short = resolved.split(".")[0]
+    if not short or not _HOSTNAME_RE.fullmatch(short):
+        return (None, "invalid_hostname")
+    return (short, None)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -603,10 +655,26 @@ async def landing_page():
             page = f.read()
     except FileNotFoundError:
         return RedirectResponse(url="/admin", status_code=302)
-    import html as _html
     title = await runtime_value("admin_portal_title") or "Self-Service Portal"
-    title_safe = _html.escape(title, quote=True)
-    page = page.replace("{{PORTAL_TITLE}}", title_safe)
+    support_email_raw = (await runtime_value("support_email") or "").strip()
+    # support_email landet im JS-String. Verbietet Newlines/Backslash/Anfuehrungszeichen.
+    # Konservative RFC-5322-Subset-Validation. Bei ungueltigem Wert: leer behandeln
+    # damit der "IT kontaktieren" Button ausgeblendet wird statt JS zu zerschiessen.
+    if not re.fullmatch(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", support_email_raw):
+        support_email_raw = ""
+    title_safe = html.escape(title, quote=True)
+    # Email separat fuer HTML-Attribute (mailto:) und JS-String (eingebettet im <script>).
+    email_attr = html.escape(support_email_raw, quote=True)
+    # Fuer JS: json.dumps erzeugt einen sicheren JS-String-Literal — auch ohne
+    # Validation oben kein Injection-Vektor. Belt + suspenders.
+    import json as _json
+    email_js = _json.dumps(support_email_raw)
+    for token, val in [
+        ("{{PORTAL_TITLE}}", title_safe),
+        ("{{SUPPORT_EMAIL}}", email_attr),
+        ("{{SUPPORT_EMAIL_JS}}", email_js),
+    ]:
+        page = page.replace(token, val)
     return HTMLResponse(page)
 
 
@@ -616,34 +684,23 @@ async def landing_status(request: Request):
 
     Hostname wird ausschliesslich per reverse-DNS auf der Client-IP ermittelt.
     Kein User-Input — verhindert Auskundschaften beliebiger Hostnamen.
+
+    Antwort enthaelt KEINE sensitiven Felder (agent_id, last_seen) — die
+    Landing-Page ist oeffentlich erreichbar.
     """
-    hn = ""
-    detected_via = None
-
-    # Reverse-DNS auf Client-IP
-    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
-    if client_ip:
-        try:
-            import socket
-            resolved = socket.gethostbyaddr(client_ip)[0]
-            # Nur Hostname-Teil ohne FQDN-Domain (CON5010-T16G2.consenso.de -> CON5010-T16G2)
-            hn = resolved.split(".")[0]
-            detected_via = "reverse-dns"
-        except Exception:
-            pass
-
-    if not hn or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}", hn):
+    hn, err = _resolve_caller_hostname(request)
+    if not hn:
         return {
             "ok": False,
             "error": "no_hostname",
-            "hostname": hn,
-            "detected_via": detected_via,
+            "hostname": "",
+            "detected_via": None,
+            "reason": err,
         }
 
     # Tactical-Lookup (best effort, kein Hard-Fail)
     tactical_info = None
     try:
-        from tactical_client import TacticalClient
         tactical_info = await TacticalClient().find_agent_by_hostname(hn)
     except Exception as e:
         logger.warning("landing tactical lookup failed: %s", e)
@@ -656,26 +713,24 @@ async def landing_status(request: Request):
         logger.warning("landing softshelf lookup failed: %s", e)
 
     kiosk_online = False
-    last_seen = None
     if sf_agent and sf_agent.get("last_seen"):
-        from datetime import datetime, timezone, timedelta
         try:
-            ls = datetime.strptime(sf_agent["last_seen"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            ls = datetime.strptime(
+                sf_agent["last_seen"], "%Y-%m-%d %H:%M:%S",
+            ).replace(tzinfo=timezone.utc)
             kiosk_online = (datetime.now(timezone.utc) - ls) < timedelta(minutes=5)
-            last_seen = sf_agent["last_seen"]
         except Exception:
             pass
 
+    # Bewusst KEIN agent_id, kein last_seen — Landing ist public.
     return {
         "ok": True,
         "hostname": hn,
-        "detected_via": detected_via,
+        "detected_via": "reverse-dns",
         "in_tactical":  bool(tactical_info),
         "tactical_status": tactical_info.get("status") if tactical_info else None,
         "in_softshelf": bool(sf_agent),
         "kiosk_online": kiosk_online,
-        "agent_id": sf_agent.get("agent_id") if sf_agent else None,
-        "last_seen": last_seen,
     }
 
 
@@ -687,29 +742,34 @@ async def landing_trigger_install(request: Request):
       - Hostname wird ausschliesslich per reverse-DNS auf der Client-IP ermittelt.
       - Agent muss in Tactical sein.
       - Agent darf NICHT bereits in Softshelf registriert sein (verhindert Re-Trigger).
-      - Pro Hostname max 1 Trigger / 5 Minuten (Cooldown).
+      - Pro Hostname max 1 Trigger / 5 Minuten (Cooldown, Lock-protected).
+      - Per-IP Rate-Limit (Middleware).
+      - CSRF-Schutz (Middleware).
     """
-    import time as _time
-    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
-    if not client_ip:
-        raise HTTPException(status_code=400, detail="Client-IP nicht ermittelbar")
-
-    try:
-        import socket
-        resolved = socket.gethostbyaddr(client_ip)[0]
-        hn = resolved.split(".")[0]
-    except Exception:
-        raise HTTPException(status_code=400, detail="Hostname nicht ermittelbar (reverse-DNS fehlgeschlagen)")
-
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}", hn):
+    hn, err = _resolve_caller_hostname(request)
+    if not hn:
+        if err == "no_client_ip":
+            raise HTTPException(status_code=400, detail="Client-IP nicht ermittelbar")
+        if err == "reverse_dns_failed":
+            raise HTTPException(status_code=400, detail="Hostname nicht ermittelbar (reverse-DNS fehlgeschlagen)")
         raise HTTPException(status_code=400, detail="Hostname-Format ungueltig")
 
-    # Cooldown
-    now = _time.time()
-    last = _LANDING_INSTALL_DEDUPE.get(hn.lower(), 0)
-    if now - last < _LANDING_INSTALL_COOLDOWN_S:
-        wait_s = int(_LANDING_INSTALL_COOLDOWN_S - (now - last))
-        raise HTTPException(status_code=429, detail=f"Bitte {wait_s}s warten")
+    # Lock schuetzt cooldown-check + cooldown-set vor TOCTOU. Eager-Set:
+    # wir markieren die Cooldown SOFORT nach dem Check (vor dem Tactical-
+    # Call), damit ein Failure beim Dispatch trotzdem den Bucket
+    # blockiert — User retry-floods waeren sonst die Norm.
+    async with _LANDING_INSTALL_LOCK:
+        now = time.time()
+        # TTL-Prune: alle abgelaufenen Eintraege rauswerfen (I3)
+        cutoff = now - _LANDING_INSTALL_COOLDOWN_S
+        for h in [h for h, t in _LANDING_INSTALL_DEDUPE.items() if t < cutoff]:
+            _LANDING_INSTALL_DEDUPE.pop(h, None)
+        last = _LANDING_INSTALL_DEDUPE.get(hn.lower(), 0)
+        if now - last < _LANDING_INSTALL_COOLDOWN_S:
+            wait_s = int(_LANDING_INSTALL_COOLDOWN_S - (now - last))
+            raise HTTPException(status_code=429, detail=f"Bitte {wait_s}s warten")
+        # Eager-set: Cooldown VOR dem Tactical-Call setzen.
+        _LANDING_INSTALL_DEDUPE[hn.lower()] = now
 
     # In Softshelf?
     sf_agent = await database.get_agent_by_hostname(hn)
@@ -717,7 +777,6 @@ async def landing_trigger_install(request: Request):
         raise HTTPException(status_code=409, detail="Self-Service-Portal ist bereits installiert")
 
     # In Tactical?
-    from tactical_client import TacticalClient
     tc = TacticalClient()
     tactical_info = await tc.find_agent_by_hostname(hn)
     if not tactical_info or not tactical_info.get("agent_id"):
@@ -734,9 +793,15 @@ async def landing_trigger_install(request: Request):
             raise HTTPException(status_code=500, detail=f"Script '{_LANDING_INSTALL_SCRIPT_NAME}' in Tactical nicht gefunden")
         raise HTTPException(status_code=502, detail=f"Tactical-Fehler: {result.get('status')}")
 
-    _LANDING_INSTALL_DEDUPE[hn.lower()] = now
     logger.info("landing install triggered: hostname=%s agent_id=%s", hn, tactical_info["agent_id"][:12])
-    return {"ok": True, "hostname": hn, "estimated_seconds": 120}
+    response: dict = {"ok": True, "hostname": hn, "estimated_seconds": 120}
+    if result.get("status") == "dispatched_timeout":
+        response["warning"] = (
+            "Tactical hat innerhalb von 60s nicht geantwortet. Die "
+            "Installation laeuft moeglicherweise trotzdem im Hintergrund — "
+            "die Statusanzeige aktualisiert sich automatisch."
+        )
+    return response
 
 
 @app.get("/download/{filename}")
@@ -820,7 +885,6 @@ async def workflow_reboot_now(run_id: int, request: Request):
         return {"ok": False, "reason": f"Run ist {run['status']}, kein Reboot"}
     # Shutdown via Tactical dispatchen
     try:
-        from tactical_client import TacticalClient
         tc = TacticalClient()
         await tc.run_command(agent_id, 'shutdown /r /t 5 /d p:4:1', timeout=10)
     except Exception as e:
@@ -845,7 +909,6 @@ async def workflow_defer_reboot(run_id: int, request: Request):
     if run["status"] != "running":
         return {"ok": False, "reason": f"Run ist {run['status']}"}
     import json as _json
-    from datetime import datetime, timezone, timedelta
     state = _json.loads(run.get("step_state") or "{}")
     state["deferrals"] = state.get("deferrals", 0) + 1
     # Verschieben-Dauer: 60s zum Testen, spaeter 24h
