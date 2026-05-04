@@ -264,6 +264,7 @@ class TacticalClient:
 
     async def run_script_by_name(self, agent_id: str, script_name: str, timeout: int = 600) -> dict:
         """Triggert einen Tactical-Script nach Name auf einem Agent.
+        Fire-and-forget (output=collector) — kein Warten auf Ausgabe.
         Liefert {ok, status, body}. Wirft keine Exception."""
         _check_agent(agent_id)
         sid = await self.find_script_id_by_name(script_name)
@@ -271,9 +272,17 @@ class TacticalClient:
             return {"ok": False, "status": "script_not_found", "body": script_name}
         base, headers = await self._connection()
         url = f"{base}/agents/{agent_id}/runscript/"
-        payload = {"script": sid, "output": "wait", "args": [], "timeout": timeout}
+        payload = {
+            "script": sid,
+            "output": "forget",  # fire-and-forget, blockiert nicht (Tactical wartet sonst auf Agent-Output)
+            "args": [],
+            "env_vars": [],
+            "timeout": timeout,
+            "custom_shell": "",
+            "run_as_user": False,
+        }
         try:
-            async with self._client(headers) as c:
+            async with httpx.AsyncClient(headers=headers, verify=False, timeout=30) as c:
                 r = await c.post(url, json=payload)
                 if r.status_code >= 400:
                     return {"ok": False, "status": f"http_{r.status_code}", "body": r.text[:300]}
