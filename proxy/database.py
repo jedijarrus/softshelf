@@ -1925,11 +1925,15 @@ async def update_package_auto_advance(name: str, auto: bool):
         await db.commit()
 
 
-async def update_package_hidden(name: str, hidden: bool):
+async def update_package_hidden(name: str, hidden):
+    """hidden: int 0/1/2 (0=sichtbar, 1=nur installiert, 2=komplett aus).
+    Akzeptiert auch bool (True→1) fuer backward-compat."""
+    val = int(hidden) if not isinstance(hidden, bool) else (1 if hidden else 0)
+    val = max(0, min(2, val))
     async with _db() as db:
         await db.execute(
             "UPDATE packages SET hidden_in_kiosk = ?, updated_at = datetime('now') WHERE name = ?",
-            (1 if hidden else 0, name),
+            (val, name),
         )
         await db.commit()
 

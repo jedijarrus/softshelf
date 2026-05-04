@@ -225,13 +225,17 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
             p.update_available = False
             p.current_version_label = None  # Version-Info verstecken damit UI nicht verwirrt
 
-    # "Hidden in Kiosk"-Filter: Pakete mit packages.hidden_in_kiosk=1 werden
-    # nur ausgeliefert wenn sie auf DIESEM Agent installiert sind.
-    # Use-case: Admin-only Remote-Deploy-Software — User sieht sie nicht im
-    # Kiosk-Grid, aber sobald installiert kann er sie sehen/updaten/removen.
-    hidden_map = {p["name"]: bool(p.get("hidden_in_kiosk")) for p in pkg_rows}
+    # "Hidden in Kiosk"-Filter (3-state):
+    #   0 = sichtbar (default)
+    #   1 = nur wenn installiert (Admin-Dispatch-Use-Case)
+    #   2 = komplett ausgeblendet (auch wenn installiert)
+    hidden_map = {p["name"]: int(p.get("hidden_in_kiosk") or 0) for p in pkg_rows}
     def _keep(p: Package) -> bool:
-        if not hidden_map.get(p.name):
+        h = hidden_map.get(p.name, 0)
+        if h == 0:
             return True
+        if h == 2:
+            return False
+        # h == 1: nur wenn installiert
         return p.installed
     return [p for p in result if _keep(p)]

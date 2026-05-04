@@ -5910,6 +5910,19 @@ body.help-active [data-help]:not(.tab)::after {
         </label>
         <div class="hint">Im Kiosk-Client wird kein Deinstallieren-Button angezeigt. Sinnvoll bei Pflicht-Software.</div>
       </div>
+      <div class="field">
+        <label>Sichtbarkeit im Kiosk</label>
+        <select class="input" data-edit="hidden_in_kiosk" id="edit-visibility">
+          <option value="0">Sichtbar (Standard)</option>
+          <option value="1">Nur wenn auf dem Rechner installiert</option>
+          <option value="2">Komplett ausblenden</option>
+        </select>
+        <div class="hint">
+          <b>Sichtbar:</b> alle User sehen das Paket im Kiosk.<br>
+          <b>Nur installiert:</b> User sieht es nur wenn es auf dem Rechner installiert ist (Update/Deinstall moeglich, kein Self-Service Install).<br>
+          <b>Komplett ausblenden:</b> Paket existiert in der Whitelist (Admin kann pushen), erscheint aber nie im Kiosk-Grid.
+        </div>
+      </div>
 
       <div class="field" id="edit-version-pin-field" style="display:none">
         <label data-help-block="Fixiert auf diese Version, kein Auto-Upgrade">Version-Pin</label>
@@ -9444,6 +9457,7 @@ function openEditPanel(name) {
   document.querySelector('[data-edit="check_reboot"]').checked = !!pkg.check_reboot;
   document.querySelector('[data-edit="hide_uninstall"]').checked = !!pkg.hide_uninstall;
   document.querySelector('[data-edit="process_check"]').value  = pkg.process_check || '';
+  document.getElementById('edit-visibility').value = String(parseInt(pkg.hidden_in_kiosk || 0));
   // process_check Feld nur fuer winget anzeigen
   document.getElementById('edit-process-check-field').style.display = (pkg.type === 'winget') ? '' : 'none';
   // install_args ist fuer custom UND winget verfuegbar (winget mit Whitelist-validierten Flags)
@@ -10039,6 +10053,8 @@ async function saveEdit() {
       const field = document.getElementById('edit-entry-field');
       if (field && field.style.display === 'none') return;
     }
+    // hidden_in_kiosk wird separat via /hidden endpoint gespeichert
+    if (i.dataset.edit === 'hidden_in_kiosk') return;
     body[i.dataset.edit] = i.type === 'checkbox' ? (i.checked ? 1 : 0) : i.value;
   });
   const btn = document.getElementById('edit-save-btn');
@@ -10074,6 +10090,13 @@ async function saveEdit() {
         await api('PATCH', `/admin/api/packages/${encodeURIComponent(_editingName)}/version-pin`, {version: pin});
         pkg.version_pin = pin || null;
       }
+    }
+    // Sichtbarkeit (3-state) separat speichern via hidden-Endpoint
+    const visNew = parseInt(document.getElementById('edit-visibility').value || '0');
+    const visOld = parseInt(pkg.hidden_in_kiosk || 0);
+    if (visNew !== visOld) {
+      await api('PATCH', `/admin/api/packages/${encodeURIComponent(_editingName)}/hidden`, {hidden: visNew});
+      pkg.hidden_in_kiosk = visNew;
     }
     toast('Änderungen gespeichert');
     closeAll();
