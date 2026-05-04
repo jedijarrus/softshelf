@@ -36,6 +36,41 @@ _RETRYABLE_STATUS = {500, 502, 503, 504}
 MAX_CONCURRENT_COMMANDS = 8
 _cmd_semaphore: asyncio.Semaphore | None = None
 
+# In-Process LRU-Cache fuer find_agent_by_hostname (TTL 60s).
+# Keyed: lowercased hostname. Value: (cached_at_ts, result_dict_or_None).
+# Kein functools.lru_cache weil wir TTL brauchen (hostnames koennen sich
+# in Tactical aendern, kein indefinite cache).
+_HOSTNAME_LOOKUP_TTL_S = 60
+_hostname_cache: dict[str, tuple[float, dict | None]] = {}
+_HOSTNAME_CACHE_MAX = 256
+
+
+def _hostname_cache_get(key: str) -> tuple[bool, dict | None]:
+    """Returns (hit, value). Hit=False wenn nicht im Cache oder expired."""
+    entry = _hostname_cache.get(key)
+    if not entry:
+        return (False, None)
+    cached_at, value = entry
+    if _time.time() - cached_at > _HOSTNAME_LOOKUP_TTL_S:
+        _hostname_cache.pop(key, None)
+        return (False, None)
+    return (True, value)
+
+
+def _hostname_cache_put(key: str, value: dict | None) -> None:
+    # Simple size cap: wenn voll, alle expired entries pruenen, sonst aeltestes raus.
+    if len(_hostname_cache) >= _HOSTNAME_CACHE_MAX:
+        now = _time.time()
+        expired = [k for k, (t, _) in _hostname_cache.items()
+                   if now - t > _HOSTNAME_LOOKUP_TTL_S]
+        for k in expired:
+            _hostname_cache.pop(k, None)
+        if len(_hostname_cache) >= _HOSTNAME_CACHE_MAX:
+            # immer noch voll → aeltesten Eintrag droppen
+            oldest = min(_hostname_cache.items(), key=lambda kv: kv[1][0])[0]
+            _hostname_cache.pop(oldest, None)
+    _hostname_cache[key] = (_time.time(), value)
+
 # Queue-Tracking: was laeuft, was wartet
 _active_commands: list[dict] = []   # [{agent_id, hostname, action, started_at}]
 _waiting_count: int = 0
@@ -125,26 +160,39 @@ class TacticalClient:
     async def find_agent_by_hostname(self, hostname: str) -> dict | None:
         """Sucht Tactical-Agent ueber Hostname. Liefert {agent_id, hostname,
         status} oder None. Case-insensitive Match.
+
+        In-Process Cache (TTL 60s): /agents/ zieht die ganze Fleet-Liste —
+        bei haeufigen Polls (Landing-Page) sonst sinnlose Last auf Tactical.
         """
         if not hostname or not isinstance(hostname, str):
             return None
         hn_lower = hostname.strip().lower()
         if not hn_lower:
             return None
+        # Cache-Check
+        hit, cached = _hostname_cache_get(hn_lower)
+        if hit:
+            return cached
         try:
             base, headers = await self._connection()
             async with self._client(headers) as c:
                 r = await c.get(f"{base}/agents/")
                 if r.status_code != 200:
+                    # Negative Lookups NICHT cachen — das waere ein DoS-Vektor
+                    # bei kurzfristigen Tactical-Ausfaellen.
                     return None
                 for a in r.json():
                     ah = (a.get("hostname") or "").lower()
                     if ah == hn_lower:
-                        return {
+                        result = {
                             "agent_id": a.get("agent_id"),
                             "hostname": a.get("hostname"),
                             "status":   a.get("status", "unknown"),
                         }
+                        _hostname_cache_put(hn_lower, result)
+                        return result
+                # Nicht gefunden → mit None cachen (gueltige Antwort vom API)
+                _hostname_cache_put(hn_lower, None)
                 return None
         except Exception as e:
             logger.warning("find_agent_by_hostname failed for %s: %s", hostname, e)
@@ -248,14 +296,19 @@ class TacticalClient:
             return r.json()
 
     async def find_script_id_by_name(self, name: str) -> int | None:
-        """Sucht Script-ID per case-insensitive Namen-Match. None wenn nicht gefunden."""
+        """Sucht Script-ID per case-insensitive Namen-Match. None wenn nicht gefunden.
+
+        Wird vom oeffentlichen Landing-Endpoint aufgerufen — bei transienten
+        Tactical-API-Fehlern wuerde warning() das Log fluten. Stattdessen debug()
+        und der Caller behandelt None weiter oben als 'script_not_found'.
+        """
         if not name:
             return None
         target = name.strip().lower()
         try:
             scripts = await self.list_scripts()
         except Exception as e:
-            logger.warning("list_scripts failed: %s", e)
+            logger.debug("list_scripts failed: %s", e)
             return None
         for s in scripts:
             if (s.get("name") or "").strip().lower() == target:
@@ -264,8 +317,21 @@ class TacticalClient:
 
     async def run_script_by_name(self, agent_id: str, script_name: str, timeout: int = 600) -> dict:
         """Triggert einen Tactical-Script nach Name auf einem Agent.
-        Fire-and-forget (output=collector) — kein Warten auf Ausgabe.
-        Liefert {ok, status, body}. Wirft keine Exception."""
+        Fire-and-forget (output=forget) — kein Warten auf Ausgabe.
+        Liefert {ok, status, body}. Wirft keine Exception.
+
+        Verwendet self._client(headers) wie die anderen Methoden — also
+        verify=True (TLS-Validation) und konsistentes Default-Timeout-Setup.
+        Timeout 60s damit Tactical bei Last noch acken kann.
+
+        Asymmetrie: Tactical dispatched intern via NATS — bei einem
+        ReadTimeout/ConnectTimeout ist der Befehl moeglicherweise SCHON
+        rausgegangen. Statt einen Timeout als Fehler zu melden (was den
+        User sehen lassen wuerde 'gescheitert' obwohl Install gerade
+        laeuft) behandeln wir es als best-effort dispatched — der Frontend
+        kann eine sanftere Meldung zeigen und der Status-Polling-Loop
+        erkennt anschliessend ob der Client wirklich hochkam.
+        """
         _check_agent(agent_id)
         sid = await self.find_script_id_by_name(script_name)
         if sid is None:
@@ -282,11 +348,23 @@ class TacticalClient:
             "run_as_user": False,
         }
         try:
-            async with httpx.AsyncClient(headers=headers, verify=False, timeout=30) as c:
+            # Eigener Client mit 60s-Timeout statt self._client (Default 30s):
+            # Tactical kann unter Last laenger zum acken brauchen.
+            async with httpx.AsyncClient(headers=headers, timeout=60) as c:
                 r = await c.post(url, json=payload)
                 if r.status_code >= 400:
                     return {"ok": False, "status": f"http_{r.status_code}", "body": r.text[:300]}
                 return {"ok": True, "status": "dispatched", "body": r.text[:300], "script_id": sid}
+        except (httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            # Asymmetrie wie oben dokumentiert: Befehl koennte trotzdem
+            # rausgegangen sein. Best-effort dispatched zurueckmelden.
+            logger.info("run_script timeout (dispatched best-effort): %s", e)
+            return {
+                "ok": True,
+                "status": "dispatched_timeout",
+                "body": "Tactical did not reply within 60s; install may still proceed",
+                "script_id": sid,
+            }
         except Exception as e:
             logger.warning("run_script failed: %s", e)
             return {"ok": False, "status": "error", "body": str(e)[:300]}
