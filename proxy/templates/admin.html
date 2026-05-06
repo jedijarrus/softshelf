@@ -2064,14 +2064,33 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   white-space: nowrap;
 }
 
-/* ─── ADD-MODE TOGGLE (Choco vs Upload) ──────────────────────────────── */
+/* ─── ADD-MODE TOGGLE (Katalog vs Hochladen) ─────────────────────────── */
 
 .add-modes {
   display: flex;
-  gap: 4px;
-  padding: 14px 24px 0;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  padding: 12px 24px 0;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  align-items: flex-end;
+}
+.add-modes-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.add-modes-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-4);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding-left: 2px;
+}
+.add-modes-row {
+  display: flex;
+  gap: 14px;
 }
 .add-mode {
   font-size: 12px;
@@ -2079,11 +2098,11 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   color: var(--fg-4);
   background: none;
   border: none;
-  padding: 8px 4px 10px;
-  margin-right: 14px;
+  padding: 6px 0 10px;
   cursor: pointer;
   position: relative;
   transition: color .14s;
+  white-space: nowrap;
 }
 .add-mode:hover { color: var(--fg-2); }
 .add-mode.active {
@@ -2096,6 +2115,10 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   left: 0; right: 0; bottom: -1px;
   height: 1.5px;
   background: var(--fg);
+}
+.add-modes-spacer {
+  flex: 1 1 auto;
+  min-width: 8px;
 }
 .add-section { display: none; flex: 1; flex-direction: column; min-height: 0; }
 .add-section.active { display: flex; }
@@ -3467,14 +3490,18 @@ button.outdated-badge.clickable:disabled {
   max-width: 100vw;
   background: var(--bg);
   border-left: 1px solid var(--border);
-  box-shadow: -8px 0 32px rgba(9, 9, 11, .08);
   z-index: 50;
   display: flex;
   flex-direction: column;
   transform: translateX(100%);
   transition: transform .25s cubic-bezier(.4, 0, .2, 1);
 }
-.panel.open { transform: none; }
+/* Schatten nur am OFFENEN Panel — sonst leakt der 32px-Blur eines off-screen
+   Panels in die rechte Viewport-Kante und sieht aus wie ein dunkler Gradient. */
+.panel.open {
+  transform: none;
+  box-shadow: -8px 0 32px rgba(9, 9, 11, .08);
+}
 
 .panel-head {
   padding: 20px 24px 16px;
@@ -5660,7 +5687,7 @@ body.help-active [data-help]:not(.tab)::after {
   <div class="panel-head">
     <div>
       <h2 class="panel-title">Paket hinzufügen</h2>
-      <div class="panel-sub">Chocolatey-Paket, eigene Datei oder kompletter Programm-Ordner</div>
+      <div class="panel-sub">Aus Katalog (Winget / Chocolatey) oder selbst hochladen (EXE/MSI, Programm-Ordner, Plugin)</div>
     </div>
     <button class="panel-close" onclick="closeAll()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
@@ -5668,11 +5695,22 @@ body.help-active [data-help]:not(.tab)::after {
   </div>
 
   <div class="add-modes">
-    <button class="add-mode active" data-mode="choco" onclick="setAddMode('choco')">Aus Chocolatey</button>
-    <button class="add-mode" data-mode="winget" onclick="setAddMode('winget')">Aus Winget</button>
-    <button class="add-mode" data-mode="upload" onclick="setAddMode('upload')">Eigene Datei</button>
-    <button class="add-mode" data-mode="folder" onclick="setAddMode('folder')">Programm-Ordner</button>
-    <button class="add-mode" data-mode="plugin" onclick="setAddMode('plugin')">Plugin</button>
+    <div class="add-modes-group">
+      <div class="add-modes-label">Katalog</div>
+      <div class="add-modes-row">
+        <button class="add-mode active" data-mode="winget" onclick="setAddMode('winget')">Winget</button>
+        <button class="add-mode" data-mode="choco" onclick="setAddMode('choco')">Chocolatey</button>
+      </div>
+    </div>
+    <div class="add-modes-group">
+      <div class="add-modes-label">Hochladen</div>
+      <div class="add-modes-row">
+        <button class="add-mode" data-mode="upload" onclick="setAddMode('upload')">EXE / MSI</button>
+        <button class="add-mode" data-mode="folder" onclick="setAddMode('folder')">Programm-Ordner</button>
+        <button class="add-mode" data-mode="plugin" onclick="setAddMode('plugin')">Plugin</button>
+      </div>
+    </div>
+    <div class="add-modes-spacer"></div>
     <span class="storage-indicator" id="storage-indicator">—</span>
   </div>
 
@@ -11711,8 +11749,8 @@ function renderAudit() {
 function openSearch() {
   document.getElementById('search-panel').classList.add('open');
   document.getElementById('overlay').classList.add('open');
-  setAddMode('choco');
-  setTimeout(() => document.getElementById('search-input').focus(), 220);
+  setAddMode('winget');
+  setTimeout(() => document.getElementById('winget-search-input').focus(), 220);
 }
 
 function setAddMode(mode) {
