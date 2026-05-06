@@ -4569,6 +4569,52 @@ button.outdated-badge.clickable:disabled {
 .pkg-type-pill.custom::before { background: var(--violet); }
 .pkg-type-pill.plugin::before { background: var(--green, #16a34a); }
 
+/* Agent-Mgmt v2.4: Version-Distribution-Banner + Filter-Chips + Bulk-Bar */
+.agent-ver-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  margin: 0 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg-soft);
+  font-size: 12px;
+  color: var(--fg-2);
+}
+.agent-ver-banner code {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.agent-ver-banner.warn { border-color: var(--amber-bd); }
+.agent-ver-filters { display: flex; gap: 6px; margin: 0 0 10px; }
+.agent-ver-filters .agent-ver-filter.active {
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
+}
+.agents-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  margin: 0 0 8px;
+  background: var(--blue-bg);
+  border: 1px solid var(--blue-bd);
+  border-radius: var(--r);
+  font-size: 12px;
+}
+.agent-ver { font-size: 12px; font-family: var(--mono); }
+.agent-ver-current  { color: var(--green); }
+.agent-ver-outdated { color: var(--amber); }
+.agent-ver-unknown  { color: var(--fg-4); }
+.agent-select-cb { cursor: pointer; }
+
 /* Workflow-Step-Liste in der Uebersicht (kompakt, no border) */
 .wf-step-list {
   display: flex;
@@ -10955,7 +11001,11 @@ async function loadAgents() {
   document.getElementById('main-agents').innerHTML =
     '<div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Agents werden geladen</span></div>';
   try {
-    cachedAgents = await api('GET', '/admin/api/agents');
+    // Parallel: Agents-Liste + Version-Distribution
+    [cachedAgents] = await Promise.all([
+      api('GET', '/admin/api/agents'),
+      loadAgentsVersionDist(),
+    ]);
     document.getElementById('agents-ts').innerHTML = `Stand: <b>${nowStamp()}</b>`;
     renderAgents();
   } catch (e) {
@@ -10997,9 +11047,115 @@ function nowStamp() {
   return new Date().toLocaleTimeString('de');
 }
 
+// Filter-State fuer Client-Version (Agent-Mgmt v2.4)
+let _agentVersionFilter = 'all';   // 'all' | 'outdated' | 'unknown'
+let _agentVersionDist = null;       // {total, current, outdated, unknown, current_version}
+const _selectedAgentIds = new Set();
+
+async function loadAgentsVersionDist() {
+  try {
+    _agentVersionDist = await api('GET', '/admin/api/clients/version-distribution');
+  } catch (e) {
+    _agentVersionDist = null;
+  }
+}
+
+function setAgentVersionFilter(mode, btn) {
+  _agentVersionFilter = mode;
+  document.querySelectorAll('.agent-ver-filter').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  renderAgents();
+}
+
+function _agentVersionStatus(a, currentVersion) {
+  const v = a.client_version;
+  if (!v) return { label: '—', cls: 'unknown' };
+  if (currentVersion && v === currentVersion) return { label: v + ' ✓', cls: 'current' };
+  return { label: v + ' ⚠', cls: 'outdated' };
+}
+
+function toggleAgentSelected(agentId, checked) {
+  if (checked) _selectedAgentIds.add(agentId);
+  else _selectedAgentIds.delete(agentId);
+  _renderBulkBar();
+}
+
+function _renderBulkBar() {
+  const el = document.getElementById('agents-bulk-bar');
+  if (!el) return;
+  const n = _selectedAgentIds.size;
+  if (n === 0) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const target = (_agentVersionDist || {}).current_version || '?';
+  el.innerHTML = '<span><strong>' + n + '</strong> Client' + (n !== 1 ? 's' : '') + ' ausgewaehlt</span>'
+    + '<button class="btn btn-primary btn-sm" onclick="bulkUpdateClients()">Auf ' + esc(target) + ' updaten</button>'
+    + '<button class="btn btn-ghost btn-sm" onclick="clearAgentSelection()">Auswahl aufheben</button>';
+}
+
+function clearAgentSelection() {
+  _selectedAgentIds.clear();
+  document.querySelectorAll('.agent-select-cb').forEach(cb => { cb.checked = false; });
+  _renderBulkBar();
+}
+
+async function bulkUpdateClients() {
+  if (_selectedAgentIds.size === 0) return;
+  const list = Array.from(_selectedAgentIds);
+  if (!confirm('Setup.exe auf ' + list.length + ' Client' + (list.length !== 1 ? 's' : '') + ' pushen?\n\nUebersprungen werden Clients die schon auf der aktuellen Version sind.')) return;
+  try {
+    const r = await api('POST', '/admin/api/agents/bulk-update-client', {
+      agent_ids: list,
+      only_outdated: true,
+    });
+    toast((r.dispatched || 0) + ' Update' + (r.dispatched !== 1 ? 's' : '') + ' dispatched');
+    clearAgentSelection();
+    setTimeout(loadAgents, 4000);
+  } catch (e) {}
+}
+
+async function updateSingleClient(agentId, hostname) {
+  if (!confirm('Setup.exe auf "' + hostname + '" pushen?')) return;
+  try {
+    await api('POST', '/admin/api/agents/' + encodeURIComponent(agentId) + '/update-client');
+    toast('Update fuer "' + hostname + '" dispatched');
+    setTimeout(loadAgents, 4000);
+  } catch (e) {}
+}
+
+async function bulkUpdateAllOutdated() {
+  if (!_agentVersionDist || !_agentVersionDist.outdated) return;
+  if (!confirm('Setup.exe auf alle ' + _agentVersionDist.outdated + ' veralteten Clients pushen?')) return;
+  try {
+    const r = await api('POST', '/admin/api/agents/bulk-update-client', {
+      agent_ids: [],
+      only_outdated: true,
+    });
+    toast((r.dispatched || 0) + ' Update' + (r.dispatched !== 1 ? 's' : '') + ' dispatched (' + (r.skipped || 0) + ' uebersprungen)');
+    setTimeout(loadAgents, 4000);
+  } catch (e) {}
+}
+
+function toggleSelectAllAgents(checked) {
+  _selectedAgentIds.clear();
+  if (checked) {
+    document.querySelectorAll('.agent-select-cb').forEach(cb => {
+      cb.checked = true;
+      const row = cb.closest('tr');
+      const idEl = row && row.querySelector('.copy-id');
+      const fullId = idEl && idEl.getAttribute('title') ? idEl.getAttribute('title').split(' ')[0] : '';
+      if (fullId) _selectedAgentIds.add(fullId);
+    });
+  } else {
+    document.querySelectorAll('.agent-select-cb').forEach(cb => { cb.checked = false; });
+  }
+  _renderBulkBar();
+}
+
 function renderAgents() {
   const el = document.getElementById('main-agents');
   const filter = (document.getElementById('agents-filter')?.value || '').toLowerCase().trim();
+  const dist = _agentVersionDist || {};
+  const cv = dist.current_version || null;
   let agents = cachedAgents;
   if (filter) {
     agents = agents.filter(a =>
@@ -11007,19 +11163,46 @@ function renderAgents() {
       (a.agent_id||'').toLowerCase().includes(filter)
     );
   }
+  if (_agentVersionFilter === 'outdated') {
+    agents = agents.filter(a => a.client_version && cv && a.client_version !== cv);
+  } else if (_agentVersionFilter === 'unknown') {
+    agents = agents.filter(a => !a.client_version);
+  }
+
+  let bannerHtml = '';
+  if (dist && dist.total) {
+    const cls = (dist.outdated > 0) ? 'agent-ver-banner warn' : 'agent-ver-banner';
+    bannerHtml = '<div class="' + cls + '">'
+      + '<div><strong>' + (dist.current || 0) + '</strong> aktuell · '
+      + '<strong style="color:var(--amber)">' + (dist.outdated || 0) + '</strong> veraltet · '
+      + '<strong style="color:var(--fg-4)">' + (dist.unknown || 0) + '</strong> unbekannt'
+      + (cv ? ' · Soll-Version: <code>' + esc(cv) + '</code>' : ' <span style="color:var(--fg-4)">· Kein aktueller Build</span>')
+      + '</div>'
+      + (dist.outdated > 0 ? '<button class="btn btn-primary btn-sm" onclick="bulkUpdateAllOutdated()">' + dist.outdated + ' veraltete updaten</button>' : '')
+      + '</div>'
+      + '<div class="agent-ver-filters">'
+      + '<button class="btn btn-ghost btn-sm agent-ver-filter ' + (_agentVersionFilter==='all'?'active':'') + '" onclick="setAgentVersionFilter(\'all\', this)">Alle</button>'
+      + '<button class="btn btn-ghost btn-sm agent-ver-filter ' + (_agentVersionFilter==='outdated'?'active':'') + '" onclick="setAgentVersionFilter(\'outdated\', this)">Veraltet</button>'
+      + '<button class="btn btn-ghost btn-sm agent-ver-filter ' + (_agentVersionFilter==='unknown'?'active':'') + '" onclick="setAgentVersionFilter(\'unknown\', this)">Unbekannt</button>'
+      + '</div>';
+  }
+
   if (!agents.length) {
-    el.innerHTML = filter
-      ? `<div class="empty"><h3>Keine Treffer</h3><p>Filter zurücksetzen</p></div>`
-      : `<div class="empty"><h3>Keine Agents registriert</h3><p>Clients registrieren sich beim Deployment</p></div>`;
+    el.innerHTML = bannerHtml + (filter
+      ? '<div class="empty"><h3>Keine Treffer</h3><p>Filter zurücksetzen</p></div>'
+      : '<div class="empty"><h3>Keine Agents registriert</h3><p>Clients registrieren sich beim Deployment</p></div>');
     return;
   }
-  el.innerHTML = `<div class="tbl-wrap"><table class="tbl">
+  el.innerHTML = bannerHtml + `
+    <div class="agents-bulk-bar" id="agents-bulk-bar" style="display:none"></div>
+    <div class="tbl-wrap"><table class="tbl">
     <thead><tr>
+      <th style="width:32px"><input type="checkbox" id="agent-select-all" onchange="toggleSelectAllAgents(this.checked)"></th>
       <th>Status</th>
       <th>Hostname</th>
       <th>User</th>
       <th>Ring</th>
-      <th>Registriert</th>
+      <th>Client-Version</th>
       <th>Letzter Kontakt</th>
       <th>Agent-ID</th>
       <th></th>
@@ -11030,21 +11213,29 @@ function renderAgents() {
       const ring = (a.ring >= 1 && a.ring <= 3) ? a.ring : 3;
       const ringLbl = _ringLabels[ring] || (ring === 3 ? 'Produktion' : `Ring ${ring}`);
       const ringBadge = `<span class="ring-badge ring-${ring}" title="${esc(ringLbl)}">${esc(ringLbl)}</span>`;
+      const verStat = _agentVersionStatus(a, cv);
+      const verCell = `<span class="agent-ver agent-ver-${verStat.cls}" title="${esc(a.os_version || '')}">${esc(verStat.label)}</span>`;
+      const isSel = _selectedAgentIds.has(a.agent_id);
+      const updateBtn = (verStat.cls === 'outdated' && !a.banned)
+        ? `<button class="icon-btn" title="Setup.exe pushen" onclick="event.stopPropagation();updateSingleClient(${jsStr(a.agent_id)},${jsStr(a.hostname)})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>`
+        : '';
       return `<tr class="${a.banned ? 'row-banned' : ''}">
+        <td><input type="checkbox" class="agent-select-cb" ${isSel?'checked':''} onclick="event.stopPropagation();toggleAgentSelected(${jsStr(a.agent_id)},this.checked)"></td>
         <td><span class="status ${st.cls}">${st.label}</span></td>
         <td><span class="cell-host">${esc(a.hostname)}</span>${a.error_count ? `<span class="agent-error-badge">${a.error_count} Fehler</span>` : ''}</td>
-        <td style="font-size:12px;color:var(--fg-4)">${esc(a.logged_in_user || '\u2014')}</td>
+        <td style="font-size:12px;color:var(--fg-4)">${esc(a.logged_in_user || '—')}</td>
         <td>${ringBadge}</td>
-        <td><span class="cell-time" title="${esc(fmtDt(a.registered_at))}">${esc(relTime(a.registered_at))}</span></td>
+        <td>${verCell}</td>
         <td><span class="cell-time" title="${esc(fmtDt(a.last_seen))}">${esc(relTime(a.last_seen))}</span></td>
         <td><span class="copy-id" title="${esc(a.agent_id)} — klicken zum Kopieren" onclick="copyId(${jsStr(a.agent_id)},this)">${esc(a.agent_id.substring(0,14))}…</span></td>
-        <td><button class="row-action" onclick="openAgentDetail(${jsStr(a.agent_id)},${jsStr(a.hostname)})" title="Installationen">
+        <td>${updateBtn}<button class="row-action" onclick="openAgentDetail(${jsStr(a.agent_id)},${jsStr(a.hostname)})" title="Installationen">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
         </button></td>
       </tr>`;
     }).join('')}
     </tbody>
   </table></div>`;
+  _renderBulkBar();
 }
 
 function copyId(id, el) {

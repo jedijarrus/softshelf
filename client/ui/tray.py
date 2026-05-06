@@ -6,7 +6,9 @@ module-level functions in package_window.py and reboot_dialog.py.
 
 Health-Monitor: polls the proxy every HEALTH_INTERVAL seconds. On state
 transitions (online <-> offline) the tray icon updates and the package
-window is notified via JS evaluation.
+window is notified via JS evaluation. Sendet Telemetrie-Header
+(BUILD_VERSION, OS, Tray-Uptime) — der Server zeigt das im Clients-Tab
+und entscheidet ueber Push-Updates via Tactical.
 
 Custom Icon: on start, tries to load branding icon from server
 (/api/v1/icon). Falls back to generated icon if not available.
@@ -95,18 +97,33 @@ class KioskTray:
         """Background thread polling /api/v1/health."""
         def loop():
             while not self._stop_health.is_set():
+                ok = False
+                pending: list = []
                 try:
                     data = self._api.health_check_full()
                     ok = data.get("status") == "ok"
-                    # Check for pending reboot actions
-                    for action in data.get("pending_actions", []):
-                        if action.get("type") == "reboot":
-                            rid = action.get("run_id")
-                            if rid and rid not in self._shown_reboot_runs:
-                                self._shown_reboot_runs.add(rid)
-                                self._handle_reboot_request(action)
+                    pending = data.get("pending_actions", []) or []
                 except Exception:
                     ok = False
+                # I11: Reboot-Dialog aus dem aeusseren Try-Block ausgelagert
+                # damit ein Render-Fehler im Dialog NICHT die Health-Erkennung
+                # mit-killt. _shown_reboot_runs.add(rid) wird erst nach
+                # erfolgreichem Dialog-Start gesetzt — bei Failure wird beim
+                # naechsten Poll erneut versucht.
+                for action in pending:
+                    if action.get("type") != "reboot":
+                        continue
+                    rid = action.get("run_id")
+                    if not rid or rid in self._shown_reboot_runs:
+                        continue
+                    try:
+                        self._handle_reboot_request(action)
+                        self._shown_reboot_runs.add(rid)
+                    except Exception:
+                        # Dialog konnte nicht erstellt werden — nicht zur
+                        # shown-Liste hinzufuegen, damit der naechste Poll
+                        # einen erneuten Versuch unternimmt.
+                        pass
                 self._on_health_changed(ok)
                 if self._stop_health.wait(HEALTH_INTERVAL):
                     return
