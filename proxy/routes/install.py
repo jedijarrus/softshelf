@@ -536,19 +536,21 @@ async def _build_plugin_install_command(pkg: dict, agent_id: str) -> str:
     process_csv = plugin_hosts.host_process_csv(host)
     process_check_block = _build_process_check_block(process_csv) if process_csv else ""
 
-    # plugin_folder validiert per regex, kein extra escape — landet als
-    # PowerShell single-quoted literal.
+    # plugin_folder + host.label landen in PowerShell single-quoted literals.
+    # Defense-in-depth: jedes ' verdoppeln, sonst Syntax-Break / Injection.
     pf_quoted = "'" + plugin_folder.replace("'", "''") + "'"
+    label_safe = host.label.replace("'", "''")
 
     # Plugin-Datei wird mit ihrer Original-Endung gespeichert damit der
     # host-Snippet ($downloadPath -like '*.zip') korrekt switched.
+    # Explicit exit 0 am Ende → $LASTEXITCODE deterministisch.
     return "\n".join([
         "$ErrorActionPreference = 'Continue'",
         process_check_block,
         host.ps_resolve_root,
         "if (-not $hostRoot) {",
-        f"    _sfProgress 'SOFTSHELF_PLUGIN_HOST_MISSING:{host.label}'",
-        f"    _sfProgress 'Plugin-Host fehlt: {host.label} ist nicht installiert. Bitte zuerst installieren.'",
+        f"    _sfProgress 'SOFTSHELF_PLUGIN_HOST_MISSING:{label_safe}'",
+        f"    _sfProgress 'Plugin-Host fehlt: {label_safe} ist nicht installiert. Bitte zuerst installieren.'",
         '    cmd /c "exit 9030"',
         "    return",
         "}",
@@ -559,7 +561,8 @@ async def _build_plugin_install_command(pkg: dict, agent_id: str) -> str:
         "_sfProgress 'Download abgeschlossen, installiere Plugin...'",
         host.ps_install,
         "Remove-Item $downloadPath -Force -ErrorAction SilentlyContinue",
-        f"_sfProgress 'Plugin {host.label} -> $pluginFolder installiert.'",
+        f"_sfProgress 'Plugin {label_safe} -> $pluginFolder installiert.'",
+        'cmd /c "exit 0"',
         "",
     ])
 
@@ -575,6 +578,7 @@ def _build_plugin_uninstall_command(pkg: dict) -> str:
     if not plugin_folder or not _PLUGIN_FOLDER_RE.fullmatch(plugin_folder):
         raise HTTPException(status_code=500, detail="Plugin ohne gueltigen plugin_folder")
     pf_quoted = "'" + plugin_folder.replace("'", "''") + "'"
+    label_safe = host.label.replace("'", "''")
     process_csv = plugin_hosts.host_process_csv(host)
     process_check_block = _build_process_check_block(process_csv) if process_csv else ""
     return "\n".join([
@@ -582,14 +586,15 @@ def _build_plugin_uninstall_command(pkg: dict) -> str:
         process_check_block,
         host.ps_resolve_root,
         "if (-not $hostRoot) {",
-        f"    _sfProgress 'SOFTSHELF_PLUGIN_HOST_MISSING:{host.label}'",
-        f"    _sfProgress 'Plugin-Host fehlt: {host.label}.'",
+        f"    _sfProgress 'SOFTSHELF_PLUGIN_HOST_MISSING:{label_safe}'",
+        f"    _sfProgress 'Plugin-Host fehlt: {label_safe}.'",
         '    cmd /c "exit 9030"',
         "    return",
         "}",
         f"$pluginFolder = {pf_quoted}",
         host.ps_uninstall,
-        f"_sfProgress 'Plugin {host.label} -> $pluginFolder entfernt.'",
+        f"_sfProgress 'Plugin {label_safe} -> $pluginFolder entfernt.'",
+        'cmd /c "exit 0"',
         "",
     ])
 
@@ -788,10 +793,11 @@ _PLUGIN_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
 ]
 
 
-def _detect_plugin_soft_error(output: str, exit_code: int | None) -> str | None:
+def _detect_plugin_soft_error(output: str) -> str | None:
     """Soft-Error-Detection fuer Plugin-Type.
 
-    9020 = Process-Check getriggert, 9030 = Host-Anwendung fehlt.
+    Pattern-Match auf SOFTSHELF_PROCESS_RUNNING (9020) und
+    SOFTSHELF_PLUGIN_HOST_MISSING (9030) Markers im stdout.
     """
     if not output:
         return None
@@ -1520,7 +1526,7 @@ async def receive_callback(job_id: str, body: CallbackPayload):
     elif pkg_type == "plugin":
         # Plugin-Soft-Errors auch bei status=='error' pruefen, damit der
         # User den richtigen Toast bekommt (Process-Check / Host fehlt).
-        det = _detect_plugin_soft_error(body.output or "", ec)
+        det = _detect_plugin_soft_error(body.output or "")
         if det:
             soft_err = det
     if soft_err:
@@ -1546,15 +1552,21 @@ async def receive_callback(job_id: str, body: CallbackPayload):
     if body.success is True and not soft_err:
         if entry["action"] in ("install", "upgrade"):
             # current_version_id aus Paket holen damit Update-Tracking funktioniert
+            # Plus: sha256 fuer Plugin-Update-Detection (kein package_versions
+            # fuer Plugins, deshalb mappen wir per Hash).
             version_id = None
+            installed_sha = None
             try:
                 pkg = await database.get_package(entry["package_name"])
                 if pkg:
                     version_id = pkg.get("current_version_id")
+                    if pkg.get("type") == "plugin":
+                        installed_sha = pkg.get("sha256")
             except Exception:
                 pass
             await database.set_agent_installation(
-                entry["agent_id"], entry["package_name"], version_id
+                entry["agent_id"], entry["package_name"], version_id,
+                installed_sha=installed_sha,
             )
         elif entry["action"] == "uninstall":
             await database.delete_agent_installation(
