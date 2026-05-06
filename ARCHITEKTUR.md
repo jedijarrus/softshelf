@@ -1,7 +1,7 @@
 # Softshelf – Systemarchitektur
 
-**Version:** 2.2.0
-**Stand:** 2026-04-27
+**Version:** 2.3.0
+**Stand:** 2026-05-06
 
 > **Softshelf ist eine Windows-Software-Verteilungs-Plattform** mit Tactical-
 > RMM-Basis. Kern-Features: gestufte Rollouts, RBAC, Compliance-Policy,
@@ -78,7 +78,8 @@ Background-Jobs. Auf dem Host unter `/opt/softshelf/`.
 | `config.py` | `BootstrapSettings` (pydantic, `.env`) + `RUNTIME_KEYS` dict. Runtime-Settings inkl. Rollout-Policy (Ring-Labels, Auto-Advance-Wartezeiten, Max-Fehler-Rate). |
 | `auth.py` | Machine-Token JWT (HS256), Download-Token. |
 | `admin_auth.py` | scrypt-Passwörter, Sessions, Microsoft-Entra-OIDC. |
-| `file_uploads.py` | MSI/EXE/Ordner-Uploads, msiinfo-Metadata, ZIP-Handling. |
+| `file_uploads.py` | MSI/EXE/Ordner-Uploads, Plugin-Uploads (.dll/.zip/.plgx), msiinfo-Metadata, ZIP-Handling, **Magic-Byte-Validation** (PE/OLE/ZIP/PLGX). |
+| `plugin_hosts.py` | Registry der unterstützten Plugin-Hosts (Notepad++, KeePass 2). Pro Host PowerShell-Snippets für `resolve_root` / `install` / `uninstall` / `detect`. Erweiterung neuer Hosts = neuer Eintrag im Dict. |
 | `tactical_client.py` | Tactical RMM API wrapper — `run_command` mit `run_as_user`-Flag. |
 | `winget_catalog.py` | Lokal gemirrowter Microsoft-winget-Source (täglich cdn.winget.microsoft.com). |
 | `winget_scanner.py` | Per-Agent winget-Inventur via `winget export` + `winget upgrade`. |
@@ -146,7 +147,7 @@ packages
   name          PK
   display_name
   category
-  type          TEXT       -- 'choco' | 'winget' | 'custom'
+  type          TEXT       -- 'choco' | 'winget' | 'custom' | 'plugin' (v2.3)
   filename, sha256, size_bytes
   install_args, uninstall_cmd, detection_name
   current_version_id         -- FK package_versions (nur custom)
@@ -157,16 +158,24 @@ packages
   required      INT           -- Compliance-Flag
   staged_rollout INT          -- Phased-Rollout-Pflicht-Flag
   auto_advance  INT           -- Auto-Mode pro Paket (v2.0)
-  hidden_in_kiosk INT         -- Kiosk-Grid ausblenden (v2.0)
+  hidden_in_kiosk INT         -- 0=visible, 1=only-when-installed, 2=hidden (v2.3 3-state)
   notes         TEXT          -- Admin-Notizen
+  process_check TEXT          -- komma-separierte Prozessnamen die VOR Install gepruet werden (v2.2)
+  hide_uninstall INT          -- Uninstall-Button im Kiosk verstecken (v2.2)
+  install_timeout INT         -- Timeout Sekunden (Default 120)
+  check_reboot  INT           -- Pre-Install RebootPending-Check
+  plugin_host   TEXT          -- nur fuer type='plugin': 'notepad++'|'keepass'|... (v2.3)
+  plugin_folder TEXT          -- nur fuer type='plugin': Subdir-Name oder Datei-Stem (v2.3)
 
 package_versions
   id            PK
   package_name, version_label, sha256, uploaded_at, ...
 
-agent_installations       -- Custom-Paket-Tracking
+agent_installations       -- Custom-/Plugin-Paket-Tracking
   agent_id, package_name PK
   version_id, installed_at
+  installed_sha          -- nur fuer type='plugin': sha des installierten Files
+                         -- bei Re-Upload mit anderem sha = outdated (v2.3)
 
 agent_winget_state        -- Winget-Inventur
   agent_id, winget_id PK
@@ -337,6 +346,72 @@ Success-Codes: `0`, `1641` (reboot initiated), `3010` (reboot required).
 PowerShell-Template je archive_type (MSI/EXE/ZIP). Download via signed
 JWT-URL (`/api/v1/file/{sha256}?token=...`), Agent exekutiert, ExitCode
 propagiert.
+
+### Plugin (v2.3)
+
+Generisches Drop-in-Plugin-System fuer Anwendungen mit File-basierter
+Plugin-Architektur (Notepad++, KeePass 2, ggf. weitere). Admin laedt
+eine `.dll`/`.zip`/`.plgx`-Datei hoch, waehlt einen **Plugin-Host**
+aus der `plugin_hosts.PLUGIN_HOSTS`-Registry, das Backend baut den
+host-spezifischen PowerShell-Wrapper:
+
+```
+[ Wrapper-Header (Process-Check fuer host.process_names) ]
+[ host.ps_resolve_root → setzt $hostRoot ]
+if (-not $hostRoot) {
+    SOFTSHELF_PLUGIN_HOST_MISSING:<label>
+    cmd /c "exit 9030"
+}
+$pluginFolder = '<from packages.plugin_folder>'
+$downloadPath = $env:TEMP\sf_plugin_<nonce>.<ext>
+_sfDownload <signed-url> $downloadPath
+[ host.ps_install — kopiert Datei in Plugin-Folder ]
+Remove-Item $downloadPath
+cmd /c "exit 0"
+```
+
+**Soft-Errors:**
+- `9020` — Process-Check (NPP/KeePass laeuft) → User-Toast
+  „Bitte schliessen und nochmal versuchen"
+- `9030` — Host-App fehlt → User-Toast „Notepad++ nicht installiert"
+
+**Update-Detection:** Re-Upload mit neuem File-Hash markiert alle
+Agents mit altem `agent_installations.installed_sha` als outdated.
+`get_outdated_plugin_agents` liefert die Liste fuer Push-Update.
+
+**ZIP-Slip-Defense:** Notepad++-Plugins kommen oft als ZIP mit nested
+Folder-Struktur (`URLPlugin/URLPlugin.dll`). Wir extrahieren in
+Stage-Dir, validieren alle ZIP-Entries auf relative Pfade
+(via `System.IO.Compression.ZipFile`), flatten dann alle
+`.dll`/`.xml`/`.txt`/`.ini` in den Plugin-Ordner.
+
+**Hosts-Registry (`plugin_hosts.py`):**
+
+| Host-ID | Label | Accepted-Ext | Plugin-Pfad |
+|---|---|---|---|
+| `notepad++` | Notepad++ | `.zip`, `.dll` | `<NPPDir>\plugins\<folder>\` |
+| `keepass` | KeePass 2 | `.plgx`, `.dll` | `<KeePassDir>\Plugins\<folder>.<ext>` |
+
+**Endpoints:**
+- `GET /admin/api/plugin-hosts` — Liste der unterstuetzten Hosts
+- `POST /admin/api/upload-plugin` — Plugin-Datei hochladen (neu oder
+  Re-Upload), validiert Magic-Bytes der Datei
+
+### MS-Store (v2.3)
+
+MS-Store-Pakete (`9NBLGGH6BZL3`-Format, Pattern `^9[A-Z0-9]{11}$`)
+werden als `type='winget'` gespeichert, aber bei Dispatch
+automatisch mit `--source msstore` statt `--source winget` aufgerufen
+und mit `run_as_user=True` (Store-Apps sind Per-User-Appx).
+
+**Erkennung:** `_is_msstore_id()` in `routes/install.py`. `_build_winget_command`
+laesst bei msstore-IDs den `--scope machine`-Flag weg.
+
+**Catalog:** Kein lokaler Mirror der msstore-Source. Admin gibt ID +
+Display-Name + Publisher manuell ein (Modal im Winget-Tab).
+
+**Soft-Error-Patterns:** `you must accept the license agreements`
+und `no application is installed matching`.
 
 ### Phased-Rollout-Gate (Kiosk-API, v2.0)
 
@@ -527,6 +602,21 @@ Pro Agent darf maximal **ein** aktiver Run gleichzeitig laufen
 (UNIQUE INDEX auf `workflow_runs(agent_id) WHERE status IN ('pending','running')`).
 Start-Versuch bei bereits laufendem Run → HTTP 409.
 
+### Workflow + Auto-Retry-Interaktion (v2.3)
+
+`receive_callback` hat zwei Auto-Retry-Pfade:
+- **Choco `.install`-Retry**: Uninstall failed mit `is not installed` →
+  Retry mit `<pkg>.install` Suffix.
+- **Winget per-user-Retry**: Install failed mit `-1978335216`
+  (NO_APPLICABLE_INSTALLER) bei `winget_scope='auto'` → Retry ohne
+  `--scope machine` und mit `run_as_user=True`.
+
+Beide Retry-Pfade haengen ihren neuen `action_log` jetzt am gleichen
+`workflow_run_id` wie das Original. Der **erste Callback** advanced den
+Workflow NICHT (Variable `retry_scheduled=True`), sonst wuerde der Run
+sofort auf `failed` kippen waehrend der Retry noch laeuft. Der
+Retry-Callback advanced dann selbst.
+
 ---
 
 ## Background-Jobs (APScheduler)
@@ -568,11 +658,15 @@ Alle mit `max_instances=1, coalesce=True`.
 **Pakete:**
 - `GET /enabled`, `POST /enable`, `PATCH /enable/{name}`, `POST /disable/{name}`
 - `POST /upload`, `POST /upload-folder`, Versions-Endpoints
+- `POST /upload-plugin` — neu v2.3, Plugin-Datei (.dll/.zip/.plgx) hochladen
+- `GET /plugin-hosts` — neu v2.3, Liste der unterstuetzten Plugin-Hosts
 - `PATCH /packages/{name}/required` · `/staged` · `/notes` · `/hidden` · `/auto-advance`
-- `PATCH /packages/{name}/version-pin` — neu v2.2.0, generisch fuer winget+choco
-- `GET /packages/{name}/available-versions` — neu v2.2.0, liefert waehlliste fuer Version-Picker
+  - `hidden` ist seit v2.3 3-state (0/1/2) statt boolean
+- `PATCH /packages/{name}/version-pin` — generisch fuer winget+choco
+- `GET /packages/{name}/available-versions` — Versions-Picker
 - `PATCH /winget/{name}/scope` · `/version-pin` *(Legacy-Alias)*
 - `POST /winget/activate`, `/winget/bulk-activate`
+  - akzeptiert msstore-IDs (Pattern `^9[A-Z0-9]{11}$`) seit v2.3
 - `POST /packages/{name}/push-update?stage=` *(operator OK)*
 - `POST /packages/{name}/update-all?stage=` *(operator OK)*
 
@@ -658,9 +752,19 @@ Update-Version-Info nur sichtbar wenn Agent-Ring ≤ Rollout-Phase. Verhindert V
 ### Upload-Härtung
 
 - SHA256-Verifizierung
+- **Magic-Byte-Validation** (v2.3) — Datei-Beginn-Check gegen
+  Whitelist-Signatures pro Endung (.zip=`PK`, .dll/.exe=`MZ`,
+  .msi=OLE-Compound, .plgx=KeePass-Magic). Spoofing der Endung
+  wird beim ersten Chunk abgewiesen.
 - Path-Traversal-Check bei ZIP-Extract
+- **ZIP-Slip Pre-Validation** (v2.3) im Notepad++-Plugin-Install:
+  vor `Expand-Archive` alle Entries via
+  `[System.IO.Compression.ZipFile]::OpenRead` durchgehen, reject
+  bei `..`, absoluten Pfaden, Drive-Letter-Prefix.
 - MSI-Metadata via msiinfo-Subprocess (kein Python-Parser)
 - Icon: Pillow mit DecompressionBombError-Schutz
+- **Cleanup-on-Validation-Fail** (v2.3) — Orphan-Files aus
+  `uploads/` werden geloescht wenn Post-Upload-Validation fehlschlaegt.
 
 ### Callback-Auth und TLS
 

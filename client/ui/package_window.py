@@ -371,6 +371,22 @@ html, body {{
   color: white;
   border-color: var(--red);
 }}
+/* dezenter ghost-Button neben dem Update-Button damit der User trotz
+   verfuegbarem Update auch deinstallieren kann (ohne erst zu updaten) */
+.btn-uninstall-ghost {{
+  background: transparent;
+  color: var(--fg-3);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 5px 9px;
+  margin-left: 6px;
+}}
+.btn-uninstall-ghost:hover {{
+  background: var(--red-bg);
+  color: var(--red);
+  border-color: var(--red-border);
+}}
 .btn-busy {{
   background: var(--bg-hover);
   color: var(--fg-5);
@@ -973,7 +989,12 @@ function renderRow(pkg) {{
   if (isBusy) {{
     btn = `<button class="btn btn-busy">...</button>`;
   }} else if (isUpdate) {{
-    btn = `<button class="btn btn-update" onclick="doInstall('${{escAttr(pkg.name)}}')">Updaten</button>`;
+    // Update-State: primary "Updaten" + sekundaerer ghost "Deinstallieren"
+    // Wenn hide_uninstall=true (Plugin/Required), nur Updaten anzeigen.
+    const uninstBtn = pkg.hide_uninstall
+      ? ''
+      : `<button class="btn btn-uninstall-ghost" onclick="doUninstall('${{escAttr(pkg.name)}}')">Deinstallieren</button>`;
+    btn = `<button class="btn btn-update" onclick="doInstall('${{escAttr(pkg.name)}}')">Updaten</button>${{uninstBtn}}`;
   }} else if (isInstalled) {{
     if (pkg.hide_uninstall) {{
       btn = `<span class="btn btn-installed">Installiert</span>`;

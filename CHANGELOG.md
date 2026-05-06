@@ -7,6 +7,244 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.3.0] – 2026-05-06
+
+Plugin-Pakettyp, MS-Store-Support, Workflow-Übersicht-Redesign,
+umfangreiche Hardening-Runde.
+
+### Added — Plugin-Pakettyp
+
+- **Generischer `plugin`-Pakettyp** (`packages.type='plugin'`) für
+  Drop-in-DLL/PLGX-Plugins von Host-Anwendungen wie Notepad++ und
+  KeePass 2. Admin lädt eine Plugin-Datei hoch (`.dll`, `.zip`,
+  `.plgx` je nach Host), Backend baut host-spezifischen
+  PowerShell-Wrapper, der die Datei in den richtigen Plugin-Ordner
+  der Host-App kopiert.
+- **`plugin_hosts.py` Registry** mit pro-Host PowerShell-Snippets
+  für `resolve_root` / `install` / `uninstall` / `detect`. Erweiterung
+  um neue Hosts (Foobar2000, IrfanView, …) = neuer Eintrag im Dict.
+- **`packages.plugin_host`** + `packages.plugin_folder` Spalten,
+  Migration idempotent.
+- **`POST /admin/api/upload-plugin`** + **`GET /admin/api/plugin-hosts`**.
+- **Plugin-Update-Detection via sha256**: neue
+  `agent_installations.installed_sha`-Spalte. Bei Re-Upload eines
+  Plugins (neuer Hash) gelten alle Agents mit altem Hash als
+  outdated → Push-Update-Button im Edit-Panel.
+- **Plugin-Auto-Process-Check**: NPP/KeePass laufende Prozesse
+  werden vor Install detektiert (Soft-Error 9020), DLL-Lock
+  vermeidet sich.
+- **Soft-Error 9030**: Host-Anwendung fehlt → User-Toast „Notepad++
+  ist nicht installiert. Bitte zuerst installieren."
+- **NPP-Plugin-ZIP-Flatten**: ZIPs mit nested folder-structure
+  (z.B. URLPlugin liefert `URLPlugin/URLPlugin.dll`) werden in
+  Stage-Dir extrahiert, alle `.dll/.xml/.txt/.ini` flach in den
+  Plugin-Ordner kopiert.
+
+### Added — MS-Store (msstore) Support
+
+- **MS-Store-IDs** (Pattern `^9[A-Z0-9]{11}$`, z.B. `9NBLGGH6BZL3`)
+  werden automatisch erkannt und mit `--source msstore` statt
+  `--source winget` installiert. Admin gibt ID + Display-Name +
+  Publisher manuell ein (kein Catalog-Mirror).
+- **Auto-`run_as_user=True`** für msstore-Pakete weil UWP/Appx
+  fast immer per-user installiert.
+- **Modal „MS-Store-App per ID hinzufuegen"** im Winget-Tab des
+  Add-Panels.
+- **Soft-Error-Patterns** für `you must accept the license
+  agreements` und `no application is installed matching`.
+
+### Changed — Admin-UI Reorganization
+
+- **Add-Panel umstrukturiert**: 5 Tabs in 2 Gruppen — „Katalog"
+  (Winget, Chocolatey) + „Hochladen" (EXE/MSI, Programm-Ordner,
+  Plugin). Tabs nicht mehr in einer Reihe und gruppiert nach
+  Modus.
+- **Default-Mode beim Öffnen ist jetzt Winget** statt Chocolatey
+  (Winget hat das größere Catalog).
+- **Subtitle** erwähnt Plugin-Type.
+- **Filter-Chip `plugin`** in Pakete-Tab, Verteilung-Tab,
+  Add-Staged-Profile-Picker und Profile-Editor.
+- **Workflow-Übersicht redesigned**: statt nichtssagendem
+  „install → install → install" zeigt die Karte jetzt Counter
+  („19 Steps · 18 Installs · 1 Reboot") und eine alphabetisch
+  sortierte Step-Liste mit Type-Color-Dots (grün=install,
+  rot=uninstall, amber=reboot, blau=script). Execution-Order
+  bleibt im Editor unverändert.
+- **3-State-Sichtbarkeit `hidden_in_kiosk`**: 0=sichtbar,
+  1=nur-wenn-installiert (Admin-Dispatch-Use-Case),
+  2=komplett-ausgeblendet. Dropdown im Edit-Panel statt
+  binary Toggle.
+- **Plugin-Pill** (grün) in der Pakete-Tabelle mit Host-Label +
+  Plugin-Folder als Sub-Text.
+
+### Fixed — Workflow-Engine
+
+- **Workflow-Retry-Advance-Bug**: per-user-Retry und choco
+  `.install`-Retry hingen früher nicht am `workflow_run_id` ihres
+  Original-action_logs → Retry-Erfolg wurde dem Workflow nicht
+  gemeldet, Run blieb auf `failed`. Retries hängen jetzt am
+  gleichen run, und der erste Callback advanced den Workflow
+  NICHT mehr wenn ein Retry gerade dispatched wurde.
+- **Catch-Block-Bug im Bootstrap-Wrapper**: `$_sfSuccess -ne
+  'skipped'` coerced den String zu Bool → `$true -ne $true` war
+  immer `$false`, der Reset-Pfad lief NIE und Server bekam
+  Erfolg gemeldet obwohl die Inner-Script-Aktion ge-throw't
+  hatte. Fix: Cast nach `[string]$_sfSuccess` erzwungen.
+
+### Fixed — UI
+
+- **Off-Screen-Panel-Shadow-Leak**: 7 `.panel`-Elemente sind als
+  `position:fixed` knapp jenseits Viewport (transform:
+  `translateX(100%)`), ihre `box-shadow:-8px 0 32px` blutete aber
+  rund 32 Pixel in den sichtbaren Viewport-Rand und sah aus wie
+  ein dunkler Verlauf rechts der Scrollbar. Fix: Schatten nur
+  noch an `.panel.open`.
+
+### Security — Hardening
+
+- **Magic-Byte-Validation beim Plugin-Upload** (`.zip`=`PK`,
+  `.dll`=`MZ`, `.msi`=OLE, `.plgx`=`19 07 D9 65`). Spoofing der
+  Datei-Endung wird beim ersten Chunk abgewiesen.
+- **ZIP-Slip-Defense im Notepad++-Install**: vor `Expand-Archive`
+  alle ZIP-Entries via `System.IO.Compression.ZipFile` validieren
+  — reject bei `..\\`, absoluten Pfaden oder Drive-Letter-Prefix.
+  PS 5.1 default-load das Assembly nicht — `Add-Type` mit
+  Fallback auf Expand-Archive's eigene Sicherung.
+- **PowerShell single-quote-Escape** für `host.label` + andere
+  PS-string-Interpolationen. Kein bekanntes Exploit aktuell, aber
+  Defense-in-Depth gegen zukünftige Hosts mit `'` im Label.
+- **Explicit `cmd /c "exit 0"`** am Ende von Plugin-Install und
+  -Uninstall, damit `$LASTEXITCODE` deterministisch ist.
+- **Cleanup-on-Validation-Fail** beim Plugin-Upload: wenn
+  `plugin_folder`-Regex nach Upload scheitert, wird die
+  Orphan-Datei aus `uploads/` entfernt sofern niemand sonst den
+  sha referenziert.
+
+---
+
+## [2.2.0] – 2026-04-25
+
+Workflows + generische Version-Pinning. Größtes Feature: das
+Workflow-System für mehrstufige Setup-Sequenzen.
+
+### Added — Workflows
+
+- **Workflows als wiederverwendbare Step-Sequenzen** auf
+  Single-Agent-Basis. Schritte: `install`, `script`, `reboot`.
+- **`workflow_engine.py`** State-Machine: `start_workflow`,
+  `dispatch_current_step`, `advance` (aus receive_callback),
+  `cancel`, `check_timeouts` (APScheduler), `recover_after_restart`.
+- **Failure-Policies pro Step**: `abort` (Default), `skip`, `retry:N`.
+- **Reboot-Step**: AtStartup-Task auf Agent + `shutdown /r`,
+  Client zeigt RebootDialog (pywebview Countdown), User kann
+  sofort neu starten oder per `force_after_hours` aufschieben.
+- **Workflow-Editor** (Drag&Drop-Step-Editor) im Admin-UI,
+  Sidebar-Gruppe „VERWALTUNG" (Profile, Workflows, Rollouts).
+- **Agent-Detail-Workflow-Sektion**: Run starten, aktive Runs,
+  Cancel, Run-Historie.
+- **REST-Endpoints**: `GET/POST /admin/api/workflows`,
+  `PATCH/DELETE /admin/api/workflows/{wid}`,
+  `POST /admin/api/agents/{id}/start-workflow`,
+  `GET /admin/api/agents/{id}/workflow-runs`,
+  `DELETE /admin/api/workflow-runs/{run_id}`,
+  `POST /api/v1/workflow/reboot-now/{run_id}`,
+  `POST /api/v1/workflow/defer/{run_id}`.
+- **APScheduler-Job `_workflow_timeout_check`** (jede Minute,
+  prueft step_deadline_at).
+- **Restart-Recovery**: `recover_after_restart` re-dispatcht
+  laufende Runs nach Container-Restart (oder markiert sie als
+  `timed_out`).
+- **Unique-Constraint**: max. 1 aktiver Run pro Agent.
+
+### Added — Generic Version Pinning
+
+- **`packages.version_pin`** (TEXT NULL) ersetzt
+  `packages.winget_version` — generisch für winget UND choco.
+  Migration kopiert alte Werte rüber, alte Spalte bleibt für
+  Backward-Compat aber wird nicht mehr befüllt.
+- **`PATCH /admin/api/packages/{name}/version-pin`** —
+  generischer Endpoint, alter `/winget/.../version-pin` als
+  Legacy-Alias erhalten.
+- **`GET /admin/api/packages/{name}/available-versions`** —
+  Versions-Picker, winget aus lokalem Catalog, choco aus
+  Fleet-Scan-Aggregat.
+- **Version-Picker im Edit-Panel** mit Suche.
+
+### Added — Process-Check (Pre-Install)
+
+- **`packages.process_check`** TEXT — komma-separierte
+  Prozessnamen die VOR Install-Dispatch geprüft werden.
+- **Server-Side Check** in `_build_winget_command`
+  (Soft-Error 9020 → SOFTSHELF_PROCESS_RUNNING marker).
+- **Client-Side Check im Kiosk** (PackageApi.check_running_processes
+  via `tasklist`), zeigt einen Modal „Bitte X schliessen" bevor
+  der Install dispatched wird.
+- **Whitelist-validierte `install_args`** für winget (z.B.
+  `--skip-dependencies` für NoSpamProxy mit Office-Dependency).
+- **Edit-Panel-Felder** für `process_check` und `install_args`.
+
+### Changed — Errors-Tab
+
+- **Filter, Bulk-Select, Acknowledge, Delete** für Fehler-Liste.
+- Strukturierter Output bei Soft-Errors mit Severity-Mapping.
+
+### Fixed
+
+- Comprehensive Error-Handling-Review (C1-C8, I1-I20, M1-M10):
+  Race-Conditions in Cooldown (asyncio.Lock), CSRF-Edge-Cases,
+  Whitelist-Bypasses, Trusted-Proxies-Caching, mehr.
+
+---
+
+## [2.1.0] – 2026-04-22
+
+Choco läuft jetzt durch denselben Dispatch-Pfad wie winget/custom.
+
+### Changed — Choco-Dispatch-Vereinheitlichung
+
+- **Choco wird nicht mehr** über Tactical's
+  `/software/{id}/`-Endpoint installiert (fire-and-forget mit
+  Null Output-Capture). Stattdessen via `_build_choco_command`
+  + `_build_script_and_bootstrap` + `_deliver_command_bg`.
+- **Soft-Error-Detection** für Choco im `receive_callback`:
+  `is not installed`, `please also run the command`,
+  `likely broken for foss users`, `404`-Patterns,
+  Partial-Success-Detection.
+- **Choco `.install`-Retry**: wenn Uninstall mit `is not
+  installed` failt UND Paketname nicht auf `.install` endet,
+  wird automatisch ein Retry mit `<pkg>.install` gestartet.
+
+### Fixed
+
+- **Office-Choco-Uninstall** entfernt jetzt wirklich (das
+  `--skip-autouninstaller`-Flag verhinderte das).
+- **Choco-Case-Insensitive-Whitelist-Lookup** (war
+  CamelCase-vs-lowercase-Mismatch).
+
+---
+
+## [2.0.3] – 2026-04-24
+
+Unified Delivery: alle Pakettypen (winget/choco/custom) laufen
+jetzt durch denselben fire-and-forget Bootstrap + Callback Pattern.
+Größter Architektur-Cleanup seit Choco-Dispatch-Trennung.
+
+### Changed — Unified Dispatch
+
+- **`_deliver_command_bg`** als zentraler Dispatch-Helper.
+  Pre-Flight (Agent-Status) → Bootstrap (60s Tactical-Timeout) →
+  return. Result kommt asynchron via Callback.
+- **`_build_script_and_bootstrap`**: speichert PS-Script als
+  Datei (HTTP-Pull durch Agent), liefert Bootstrap-Command
+  (~250 Bytes) zurück. Eliminiert NATS-Timeout-Issues bei
+  langen Installs.
+- **`POST /api/v1/callback/{job_id}`** + **`GET /api/v1/script/{job_id}`**
+  endpoints. job_id (256 bit random) ist die Auth.
+- **`action_log`-Tabelle** trackt pending → running →
+  success/error/skipped statt eigener install_log/uninstall_log.
+
+---
+
 ## [2.0.0] – 2026-04-16
 
 Großer Sprung seit 1.6.0. Repositioning von „Self-Service-Portal" zu einer

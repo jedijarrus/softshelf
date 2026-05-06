@@ -178,16 +178,16 @@
 <section id="paket-typen">
 <h1>Paket-Typen</h1>
 
-<p>Softshelf kennt drei Paket-Quellen. Type-Pills in der UI zeigen den Typ mit farbigem Dot:</p>
+<p>Softshelf kennt vier Paket-Quellen. Type-Pills in der UI zeigen den Typ mit farbigem Dot:</p>
 
 <table class="doc-table">
   <thead><tr><th>Typ</th><th>Quelle</th><th>Dispatch</th><th>Besonderheit</th></tr></thead>
   <tbody>
     <tr>
       <td><span class="pkg-type-pill winget">winget</span></td>
-      <td>Microsoft-winget-Catalog, lokal gemirrowt</td>
+      <td>Microsoft-winget-Catalog, lokal gemirrowt; plus MS-Store via Direct-ID</td>
       <td><code>winget install/upgrade/uninstall</code> via Tactical run_command</td>
-      <td><b>Scope</b> (auto/machine/user) pro Paket — Layer-2-Fallback für per-user-only-Installer wie LastPass, Bitwarden.</td>
+      <td><b>Scope</b> (auto/machine/user) pro Paket — Layer-2-Fallback für per-user-only-Installer wie LastPass, Bitwarden. <b>MS-Store-IDs</b> (z.B. <code>9NBLGGH6BZL3</code>) werden auto erkannt und mit <code>--source msstore</code> + <code>run_as_user</code> installiert.</td>
     </tr>
     <tr>
       <td><span class="pkg-type-pill choco">choco</span></td>
@@ -200,6 +200,12 @@
       <td>Manueller MSI/EXE/Ordner-Upload</td>
       <td>Download via signed-URL → msiexec/Start-Process</td>
       <td>Version-Tracking, Push-Updates.</td>
+    </tr>
+    <tr>
+      <td><span class="pkg-type-pill plugin">plugin</span></td>
+      <td>Plugin-Datei für eine Host-Anwendung (Notepad++/KeePass)</td>
+      <td>PowerShell kopiert die Datei in den Plugin-Ordner der Host-App</td>
+      <td>Auto-Process-Check (Host-App muss zu sein), Soft-Error wenn Host-App nicht installiert. Update via Re-Upload (sha256-Detection).</td>
     </tr>
   </tbody>
 </table>
@@ -271,6 +277,60 @@
   <li>Kategorie setzen.</li>
   <li><code>Importieren</code>. Metadaten (Name, Publisher) werden automatisch aus dem Catalog geholt. Bereits aktive Pakete werden übersprungen, ungültige IDs landen in der Fehler-Liste.</li>
 </ol>
+</section>
+
+<!-- — plugin — -->
+
+<section id="wf-plugin">
+<h2>Plugin hochladen (Notepad++ / KeePass)</h2>
+
+<p>Plugins für Anwendungen mit File-basierter Plugin-Architektur — Drop-in-DLL/PLGX, kein Installer. Aktuell unterstützt:</p>
+<ul>
+  <li><b>Notepad++</b> — <code>.zip</code> oder <code>.dll</code>. Datei landet unter <code>C:\Program Files\Notepad++\plugins\&lt;PluginFolder&gt;\</code>.</li>
+  <li><b>KeePass 2</b> — <code>.plgx</code> oder <code>.dll</code>. Datei landet flach unter <code>C:\Program Files\KeePass Password Safe 2\Plugins\</code>.</li>
+</ul>
+
+<ol class="doc-steps">
+  <li>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → Gruppe <i>Hochladen</i> → Reiter <i>Plugin</i>.</li>
+  <li><b>Plugin-Host</b> wählen (Notepad++ / KeePass 2). Die akzeptierten Datei-Endungen passen sich automatisch an.</li>
+  <li>Plugin-Datei auswählen. Magic-Bytes werden geprüft (Spoofing-Schutz).</li>
+  <li>Anzeigename setzen (z.B. „ComparePlus").</li>
+  <li><b>Plugin-Ordner / Dateiname</b> — leer lassen für Auto-Ableitung aus Dateinamen, oder explizit setzen wenn der Ordner anders heißen soll.</li>
+  <li>Kategorie leer lassen → Auto-Setzung auf Host-Label (z.B. „Notepad++"), damit das Plugin im Kiosk unter seiner Host-App gruppiert wird.</li>
+  <li><code>Hochladen</code>.</li>
+</ol>
+
+<div class="doc-callout info">
+  <b>Update:</b> Re-Upload mit anderem Datei-Inhalt = neuer sha256 → alle Agents mit altem Hash gelten als outdated. Im Edit-Panel (Stift) erscheint dann der Push-Update-Button mit Anzahl betroffener Geräte.
+</div>
+
+<div class="doc-callout warn">
+  <b>Vor Install muss Host-App zu sein.</b> NPP/KeePass-Prozess wird automatisch erkannt — wenn er läuft, sieht der User einen Modal „Anwendung schließen und nochmal versuchen". Sonst: Locked-DLL-Error.
+</div>
+
+<div class="doc-callout warn">
+  <b>Wenn die Host-App fehlt</b> (z.B. Plugin auf einem Rechner ohne Notepad++ installiert), wird der Install mit Soft-Error 9030 abgebrochen — kein Müll im Filesystem, klare User-Fehlermeldung.
+</div>
+</section>
+
+<!-- — msstore — -->
+
+<section id="wf-msstore">
+<h2>MS-Store-App per ID hinzufügen</h2>
+
+<p>Manche Apps gibt es nur im Microsoft Store (z.B. GlobalProtect, Dell Command Update). Diese kann winget mit <code>--source msstore</code> installieren — Softshelf erkennt das automatisch am ID-Format.</p>
+
+<ol class="doc-steps">
+  <li>Auf einem Test-Agent in PowerShell <code>winget search &lt;name&gt; --source msstore</code> ausführen. Die ID beginnt mit <code>9</code> und ist 12 Zeichen lang (z.B. <code>9NBLGGH6BZL3</code>).</li>
+  <li>Tab <b>Pakete</b> → <code>+ Paket hinzufügen</code> → <i>Winget</i>.</li>
+  <li>Klick auf den kleinen Hinweis-Link „MS-Store-Apps per ID hinzufuegen →" unter dem Suchfeld.</li>
+  <li>Modal ausfüllen: Store-ID, Anzeigename, Publisher (optional), Kategorie.</li>
+  <li><code>Hinzufuegen</code>.</li>
+</ol>
+
+<div class="doc-callout info">
+  <b>Was passiert beim Install:</b> Softshelf erkennt das ID-Format und setzt automatisch <code>--source msstore</code> und <code>run_as_user=True</code> (MS-Store-Apps sind Per-User-Appx). Der Agent muss einen eingeloggten User haben.
+</div>
 </section>
 
 </section>
