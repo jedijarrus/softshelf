@@ -114,7 +114,9 @@ _EXT_MAGIC: dict[str, tuple[bytes, ...]] = {
     ".dll":  (b"MZ",),                                         # PE32/PE32+
     ".exe":  (b"MZ",),
     ".msi":  (b"\xd0\xcf\x11\xe0",),                          # OLE compound (MSI)
-    ".plgx": (b"PK\x03\x04",),                                 # KeePass plgx = ZIP
+    # KeePass PLGX-Plugin: 32-bit Magic 0x65D90719 (little-endian)
+    # https://keepass.info/help/v2_dev/plg_index.html
+    ".plgx": (b"\x19\x07\xd9\x65",),
 }
 
 
