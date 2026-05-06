@@ -1588,6 +1588,7 @@ async def receive_callback(job_id: str, body: CallbackPayload):
             retry_lid = await database.create_action_log(
                 entry["agent_id"], entry["hostname"], retry_name,
                 entry["display_name"], "choco", "uninstall", job_id=retry_job,
+                workflow_run_id=entry.get("workflow_run_id"),
             )
             _spawn_bg(_deliver_command_bg(
                 entry["agent_id"], entry["hostname"], retry_name,
@@ -1596,6 +1597,10 @@ async def receive_callback(job_id: str, body: CallbackPayload):
             ))
 
     # ── Winget per-user Retry ──────────────────────────────────────
+    # Wenn der Retry dispatched wird, soll der Workflow NICHT auf den
+    # ersten Fehler advancen — sonst wird der Run als failed markiert
+    # obwohl der Retry noch laeuft. Wir tracken das mit retry_scheduled.
+    retry_scheduled = False
     if (status == "error"
         and pkg_type == "winget"
         and body.exit_code == _WINGET_NO_APPLICABLE_INSTALLER
@@ -1624,6 +1629,7 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                 entry["agent_id"], entry["hostname"], entry["package_name"],
                 entry["display_name"], "winget", entry["action"],
                 job_id=retry_job, metadata=retry_meta,
+                workflow_run_id=entry.get("workflow_run_id"),
             )
             try:
                 await TacticalClient().run_command(
@@ -1631,6 +1637,7 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                     shell="powershell", timeout=60, run_as_user=True,
                 )
                 await database.update_action_log_status(retry_lid, "running")
+                retry_scheduled = True
                 logger.info("winget per-user retry delivered: %s", winget_id)
             except Exception as e:
                 logger.warning("winget per-user retry failed: %s", e)
@@ -1659,7 +1666,11 @@ async def receive_callback(job_id: str, body: CallbackPayload):
     )
 
     # ── Workflow advancement ────────────────────────────────────────
-    if entry.get("workflow_run_id"):
+    # Wenn ein Retry dispatched wurde, NICHT advancen — sonst kippt der
+    # Run auf failed obwohl der Retry vermutlich gleich Erfolg meldet.
+    # Der Retry-Callback advanced dann selbst (sein action_log haengt am
+    # gleichen workflow_run_id).
+    if entry.get("workflow_run_id") and not retry_scheduled:
         try:
             import workflow_engine
             await workflow_engine.advance(
@@ -1751,7 +1762,11 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str, skip_final
     footer = (
         "\n"
         "} catch {\n"
-        "    if ($_sfSuccess -ne 'skipped') { $_sfExitCode = 1; $_sfSuccess = $false }\n"
+        # WICHTIG: $_sfSuccess kann $true (Bool) oder 'skipped' (String) sein.
+        # `$true -ne 'skipped'` coerce't 'skipped' zu Bool → $true -ne $true → $false,
+        # d.h. der Reset waere nie passiert und der Server haette Erfolg gemeldet
+        # obwohl wir gerade ge-catch't haben. Mit explicit Cast nach String klappt's.
+        "    if ([string]$_sfSuccess -ne 'skipped') { $_sfExitCode = 1; $_sfSuccess = $false }\n"
         "    $_sfOutput.Add(\"FEHLER: $($_.Exception.Message)\")\n"
         "}\n"
         "\n"
