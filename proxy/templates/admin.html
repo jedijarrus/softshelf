@@ -4540,6 +4540,7 @@ button.outdated-badge.clickable:disabled {
 .pkg-type-pill.winget::before { background: var(--amber); }
 .pkg-type-pill.choco::before  { background: var(--blue); }
 .pkg-type-pill.custom::before { background: var(--violet); }
+.pkg-type-pill.plugin::before { background: var(--green, #16a34a); }
 
 /* Picker (Profile-Editor Paket-Auswahl) */
 .pkg-picker {
@@ -5639,6 +5640,7 @@ body.help-active [data-help]:not(.tab)::after {
         <option value="choco">Chocolatey</option>
         <option value="winget">Winget</option>
         <option value="custom">Eigenes Paket</option>
+        <option value="plugin">Plugin</option>
       </select>
       <div class="input-search" style="max-width:200px">
         <input class="input input-sm" type="search" id="al-filter-agent" placeholder="Agent filtern..." oninput="alFilterDebounce()">
@@ -5670,6 +5672,7 @@ body.help-active [data-help]:not(.tab)::after {
     <button class="add-mode" data-mode="winget" onclick="setAddMode('winget')">Aus Winget</button>
     <button class="add-mode" data-mode="upload" onclick="setAddMode('upload')">Eigene Datei</button>
     <button class="add-mode" data-mode="folder" onclick="setAddMode('folder')">Programm-Ordner</button>
+    <button class="add-mode" data-mode="plugin" onclick="setAddMode('plugin')">Plugin</button>
     <span class="storage-indicator" id="storage-indicator">—</span>
   </div>
 
@@ -5789,6 +5792,53 @@ body.help-active [data-help]:not(.tab)::after {
     <div class="upload-actions">
       <button class="btn btn-ghost btn-sm" type="button" onclick="closeAll()">Abbrechen</button>
       <button class="btn btn-primary btn-sm" type="button" id="folder-submit" onclick="doFolderUpload()">Hochladen</button>
+    </div>
+  </div>
+
+  <!-- Plugin Upload (Notepad++/KeePass/...) -->
+  <div class="add-section" id="add-plugin">
+    <form class="upload-form" id="upload-form-plugin" onsubmit="event.preventDefault(); doPluginUpload();">
+      <div class="field">
+        <label>Plugin-Host</label>
+        <select class="input" id="plugin-host" onchange="onPluginHostChange()">
+          <option value="">— laedt —</option>
+        </select>
+        <div class="hint" id="plugin-host-hint">Welche Anwendung erweitert das Plugin?</div>
+      </div>
+
+      <div class="field">
+        <label>Plugin-Datei</label>
+        <label class="upload-drop" id="plugin-drop">
+          <svg class="upload-drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <div class="upload-drop-text">Datei waehlen oder hierher ziehen</div>
+          <div class="upload-drop-hint" id="plugin-accept-hint">.zip, .dll</div>
+          <input type="file" id="plugin-file" onchange="onPluginFileSelected(this.files[0])">
+        </label>
+      </div>
+
+      <div class="field">
+        <label>Anzeigename</label>
+        <input class="input" id="plugin-display" placeholder="z. B. ComparePlus" required>
+      </div>
+
+      <div class="field">
+        <label>Kategorie</label>
+        <input class="input" id="plugin-category" placeholder="Plugins" value="Plugins">
+      </div>
+
+      <div class="field">
+        <label>Plugin-Ordner / Dateiname</label>
+        <input class="input" id="plugin-folder" placeholder="auto aus Dateiname">
+        <div class="hint">Notepad++: Subordner unter <code>plugins\</code>. KeePass: Datei-Stem unter <code>Plugins\</code>. Leer lassen = aus Dateiname ableiten.</div>
+      </div>
+
+      <div class="upload-progress" id="plugin-upload-progress">
+        <div class="upload-progress-bar" id="plugin-upload-progress-bar"></div>
+      </div>
+    </form>
+    <div class="upload-actions">
+      <button class="btn btn-ghost btn-sm" type="button" onclick="closeAll()">Abbrechen</button>
+      <button class="btn btn-primary btn-sm" type="button" id="plugin-submit" onclick="doPluginUpload()">Hochladen</button>
     </div>
   </div>
 
@@ -9445,9 +9495,19 @@ function openEditPanel(name) {
   _editingName = name;
   const isArchive = pkg.archive_type === 'archive';
   const isCustom = (pkg.type || 'choco') === 'custom';
+  const isPlugin = (pkg.type || '') === 'plugin';
   const ptype = pkg.type || 'choco';
-  document.getElementById('edit-panel-sub').textContent =
-    isArchive ? `Programm-Ordner · Entry: ${pkg.entry_point || '\u2014'}` : (ptype !== 'custom' ? ptype : (pkg.filename || name));
+  let _subText;
+  if (isArchive) {
+    _subText = `Programm-Ordner · Entry: ${pkg.entry_point || '—'}`;
+  } else if (isPlugin) {
+    _subText = `Plugin · ${pkg.plugin_host || '?'} · Ordner: ${pkg.plugin_folder || '—'}`;
+  } else if (ptype !== 'custom') {
+    _subText = ptype;
+  } else {
+    _subText = pkg.filename || name;
+  }
+  document.getElementById('edit-panel-sub').textContent = _subText;
   document.querySelector('[data-edit="display_name"]').value   = pkg.display_name || '';
   document.querySelector('[data-edit="category"]').value       = pkg.category || 'Custom';
   document.querySelector('[data-edit="install_args"]').value   = pkg.install_args || '';
@@ -9478,6 +9538,8 @@ function openEditPanel(name) {
   // detection_name/uninstall_cmd bleiben custom-only
   document.querySelector('[data-edit="detection_name"]').closest('.field').style.display = isCustom ? '' : 'none';
   document.querySelector('[data-edit="uninstall_cmd"]').closest('.field').style.display = isCustom ? '' : 'none';
+  // install_timeout fuer Plugin nicht relevant (Datei kopieren = Sekunden)
+  document.querySelector('[data-edit="install_timeout"]').closest('.field').style.display = isPlugin ? 'none' : '';
   // Entry-Point-Dropdown + Inhalt-verwalten nur bei Archive-Paketen
   document.getElementById('edit-entry-field').style.display = isArchive ? '' : 'none';
   document.getElementById('edit-contents-field').style.display = isArchive ? '' : 'none';
@@ -11637,16 +11699,134 @@ function setAddMode(mode) {
   document.getElementById('add-winget').classList.toggle('active', mode === 'winget');
   document.getElementById('add-upload').classList.toggle('active', mode === 'upload');
   document.getElementById('add-folder').classList.toggle('active', mode === 'folder');
+  document.getElementById('add-plugin').classList.toggle('active', mode === 'plugin');
   if (mode === 'choco') {
     setTimeout(() => document.getElementById('search-input').focus(), 100);
   } else if (mode === 'winget') {
     refreshWingetDiscoveryCount();
     setTimeout(() => document.getElementById('winget-search-input').focus(), 100);
+  } else if (mode === 'plugin') {
+    refreshStorageIndicator();
+    loadPluginHosts();
+    setTimeout(() => document.getElementById('plugin-display')?.focus(), 100);
   } else {
     refreshStorageIndicator();
     const focusId = mode === 'folder' ? 'folder-display' : 'upload-display';
     setTimeout(() => document.getElementById(focusId)?.focus(), 100);
   }
+}
+
+let _pluginHostsCache = null;
+async function loadPluginHosts() {
+  const sel = document.getElementById('plugin-host');
+  if (!sel) return;
+  if (!_pluginHostsCache) {
+    try {
+      const r = await api('GET', '/admin/api/plugin-hosts');
+      _pluginHostsCache = (r && r.hosts) || [];
+    } catch (e) {
+      sel.innerHTML = '<option value="">Fehler beim Laden</option>';
+      return;
+    }
+  }
+  sel.innerHTML = _pluginHostsCache.map(h =>
+    `<option value="${esc(h.id)}">${esc(h.label)}</option>`
+  ).join('');
+  onPluginHostChange();
+}
+
+function _selectedPluginHost() {
+  const id = document.getElementById('plugin-host')?.value || '';
+  return (_pluginHostsCache || []).find(h => h.id === id);
+}
+
+function onPluginHostChange() {
+  const host = _selectedPluginHost();
+  const fileInput = document.getElementById('plugin-file');
+  const hint = document.getElementById('plugin-accept-hint');
+  if (!host) return;
+  fileInput.setAttribute('accept', host.accepted_ext.join(','));
+  hint.textContent = host.accepted_ext.join(', ');
+}
+
+function onPluginFileSelected(file) {
+  if (!file) return;
+  const stem = (file.name || '').replace(/\.[^.]+$/, '');
+  const folderField = document.getElementById('plugin-folder');
+  if (folderField && !folderField.value.trim()) {
+    folderField.value = stem;
+  }
+  const displayField = document.getElementById('plugin-display');
+  if (displayField && !displayField.value.trim()) {
+    displayField.value = stem;
+  }
+}
+
+async function doPluginUpload() {
+  const fileEl = document.getElementById('plugin-file');
+  const file = fileEl.files[0];
+  if (!file) {
+    notify('Bitte erst eine Datei waehlen', 'error');
+    return;
+  }
+  const host = document.getElementById('plugin-host').value;
+  if (!host) {
+    notify('Bitte einen Plugin-Host waehlen', 'error');
+    return;
+  }
+  const display = document.getElementById('plugin-display').value.trim();
+  if (!display) {
+    notify('Bitte Anzeigename ausfuellen', 'error');
+    return;
+  }
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('display_name', display);
+  fd.append('category', document.getElementById('plugin-category').value.trim() || 'Plugins');
+  fd.append('plugin_host', host);
+  fd.append('plugin_folder', document.getElementById('plugin-folder').value.trim());
+
+  const submitBtn = document.getElementById('plugin-submit');
+  const progress = document.getElementById('plugin-upload-progress');
+  const progBar = document.getElementById('plugin-upload-progress-bar');
+  submitBtn.disabled = true;
+  progress.classList.add('active');
+
+  const xhr = new XMLHttpRequest();
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) {
+      progBar.style.width = ((e.loaded / e.total) * 100) + '%';
+    }
+  };
+  xhr.onload = async () => {
+    submitBtn.disabled = false;
+    progress.classList.remove('active');
+    progBar.style.width = '0%';
+    if (xhr.status >= 200 && xhr.status < 300) {
+      try { JSON.parse(xhr.responseText); } catch (e) {}
+      notify('Plugin hochgeladen', 'success');
+      fileEl.value = '';
+      document.getElementById('plugin-display').value = '';
+      document.getElementById('plugin-folder').value = '';
+      closeAll();
+      await loadEnabled();
+    } else {
+      let msg = 'Upload fehlgeschlagen';
+      try {
+        const r = JSON.parse(xhr.responseText);
+        if (r.detail) msg = r.detail;
+      } catch (e) {}
+      notify(msg, 'error');
+    }
+  };
+  xhr.onerror = () => {
+    submitBtn.disabled = false;
+    progress.classList.remove('active');
+    notify('Netzwerkfehler beim Upload', 'error');
+  };
+  xhr.open('POST', '/admin/api/upload-plugin');
+  xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+  xhr.send(fd);
 }
 
 let _storageCache = null;
