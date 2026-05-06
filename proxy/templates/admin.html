@@ -4569,6 +4569,43 @@ button.outdated-badge.clickable:disabled {
 .pkg-type-pill.custom::before { background: var(--violet); }
 .pkg-type-pill.plugin::before { background: var(--green, #16a34a); }
 
+/* Workflow-Step-Chip-Row in der Workflows-Uebersicht */
+.wf-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 10px;
+}
+.wf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-2);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-family: var(--mono);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wf-chip::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.wf-chip-install::before    { background: var(--green); }
+.wf-chip-uninstall::before  { background: var(--red); }
+.wf-chip-reboot::before     { background: var(--amber); }
+.wf-chip-script::before     { background: var(--blue); }
+.wf-chip-step::before       { background: var(--fg-4); }
+
 /* Picker (Profile-Editor Paket-Auswahl) */
 .pkg-picker {
   border: 1px solid var(--border);
@@ -14067,6 +14104,27 @@ async function loadWorkflows() {
   renderWorkflows();
 }
 
+function _wfStepLabel(s) {
+  // Leitet einen sprechenden Step-Namen ab. Reihenfolge: explizites label,
+  // sonst type-spezifisch (Paket-Name / Reboot-Hinweis / Script-Name).
+  if (s.label && s.label.trim()) return s.label.trim();
+  const p = s.payload || {};
+  if (s.type === 'install')   return p.package_name || 'Install';
+  if (s.type === 'uninstall') return p.package_name ? 'Uninstall ' + p.package_name : 'Uninstall';
+  if (s.type === 'reboot')    return p.message ? 'Reboot · ' + p.message : 'Reboot';
+  if (s.type === 'script')    return p.script_name || p.script_id || 'Script';
+  return s.type || 'Step';
+}
+
+function _wfStepChip(s) {
+  const label = _wfStepLabel(s);
+  const type = s.type || 'step';
+  const trunc = label.length > 28 ? label.slice(0, 27) + '…' : label;
+  return '<span class="wf-chip wf-chip-' + esc(type) + '" title="' + esc(label) + '">' +
+           esc(trunc) +
+         '</span>';
+}
+
 function renderWorkflows() {
   const el = document.getElementById('wf-list');
   document.getElementById('wf-count').textContent = _workflows.length + ' Workflow' + (_workflows.length !== 1 ? 's' : '');
@@ -14076,18 +14134,27 @@ function renderWorkflows() {
   }
   el.innerHTML = _workflows.map(wf => {
     const steps = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []);
-    const stepSummary = steps.map(s => s.label || s.type).join(' → ');
+    const counts = {install: 0, uninstall: 0, reboot: 0, script: 0};
+    steps.forEach(s => { if (counts[s.type] !== undefined) counts[s.type] += 1; });
+    const summaryParts = [];
+    if (counts.install)   summaryParts.push(counts.install + ' Install' + (counts.install !== 1 ? 's' : ''));
+    if (counts.uninstall) summaryParts.push(counts.uninstall + ' Uninstall' + (counts.uninstall !== 1 ? 's' : ''));
+    if (counts.reboot)    summaryParts.push(counts.reboot + ' Reboot' + (counts.reboot !== 1 ? 's' : ''));
+    if (counts.script)    summaryParts.push(counts.script + ' Script' + (counts.script !== 1 ? 's' : ''));
+    const counterStr = steps.length + ' Steps · ' + summaryParts.join(' · ');
+    const chips = steps.map(_wfStepChip).join('');
     return '<div class="pkg-card" style="cursor:pointer" onclick="openWorkflowEditor(' + wf.id + ')">' +
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start">' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">' +
         '<div style="flex:1;min-width:0">' +
           '<div class="pkg-name">' + esc(wf.name) + '</div>' +
-          (wf.description ? '<div style="font-size:12px;color:var(--fg-muted);margin-top:2px">' + esc(wf.description) + '</div>' : '') +
+          (wf.description ? '<div style="font-size:12px;color:var(--fg-3);margin-top:2px">' + esc(wf.description) + '</div>' : '') +
+          '<div style="font-size:11px;color:var(--fg-4);margin-top:6px;letter-spacing:0.3px;text-transform:uppercase">' + esc(counterStr) + '</div>' +
         '</div>' +
-        '<button class="icon-btn" title="Löschen" onclick="event.stopPropagation(); deleteWorkflow(' + wf.id + ')" style="flex-shrink:0;margin-left:8px">' +
+        '<button class="icon-btn" title="Löschen" onclick="event.stopPropagation(); deleteWorkflow(' + wf.id + ')" style="flex-shrink:0">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>' +
         '</button>' +
       '</div>' +
-      '<div style="font-size:12px;color:var(--fg-muted);margin-top:6px;font-family:var(--mono)">' + esc(steps.length + ' Steps: ' + stepSummary) + '</div>' +
+      '<div class="wf-chip-row">' + chips + '</div>' +
     '</div>';
   }).join('');
 }
