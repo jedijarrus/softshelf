@@ -1435,6 +1435,24 @@ async def push_update(name: str, stage: str = "all"):
     allowed_agents = {a["agent_id"] for a in
                       await database.get_agents_by_ring(_stage_to_ring_filter(stage))}
 
+    if ptype == "plugin":
+        if not pkg.get("sha256"):
+            raise HTTPException(status_code=400, detail="Plugin hat keine Datei")
+        outdated = await database.get_outdated_plugin_agents(name)
+        outdated = [a for a in outdated if a["agent_id"] in allowed_agents]
+        if not outdated:
+            return {"ok": True, "dispatched": 0, "message": "Keine outdated Agents in dieser Stage."}
+        dispatched = 0
+        failed: list[str] = []
+        for ag in outdated:
+            try:
+                await dispatch_upgrade_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg)
+                dispatched += 1
+            except Exception as e:
+                failed.append(f"{ag.get('hostname')}: {e}")
+        return {"ok": True, "dispatched": dispatched,
+                "outdated": len(outdated), "failed": failed}
+
     if ptype == "custom":
         if not pkg.get("sha256"):
             raise HTTPException(status_code=400, detail="Paket hat keine aktive Version")
@@ -4506,6 +4524,13 @@ async def upload_plugin_file(
         stem = os.path.splitext(os.path.basename(file.filename or ""))[0]
         plugin_folder = re.sub(r"[^a-zA-Z0-9._\-+ ]", "", stem).strip() or "Plugin"
     if not _PLUGIN_FOLDER_RE.fullmatch(plugin_folder):
+        # Validation failed AFTER upload — ggf. Orphan-File aufraeumen
+        # damit der Storage nicht mit ungueltigen Uploads vollaeuft.
+        try:
+            if await database.sha256_usage_count(sha256) == 0:
+                file_uploads.delete_file(sha256)
+        except Exception:
+            pass
         raise HTTPException(
             status_code=400,
             detail="plugin_folder darf nur a-z, 0-9, . _ - + Leerzeichen enthalten (max 80)",

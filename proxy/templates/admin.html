@@ -5320,6 +5320,7 @@ body.help-active [data-help]:not(.tab)::after {
         <button class="btn btn-ghost btn-sm" data-ptype="winget" onclick="setPkgTypeFilter('winget', this)">winget</button>
         <button class="btn btn-ghost btn-sm" data-ptype="choco" onclick="setPkgTypeFilter('choco', this)">choco</button>
         <button class="btn btn-ghost btn-sm" data-ptype="custom" onclick="setPkgTypeFilter('custom', this)">custom</button>
+        <button class="btn btn-ghost btn-sm" data-ptype="plugin" onclick="setPkgTypeFilter('plugin', this)">plugin</button>
       </div>
       <select class="input pkg-cat-filter" id="pkg-cat-filter" onchange="setPkgCatFilter(this.value)">
         <option value="">Alle Kategorien</option>
@@ -5356,6 +5357,7 @@ body.help-active [data-help]:not(.tab)::after {
         <button class="btn btn-ghost btn-sm" data-dtype="winget" onclick="setDistTypeFilter('winget', this)">winget</button>
         <button class="btn btn-ghost btn-sm" data-dtype="choco" onclick="setDistTypeFilter('choco', this)">choco</button>
         <button class="btn btn-ghost btn-sm" data-dtype="custom" onclick="setDistTypeFilter('custom', this)">custom</button>
+        <button class="btn btn-ghost btn-sm" data-dtype="plugin" onclick="setDistTypeFilter('plugin', this)">plugin</button>
       </div>
       <label class="dist-only-outdated">
         <input type="checkbox" id="distribution-only-outdated" onchange="loadDistributions()">
@@ -6368,6 +6370,7 @@ body.help-active [data-help]:not(.tab)::after {
         <button class="btn btn-ghost btn-sm" data-atype="winget" onclick="setAddStagedType('winget', this)">winget</button>
         <button class="btn btn-ghost btn-sm" data-atype="choco" onclick="setAddStagedType('choco', this)">choco</button>
         <button class="btn btn-ghost btn-sm" data-atype="custom" onclick="setAddStagedType('custom', this)">custom</button>
+        <button class="btn btn-ghost btn-sm" data-atype="plugin" onclick="setAddStagedType('plugin', this)">plugin</button>
         <span style="margin-left:auto;font-size:11px;color:var(--fg-5)" id="add-staged-count">—</span>
       </div>
       <div id="add-staged-candidates" class="pkg-assign-candidates" style="max-height:360px">
@@ -7086,7 +7089,7 @@ async function renderProfilePicker() {
       ${esc(label)} <span class="cnt">${counts[type] || 0}</span>
     </button>`;
   document.getElementById('profile-picker-filters').innerHTML =
-    chip('', 'Alle') + chip('winget', 'winget') + chip('choco', 'choco') + chip('custom', 'eigen');
+    chip('', 'Alle') + chip('winget', 'winget') + chip('choco', 'choco') + chip('custom', 'eigen') + chip('plugin', 'plugin');
 
   // Liste rendern
   const search = (document.getElementById('profile-picker-search')?.value || '').toLowerCase();
@@ -9620,11 +9623,14 @@ function openEditPanel(name) {
     document.getElementById('edit-version-list').style.display = 'none';
     document.getElementById('edit-version-pin-toggle').textContent = 'Versionen \u25be';
   }
-  // Versionen-Block fuer winget/choco ausblenden (nur custom hat Upload)
-  document.getElementById('edit-versions-divider').style.display = isCustom ? '' : 'none';
-  document.getElementById('version-list').style.display = isCustom ? '' : 'none';
-  document.getElementById('version-upload').style.display = isCustom ? '' : 'none';
-  document.getElementById('version-summary').style.display = isCustom ? '' : 'none';
+  // Versionen-Block fuer winget/choco ausblenden (nur custom hat Upload).
+  // Plugin: kein Versions-Block, aber Summary + Push-Update sichtbar.
+  const wantsVersionsBlock = isCustom;
+  const wantsSummary = isCustom || isPlugin;
+  document.getElementById('edit-versions-divider').style.display = wantsSummary ? '' : 'none';
+  document.getElementById('version-list').style.display = wantsVersionsBlock ? '' : 'none';
+  document.getElementById('version-upload').style.display = wantsVersionsBlock ? '' : 'none';
+  document.getElementById('version-summary').style.display = wantsSummary ? '' : 'none';
   // Version-Upload-Widget Mode anpassen (Datei vs Ordner)
   setVersionUploadMode(isArchive ? 'folder' : 'single');
   // Versions/Installs zurücksetzen, dann nachladen

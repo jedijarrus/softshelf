@@ -48,6 +48,19 @@ $hostRoot = @('C:\Program Files\Notepad++','C:\Program Files (x86)\Notepad++') |
 $target = Join-Path $hostRoot ('plugins\' + $pluginFolder)
 New-Item -ItemType Directory -Force -Path $target | Out-Null
 if ($downloadPath -like '*.zip') {
+    # Defense-in-depth gegen ZIP-Slip: Pre-Validate dass alle Eintraege relativ
+    # bleiben. Verlaesst sich nicht allein auf Expand-Archive's interne Checks.
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($downloadPath)
+    try {
+        foreach ($e in $zip.Entries) {
+            $p = $e.FullName
+            if ($p -match '\.\.[\\/]' -or $p.StartsWith('/') -or $p.StartsWith('\') -or $p -match '^[A-Za-z]:') {
+                throw "ZIP-Eintrag mit verdaechtigem Pfad: $p"
+            }
+        }
+    } finally {
+        $zip.Dispose()
+    }
     Expand-Archive -Path $downloadPath -DestinationPath $target -Force
 } else {
     Copy-Item $downloadPath (Join-Path $target ($pluginFolder + '.dll')) -Force
