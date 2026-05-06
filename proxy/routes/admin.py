@@ -5099,6 +5099,42 @@ async def build_status():
     }
 
 
+class BuildTriggerBody(BaseModel):
+    version_override: str = Field(default="", max_length=50)
+
+
+def _read_tray_version() -> str:
+    """Liest TRAY_VERSION aus /app/_tray_version.py (vom Dockerfile rein
+    kopiert). Fallback wenn Datei fehlt — sollte im Production-Image nicht
+    passieren, aber kein Boot-Crash bei Migrationen."""
+    try:
+        from _tray_version import TRAY_VERSION  # type: ignore
+        return str(TRAY_VERSION)
+    except Exception:
+        return "0.0.0-unknown"
+
+
+# WICHTIG: /build/versions MUSS vor /build/{build_id} registriert sein,
+# sonst matcht FastAPI 'versions' als build_id-Path-Param.
+@router.get("/admin/api/build/versions", dependencies=[Depends(_require_admin)])
+async def build_versions():
+    """Liefert alle drei Versions-Eintraege fuer die Settings-Page:
+    Backend (proxy code), Tray-Soll (committed), Tray-Gebaut (last successful build).
+    """
+    from main import VERSION as _backend_version  # type: ignore
+    tray_soll = _read_tray_version()
+    current_build = await database.get_current_build()
+    return {
+        "backend": _backend_version,
+        "tray_soll": tray_soll,
+        "tray_built": (current_build or {}).get("version"),
+        "tray_built_at": (current_build or {}).get("finished_at"),
+        "needs_rebuild": bool(
+            current_build and current_build.get("version") != tray_soll
+        ),
+    }
+
+
 @router.get("/admin/api/build/{build_id}", dependencies=[Depends(_require_admin)])
 async def build_detail(build_id: int):
     build = await database.get_build(build_id)
@@ -5108,10 +5144,15 @@ async def build_detail(build_id: int):
 
 
 @router.post("/admin/api/build", dependencies=[Depends(_require_admin)])
-async def trigger_build():
+async def trigger_build(body: BuildTriggerBody | None = None):
     """
     Triggert einen neuen EXE-Build via den builder-Container.
     Benötigt dass proxy_public_url in den Einstellungen gesetzt ist.
+
+    Body (optional):
+      version_override: str  — wenn gesetzt, ueberschreibt den
+        TRAY_VERSION-Default fuer diesen einen Build (z.B. "2.4.0-rc1").
+        Wird gegen die Version-Regex validiert.
     """
     proxy_url = await runtime_value("proxy_public_url")
     if not proxy_url:
@@ -5129,7 +5170,18 @@ async def trigger_build():
     icon_b64    = _read_icon_b64()  # None wenn kein Icon hochgeladen
 
     cfg = get_settings()
-    version = "2.0.2"  # wird in der EXE angezeigt
+    # Tray-Version-Source-of-Truth: client/_tray_version.py.
+    version = _read_tray_version()
+
+    # Optional Override (z.B. Release-Candidate ohne Code-Bump)
+    if body and body.version_override:
+        ov = body.version_override.strip()
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._\-+]{0,49}", ov):
+            raise HTTPException(
+                status_code=400,
+                detail="version_override darf nur a-z, 0-9, Punkt, Strich, Plus enthalten",
+            )
+        version = ov
 
     build_id = await database.start_build_log(proxy_url, version)
 

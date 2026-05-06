@@ -4615,6 +4615,53 @@ button.outdated-badge.clickable:disabled {
 .agent-ver-unknown  { color: var(--fg-4); }
 .agent-select-cb { cursor: pointer; }
 
+/* Build-Versions-Block in Settings (Agent-Mgmt v2.4) */
+.build-versions-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  margin: 0 0 12px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  font-size: 12px;
+}
+.build-version-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.build-version-label {
+  display: inline-block;
+  min-width: 110px;
+  font-weight: 600;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-size: 10px;
+}
+.build-version-val {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 1px 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--fg);
+}
+.build-version-val.mismatch {
+  border-color: var(--amber-bd);
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+.build-version-hint {
+  margin-left: 10px;
+  font-size: 11px;
+  color: var(--amber);
+  font-weight: 500;
+}
+
 /* Workflow-Step-Liste in der Uebersicht (kompakt, no border) */
 .wf-step-list {
   display: flex;
@@ -5672,6 +5719,21 @@ body.help-active [data-help]:not(.tab)::after {
       </div>
       <button class="btn btn-primary btn-sm" id="build-trigger-btn" onclick="triggerBuild()">EXEs bauen</button>
     </div>
+
+    <div id="build-versions" class="build-versions">
+      <div class="loading-block"><span class="spinner"></span><span class="loading-label">Versionen werden geladen</span></div>
+    </div>
+
+    <details style="margin: 12px 0 16px">
+      <summary style="cursor:pointer;font-size:12px;color:var(--fg-3)">Erweitert: Version-Override fuer einmaligen Build</summary>
+      <div class="field" style="margin-top:8px;max-width:300px">
+        <label for="build-version-override" style="font-size:11px">Version-Override (optional, einmalig)</label>
+        <input class="input" type="text" id="build-version-override"
+               placeholder="z. B. 2.4.0-rc1"
+               maxlength="50">
+        <div class="hint">Leer lassen = TRAY_VERSION aus <code>client/_tray_version.py</code> wird verwendet.</div>
+      </div>
+    </details>
 
     <div id="build-status" class="build-status">
       <div class="loading-block"><span class="spinner"></span><span class="loading-label">Status wird geladen</span></div>
@@ -13956,6 +14018,8 @@ async function saveSettings() {
 // ── Build status ─────────────────────────────────────────────────────────────
 
 async function loadBuildStatus() {
+  // Versionen + Build-Status parallel
+  loadBuildVersions();
   try {
     const data = await api('GET', '/admin/api/build/status');
     renderBuildStatus(data);
@@ -14018,6 +14082,36 @@ async function showBuildLog(id) {
   }
 }
 
+async function loadBuildVersions() {
+  const el = document.getElementById('build-versions');
+  if (!el) return;
+  try {
+    const v = await api('GET', '/admin/api/build/versions');
+    const needs = v.needs_rebuild;
+    const tray_built = v.tray_built ? esc(v.tray_built) : '<span style="color:var(--fg-4)">noch nie gebaut</span>';
+    const built_at = v.tray_built_at ? '<span style="color:var(--fg-4);font-size:11px;margin-left:8px">' + esc(relTime(v.tray_built_at)) + '</span>' : '';
+    el.innerHTML = `
+      <div class="build-versions-block">
+        <div class="build-version-row">
+          <span class="build-version-label">Backend</span>
+          <code class="build-version-val">${esc(v.backend || '?')}</code>
+        </div>
+        <div class="build-version-row">
+          <span class="build-version-label">Tray-Soll</span>
+          <code class="build-version-val">${esc(v.tray_soll || '?')}</code>
+          <span style="color:var(--fg-4);font-size:11px;margin-left:8px">aus <code>client/_tray_version.py</code></span>
+        </div>
+        <div class="build-version-row">
+          <span class="build-version-label">Tray-Gebaut</span>
+          <code class="build-version-val ${needs ? 'mismatch' : ''}">${tray_built}</code>${built_at}
+          ${needs ? '<span class="build-version-hint">Soll und Gebaut driften — bitte EXEs neu bauen.</span>' : ''}
+        </div>
+      </div>`;
+  } catch (e) {
+    el.innerHTML = '<div class="empty-mini">Fehler beim Laden der Versionen</div>';
+  }
+}
+
 async function triggerBuild() {
   const btn = document.getElementById('build-trigger-btn');
   btn.disabled = true;
@@ -14027,7 +14121,9 @@ async function triggerBuild() {
     // mit build_id, der eigentliche Build laeuft in einem Container-Job.
     // Aber Build-Container-Spawn kann langsam sein (Wine + PyInstaller),
     // daher 10min Timeout fuer den initialen Trigger.
-    const r = await api('POST', '/admin/api/build', {}, {timeoutMs: 600000});
+    const override = (document.getElementById('build-version-override')?.value || '').trim();
+    const body = override ? { version_override: override } : {};
+    const r = await api('POST', '/admin/api/build', body, {timeoutMs: 600000});
     toast('Build gestartet (dauert ~1-2 min)');
     // Poll build-status alle 5s
     let attempts = 0;
