@@ -107,6 +107,61 @@ async def save_upload(file: UploadFile, max_size_bytes: int) -> tuple[str, int, 
     return final_path, size, sha256
 
 
+async def save_upload_with_ext(
+    file: UploadFile,
+    max_size_bytes: int,
+    allowed_ext: tuple[str, ...],
+) -> tuple[str, int, str, str]:
+    """Variante von save_upload mit konfigurierbarer Endungs-Whitelist.
+
+    Wird fuer Plugin-Pakete verwendet (.dll, .zip, .plgx, ...). Gibt
+    (final_path, size_bytes, sha256, ext) zurueck — der Aufrufer braucht
+    die Endung um zu wissen ob es eine ZIP- oder Single-File-Plugin ist.
+    """
+    _ensure_upload_dir()
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in allowed_ext:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Nur {', '.join(allowed_ext)} erlaubt (war: {ext or 'ohne Endung'})",
+        )
+
+    tmp_path = os.path.join(UPLOAD_DIR, f"_tmp_{secrets.token_hex(8)}{ext}")
+    h = hashlib.sha256()
+    size = 0
+    try:
+        with open(tmp_path, "wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max_size_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Datei zu groß (max {max_size_bytes // 1024 // 1024} MB)",
+                    )
+                h.update(chunk)
+                out.write(chunk)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+    sha256 = h.hexdigest()
+    final_path = os.path.join(UPLOAD_DIR, f"{sha256}{ext}")
+
+    if os.path.exists(final_path):
+        os.unlink(tmp_path)
+    else:
+        os.rename(tmp_path, final_path)
+
+    return final_path, size, sha256, ext
+
+
 def find_file_path(sha256: str) -> str | None:
     """Sucht die gespeicherte Datei fuer einen gegebenen Hash (egal welche Extension).
     Wenn nur Ordner existiert (ZIP noch nicht fertig), zippt on-demand."""

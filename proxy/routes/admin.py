@@ -26,6 +26,7 @@ from PIL.Image import DecompressionBombError
 import admin_auth
 import database
 import file_uploads
+import plugin_hosts
 import winget_catalog
 import winget_enrichment
 import winget_scanner
@@ -65,6 +66,10 @@ _USERNAME_RE = re.compile(r"^[a-zA-Z0-9._\-@]{2,80}$")
 _WINGET_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-+]{0,199}$")
 # Versions-Label: alphanumerisch, Punkt, Bindestrich, Unterstrich
 _VERSION_LABEL_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,49}$")
+# Plugin-Folder/-Filename-Stem — landet als $pluginFolder direkt in PowerShell
+# Path-Construct, deshalb hart restriktiv (keine Backslash, keine Slash, kein
+# Dollar, keine Anfuehrungszeichen).
+_PLUGIN_FOLDER_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-+ ]{0,79}$")
 # Reject anything with control chars, NUL, newlines — for free-text fields
 # die in Shell-/PowerShell-Commands oder JS-Strings landen
 _NO_CTRL_RE = re.compile(r"^[^\x00-\x1f\x7f]*$")
@@ -617,6 +622,8 @@ class EnabledPackage(BaseModel):
     check_reboot: int = 0
     hide_uninstall: int = 0
     process_check: str = ""
+    plugin_host: str | None = None
+    plugin_folder: str | None = None
 
 
 class SearchResult(BaseModel):
@@ -706,6 +713,12 @@ async def enable_package(body: EnableRequest):
     return {"ok": True, "total": len(rows)}
 
 
+@router.get("/admin/api/plugin-hosts", dependencies=[Depends(_require_admin)])
+async def list_plugin_hosts():
+    """Liste der unterstuetzten Plugin-Hosts (Notepad++, KeePass, ...)."""
+    return {"hosts": plugin_hosts.list_hosts()}
+
+
 @router.delete("/admin/api/enable/{name}", dependencies=[Depends(_require_admin)])
 async def disable_package(name: str):
     """
@@ -771,6 +784,17 @@ async def update_package(name: str, body: EnableRequest):
             display_name=body.display_name or pkg["display_name"],
             category=body.category,
             version_pin=pkg.get("version_pin"),
+        )
+    elif ptype == "plugin":
+        await database.upsert_plugin_package(
+            name=name,
+            display_name=body.display_name or pkg["display_name"],
+            category=body.category,
+            plugin_host=pkg.get("plugin_host") or "",
+            plugin_folder=pkg.get("plugin_folder") or "",
+            filename=pkg.get("filename") or name,
+            sha256=pkg.get("sha256") or "",
+            size_bytes=pkg.get("size_bytes") or 0,
         )
     else:
         await database.upsert_package(name, body.display_name or name, body.category)
@@ -4417,6 +4441,129 @@ async def upload_custom_file(
 async def delete_custom_file(name: str):
     """Alias für DELETE /admin/api/enable/{name} – die unified delete-Logik."""
     return await disable_package(name)
+
+
+@router.post("/admin/api/upload-plugin", dependencies=[Depends(_require_admin)])
+async def upload_plugin_file(
+    file: UploadFile = File(...),
+    display_name: str = Form(""),
+    category: str = Form("Plugins"),
+    plugin_host: str = Form(...),
+    plugin_folder: str = Form(""),
+    target_package: str = Form(""),
+):
+    """
+    Upload einer Plugin-Datei (.dll/.zip/.plgx je nach Host).
+
+    - Neues Paket (`target_package` leer): legt packages-Eintrag mit
+      type='plugin' an, slug aus Filename.
+    - Bestehendes Paket (`target_package=<name>`): tauscht die Datei
+      (Update). Plugin-System hat bewusst keine Versions-Tabelle —
+      Updates sind in-place, alte Hash-Files werden bei Bedarf
+      bereinigt.
+    """
+    host = plugin_hosts.get_host(plugin_host)
+    if not host:
+        raise HTTPException(status_code=400, detail=f"Unbekannter Plugin-Host: {plugin_host}")
+
+    display_name = (display_name or "").strip()
+    category = (category or "").strip() or "Plugins"
+    plugin_folder = (plugin_folder or "").strip()
+
+    if not _TEXT_RE.fullmatch(category):
+        raise HTTPException(status_code=400, detail="Ungültige Kategorie")
+
+    target_package = (target_package or "").strip()
+    is_new_package = not target_package
+    existing_pkg: dict | None = None
+
+    if is_new_package:
+        if not display_name or not _TEXT_RE.fullmatch(display_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Anzeigename")
+    else:
+        if not _PKG_NAME_RE.fullmatch(target_package):
+            raise HTTPException(status_code=400, detail="Ungültiger target_package")
+        existing_pkg = await database.get_package(target_package)
+        if not existing_pkg:
+            raise HTTPException(status_code=404, detail=f"Paket '{target_package}' nicht gefunden")
+        if existing_pkg.get("type") != "plugin":
+            raise HTTPException(status_code=400, detail="Nur Plugin-Pakete unterstuetzt")
+
+    max_mb = await runtime_int("max_upload_mb")
+    max_bytes = max_mb * 1024 * 1024
+
+    final_path, size_bytes, sha256, ext = await file_uploads.save_upload_with_ext(
+        file, max_bytes, host.accepted_ext
+    )
+
+    # plugin_folder default = filename-stem ohne .dll/.zip/.plgx
+    if not plugin_folder:
+        stem = os.path.splitext(os.path.basename(file.filename or ""))[0]
+        plugin_folder = re.sub(r"[^a-zA-Z0-9._\-+ ]", "", stem).strip() or "Plugin"
+    if not _PLUGIN_FOLDER_RE.fullmatch(plugin_folder):
+        raise HTTPException(
+            status_code=400,
+            detail="plugin_folder darf nur a-z, 0-9, . _ - + Leerzeichen enthalten (max 80)",
+        )
+
+    if is_new_package:
+        slug = file_uploads._slug_from_filename(file.filename or "")
+        if not _PKG_NAME_RE.fullmatch(slug):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dateiname ergibt ungültigen Paketnamen: {slug!r}",
+            )
+        name = await file_uploads._unique_name(slug)
+        await database.upsert_plugin_package(
+            name=name,
+            display_name=display_name,
+            category=category,
+            plugin_host=host.id,
+            plugin_folder=plugin_folder,
+            filename=file.filename or name,
+            sha256=sha256,
+            size_bytes=size_bytes,
+        )
+        return {
+            "ok": True,
+            "name": name,
+            "display_name": display_name,
+            "category": category,
+            "plugin_host": host.id,
+            "plugin_folder": plugin_folder,
+            "filename": file.filename,
+            "size_bytes": size_bytes,
+            "sha256": sha256,
+            "ext": ext,
+        }
+
+    # update existing plugin
+    name = target_package
+    old_sha = existing_pkg.get("sha256") or ""
+    await database.upsert_plugin_package(
+        name=name,
+        display_name=display_name or existing_pkg.get("display_name") or name,
+        category=category,
+        plugin_host=host.id,
+        plugin_folder=plugin_folder,
+        filename=file.filename or name,
+        sha256=sha256,
+        size_bytes=size_bytes,
+    )
+    # Alten Hash bereinigen wenn niemand sonst ihn nutzt
+    if old_sha and old_sha != sha256:
+        if await database.sha256_usage_count(old_sha) == 0:
+            file_uploads.delete_file(old_sha)
+    return {
+        "ok": True,
+        "name": name,
+        "plugin_host": host.id,
+        "plugin_folder": plugin_folder,
+        "filename": file.filename,
+        "size_bytes": size_bytes,
+        "sha256": sha256,
+        "ext": ext,
+    }
 
 
 @router.post("/admin/api/upload-folder", dependencies=[Depends(_require_admin)])

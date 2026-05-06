@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 import choco_scanner
 import database
+import plugin_hosts
 import winget_scanner
 from auth import create_download_token, verify_machine_token
 from config import get_settings, runtime_value
@@ -493,6 +494,110 @@ def _sanitize_winget_extra_args(raw: str) -> str:
 _PROCESS_NAME_RE = re.compile(r"^[A-Za-z0-9._\-]{1,80}$")
 
 
+async def _build_plugin_install_command(pkg: dict, agent_id: str) -> str:
+    """Baut den PowerShell-Wrapper fuer Plugin-Install.
+
+    Plugin-Pakete (Notepad++/KeePass/...) bestehen aus einer einzelnen
+    Datei (.dll, .zip, .plgx) die in den Plugin-Ordner der Host-Anwendung
+    kopiert wird. Die host-spezifischen PowerShell-Snippets liegen in
+    plugin_hosts.PLUGIN_HOSTS — wir injizieren resolve_root + install
+    in den gemeinsamen Wrapper.
+
+    Soft-Error 9030 = Host-Anwendung fehlt → User-Toast
+    'Notepad++ fehlt — bitte zuerst installieren'.
+    """
+    host_id = pkg.get("plugin_host") or ""
+    plugin_folder = pkg.get("plugin_folder") or ""
+    host = plugin_hosts.get_host(host_id)
+    if not host:
+        raise HTTPException(status_code=500, detail=f"Unbekannter Plugin-Host: {host_id!r}")
+    if not plugin_folder:
+        raise HTTPException(status_code=500, detail="Plugin ohne plugin_folder")
+    if not _PLUGIN_FOLDER_RE.fullmatch(plugin_folder):
+        raise HTTPException(status_code=500, detail="Plugin-Folder enthaelt unzulaessige Zeichen")
+
+    sha = pkg.get("sha256")
+    filename = pkg.get("filename") or ""
+    ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+    if ext not in host.accepted_ext:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Plugin-Datei {filename!r} passt nicht zu Host {host.label} ({host.accepted_ext})",
+        )
+    if not sha:
+        raise HTTPException(status_code=500, detail="Plugin ohne sha256")
+
+    token = create_download_token(sha, agent_id)
+    base_url = await _public_proxy_url()
+    download_url = f"{base_url}/api/v1/file/{sha}?token={token}"
+    url_quoted = _ps_quote(download_url)
+
+    nonce = _secrets.token_hex(4)
+    process_csv = plugin_hosts.host_process_csv(host)
+    process_check_block = _build_process_check_block(process_csv) if process_csv else ""
+
+    # plugin_folder validiert per regex, kein extra escape — landet als
+    # PowerShell single-quoted literal.
+    pf_quoted = "'" + plugin_folder.replace("'", "''") + "'"
+
+    # Plugin-Datei wird mit ihrer Original-Endung gespeichert damit der
+    # host-Snippet ($downloadPath -like '*.zip') korrekt switched.
+    return "\n".join([
+        "$ErrorActionPreference = 'Continue'",
+        process_check_block,
+        host.ps_resolve_root,
+        "if (-not $hostRoot) {",
+        f"    _sfProgress 'SOFTSHELF_PLUGIN_HOST_MISSING:{host.label}'",
+        f"    _sfProgress 'Plugin-Host fehlt: {host.label} ist nicht installiert. Bitte zuerst installieren.'",
+        '    cmd /c "exit 9030"',
+        "    return",
+        "}",
+        f"$pluginFolder = {pf_quoted}",
+        f"$downloadPath = Join-Path $env:TEMP 'sf_plugin_{nonce}{ext}'",
+        "_sfProgress 'Download laeuft...'",
+        f"_sfDownload '{url_quoted}' $downloadPath",
+        "_sfProgress 'Download abgeschlossen, installiere Plugin...'",
+        host.ps_install,
+        "Remove-Item $downloadPath -Force -ErrorAction SilentlyContinue",
+        f"_sfProgress 'Plugin {host.label} -> $pluginFolder installiert.'",
+        "",
+    ])
+
+
+def _build_plugin_uninstall_command(pkg: dict) -> str:
+    """Baut PowerShell-Wrapper fuer Plugin-Uninstall — entfernt nur den
+    Plugin-Ordner/-Datei, kein Download noetig."""
+    host_id = pkg.get("plugin_host") or ""
+    plugin_folder = pkg.get("plugin_folder") or ""
+    host = plugin_hosts.get_host(host_id)
+    if not host:
+        raise HTTPException(status_code=500, detail=f"Unbekannter Plugin-Host: {host_id!r}")
+    if not plugin_folder or not _PLUGIN_FOLDER_RE.fullmatch(plugin_folder):
+        raise HTTPException(status_code=500, detail="Plugin ohne gueltigen plugin_folder")
+    pf_quoted = "'" + plugin_folder.replace("'", "''") + "'"
+    process_csv = plugin_hosts.host_process_csv(host)
+    process_check_block = _build_process_check_block(process_csv) if process_csv else ""
+    return "\n".join([
+        "$ErrorActionPreference = 'Continue'",
+        process_check_block,
+        host.ps_resolve_root,
+        "if (-not $hostRoot) {",
+        f"    _sfProgress 'SOFTSHELF_PLUGIN_HOST_MISSING:{host.label}'",
+        f"    _sfProgress 'Plugin-Host fehlt: {host.label}.'",
+        '    cmd /c "exit 9030"',
+        "    return",
+        "}",
+        f"$pluginFolder = {pf_quoted}",
+        host.ps_uninstall,
+        f"_sfProgress 'Plugin {host.label} -> $pluginFolder entfernt.'",
+        "",
+    ])
+
+
+# Plugin-Folder-Regex (gleicher Charset wie in routes/admin.py).
+_PLUGIN_FOLDER_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-+ ]{0,79}$")
+
+
 def _build_process_check_block(process_check: str) -> str:
     """Baut PowerShell-Pre-Check Block: prueft ob bestimmte Prozesse laufen.
     Gibt leeren String zurueck wenn keine Prozessnamen gegeben sind.
@@ -637,6 +742,10 @@ _WINGET_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
         "Anwendung laeuft noch. Bitte alle Fenster schliessen und nochmal versuchen.",
     ),
     (
+        "softshelf_plugin_host_missing:",
+        "Plugin-Host fehlt — bitte zuerst die Host-Anwendung installieren (Notepad++/KeePass/...).",
+    ),
+    (
         "install technology is different",
         "winget kann nicht in-place upgraden — die neue Version verwendet "
         "eine andere Installer-Technologie als die installierte. Vorher "
@@ -665,6 +774,32 @@ _WINGET_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
         "per-user oder Microsoft-Store-Apps die SYSTEM nicht entfernen kann.",
     ),
 ]
+
+
+_PLUGIN_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
+    (
+        "softshelf_process_running:",
+        "Anwendung laeuft noch — bitte schliessen und nochmal versuchen.",
+    ),
+    (
+        "softshelf_plugin_host_missing:",
+        "Plugin-Host fehlt — bitte zuerst die Host-Anwendung installieren.",
+    ),
+]
+
+
+def _detect_plugin_soft_error(output: str, exit_code: int | None) -> str | None:
+    """Soft-Error-Detection fuer Plugin-Type.
+
+    9020 = Process-Check getriggert, 9030 = Host-Anwendung fehlt.
+    """
+    if not output:
+        return None
+    lower = output.lower()
+    for needle, message in _PLUGIN_SOFT_ERROR_PATTERNS:
+        if needle in lower:
+            return message
+    return None
 
 
 def _detect_winget_soft_error(output: str) -> str | None:
@@ -917,6 +1052,25 @@ async def install_package(
     if not _is_safe_package_name(body.package_name):
         raise HTTPException(status_code=400, detail="Ungültiger Paketname")
 
+    if ptype == "plugin":
+        if not pkg.get("sha256"):
+            raise HTTPException(status_code=500, detail="Plugin-Paket ohne Datei-Hash")
+        inner_cmd = await _build_plugin_install_command(pkg, agent_id)
+        job_id = _generate_job_id()
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+        log_id = await database.create_action_log(
+            agent_id, hostname, body.package_name,
+            pkg["display_name"], "plugin", "install", job_id=job_id,
+        )
+        _spawn_bg(_deliver_command_bg(
+            agent_id, hostname, body.package_name, pkg["display_name"],
+            cmd, "install", "plugin", log_id=log_id,
+        ))
+        return SoftwareResponse(
+            status="started",
+            message=f"Plugin-Installation von '{pkg['display_name']}' auf {hostname} gestartet.",
+        )
+
     if ptype == "custom":
         if not pkg.get("sha256"):
             raise HTTPException(status_code=500, detail="Custom-Paket ohne Datei-Hash")
@@ -997,6 +1151,23 @@ async def uninstall_package(
 
     if not _is_safe_package_name(body.package_name):
         raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+
+    if ptype == "plugin":
+        inner_cmd = _build_plugin_uninstall_command(pkg)
+        job_id = _generate_job_id()
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+        log_id = await database.create_action_log(
+            agent_id, hostname, body.package_name,
+            pkg["display_name"], "plugin", "uninstall", job_id=job_id,
+        )
+        _spawn_bg(_deliver_command_bg(
+            agent_id, hostname, body.package_name, pkg["display_name"],
+            cmd, "uninstall", "plugin", log_id=log_id,
+        ))
+        return SoftwareResponse(
+            status="started",
+            message=f"Plugin-Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet.",
+        )
 
     if ptype == "custom":
         uninstall_cmd = pkg.get("uninstall_cmd")
@@ -1099,6 +1270,25 @@ async def dispatch_install_for_agent(
             cmd, action, "winget", log_id=log_id,
         ))
 
+    elif ptype == "plugin":
+        if not _is_safe_package_name(package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        if not pkg.get("sha256"):
+            raise HTTPException(status_code=400, detail="Plugin-Paket ohne Datei")
+        inner_cmd = await _build_plugin_install_command(pkg, agent_id)
+        job_id = _generate_job_id()
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+        log_id = await database.create_action_log(
+            agent_id, hostname, package_name,
+            pkg["display_name"], "plugin", "install", job_id=job_id,
+            workflow_run_id=workflow_run_id,
+        )
+        _spawn_bg(_deliver_command_bg(
+            agent_id, hostname, package_name, pkg["display_name"],
+            cmd, "install", "plugin", log_id=log_id,
+        ))
+        action = "install"
+
     elif ptype == "custom":
         if not _is_safe_package_name(package_name):
             raise HTTPException(status_code=400, detail="Ungültiger Paketname")
@@ -1179,6 +1369,21 @@ async def dispatch_uninstall_for_agent(
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
             cmd, "uninstall", "winget", log_id=log_id,
+        ))
+
+    elif ptype == "plugin":
+        if not _is_safe_package_name(package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        inner_cmd = _build_plugin_uninstall_command(pkg)
+        job_id = _generate_job_id()
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+        log_id = await database.create_action_log(
+            agent_id, hostname, package_name,
+            pkg["display_name"], "plugin", "uninstall", job_id=job_id,
+        )
+        _spawn_bg(_deliver_command_bg(
+            agent_id, hostname, package_name, pkg["display_name"],
+            cmd, "uninstall", "plugin", log_id=log_id,
         ))
 
     elif ptype == "custom":
@@ -1294,6 +1499,9 @@ async def receive_callback(job_id: str, body: CallbackPayload):
             else:
                 status = "error"
                 error_summary = f"Installer beendete mit ExitCode {ec}"
+        elif pkg_type == "plugin" and ec != 0:
+            status = "error"
+            error_summary = f"Plugin-Install beendete mit ExitCode {ec}"
         elif pkg_type == "script" and ec != 0:
             status = "error"
             error_summary = f"Script beendete mit ExitCode {ec}"
@@ -1309,6 +1517,12 @@ async def receive_callback(job_id: str, body: CallbackPayload):
         soft_err = _detect_choco_soft_error(body.output or "", ec)
     elif status == "success" and pkg_type == "winget":
         soft_err = _detect_winget_soft_error(body.output or "")
+    elif pkg_type == "plugin":
+        # Plugin-Soft-Errors auch bei status=='error' pruefen, damit der
+        # User den richtigen Toast bekommt (Process-Check / Host fehlt).
+        det = _detect_plugin_soft_error(body.output or "", ec)
+        if det:
+            soft_err = det
     if soft_err:
         status = "error"
         error_summary = soft_err

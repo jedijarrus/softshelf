@@ -457,6 +457,8 @@ async def init_db():
             ("check_reboot",       "INTEGER NOT NULL DEFAULT 0"),
             ("hide_uninstall",     "INTEGER NOT NULL DEFAULT 0"),
             ("process_check",      "TEXT NOT NULL DEFAULT ''"),
+            ("plugin_host",        "TEXT"),
+            ("plugin_folder",      "TEXT"),
         ]:
             if col not in pkg_cols:
                 await db.execute(f"ALTER TABLE packages ADD COLUMN {col} {ddl}")
@@ -678,7 +680,8 @@ _PKG_COLS = (
     "install_args, uninstall_cmd, detection_name, current_version_id, "
     "archive_type, entry_point, version_pin, winget_publisher, winget_scope, "
     "required, notes, staged_rollout, hidden_in_kiosk, auto_advance, "
-    "install_timeout, check_reboot, hide_uninstall, process_check"
+    "install_timeout, check_reboot, hide_uninstall, process_check, "
+    "plugin_host, plugin_folder"
 )
 
 
@@ -779,6 +782,43 @@ async def upsert_custom_package(
             filename, sha256, size_bytes,
             install_args, uninstall_cmd, detection_name,
             archive_type, entry_point,
+        ))
+        await db.commit()
+
+
+async def upsert_plugin_package(
+    name: str,
+    display_name: str,
+    category: str,
+    plugin_host: str,
+    plugin_folder: str,
+    filename: str,
+    sha256: str,
+    size_bytes: int,
+):
+    """Plugin-Paket (Notepad++/KeePass/...) einfügen oder aktualisieren."""
+    async with _db() as db:
+        await db.execute("""
+            INSERT INTO packages (
+                name, display_name, category, type,
+                filename, sha256, size_bytes,
+                plugin_host, plugin_folder
+            )
+            VALUES (?, ?, ?, 'plugin', ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                display_name   = excluded.display_name,
+                category       = excluded.category,
+                type           = 'plugin',
+                filename       = excluded.filename,
+                sha256         = excluded.sha256,
+                size_bytes     = excluded.size_bytes,
+                plugin_host    = excluded.plugin_host,
+                plugin_folder  = excluded.plugin_folder,
+                updated_at     = datetime('now')
+        """, (
+            name, display_name, category,
+            filename, sha256, size_bytes,
+            plugin_host, plugin_folder,
         ))
         await db.commit()
 
