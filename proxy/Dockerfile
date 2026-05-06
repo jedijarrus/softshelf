@@ -15,6 +15,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # App-Code
 COPY proxy/ .
+# Tray-Version-Source-of-Truth (im client/-Tree, eine einzelne Datei).
+# Wird vom Build-Endpoint gelesen und an den Builder als VERSION-Env
+# weitergegeben — damit Backend-Version != Tray-Version sein kann.
+COPY client/_tray_version.py /app/_tray_version.py
 RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 8765
