@@ -11766,17 +11766,17 @@ async function doPluginUpload() {
   const fileEl = document.getElementById('plugin-file');
   const file = fileEl.files[0];
   if (!file) {
-    notify('Bitte erst eine Datei waehlen', 'error');
+    toast('Bitte erst eine Datei waehlen', true);
     return;
   }
   const host = document.getElementById('plugin-host').value;
   if (!host) {
-    notify('Bitte einen Plugin-Host waehlen', 'error');
+    toast('Bitte einen Plugin-Host waehlen', true);
     return;
   }
   const display = document.getElementById('plugin-display').value.trim();
   if (!display) {
-    notify('Bitte Anzeigename ausfuellen', 'error');
+    toast('Bitte Anzeigename ausfuellen', true);
     return;
   }
   const fd = new FormData();
@@ -11804,7 +11804,7 @@ async function doPluginUpload() {
     progBar.style.width = '0%';
     if (xhr.status >= 200 && xhr.status < 300) {
       try { JSON.parse(xhr.responseText); } catch (e) {}
-      notify('Plugin hochgeladen', 'success');
+      toast('Plugin hochgeladen');
       fileEl.value = '';
       document.getElementById('plugin-display').value = '';
       document.getElementById('plugin-folder').value = '';
@@ -11816,13 +11816,13 @@ async function doPluginUpload() {
         const r = JSON.parse(xhr.responseText);
         if (r.detail) msg = r.detail;
       } catch (e) {}
-      notify(msg, 'error');
+      toast(msg, true);
     }
   };
   xhr.onerror = () => {
     submitBtn.disabled = false;
     progress.classList.remove('active');
-    notify('Netzwerkfehler beim Upload', 'error');
+    toast('Netzwerkfehler beim Upload', true);
   };
   xhr.open('POST', '/admin/api/upload-plugin');
   xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
