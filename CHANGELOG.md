@@ -7,6 +7,52 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.4.0] – 2026-05-06
+
+Agent-Management-Modul: zentrale Sicht und Push-Update fuer Tray-Clients.
+
+### Added — Agent-Management
+
+- **Tray-Client-Telemetrie**: Tray-App sendet bei jedem Health-Poll
+  `X-Softshelf-Client-Version`, `X-Softshelf-Os-Version` und
+  `X-Softshelf-Tray-Uptime` als HTTP-Header. Server persistiert in
+  `agents.client_version`, `client_version_at`, `os_version`,
+  `tray_uptime_s`, `last_telemetry_at`.
+- **Build-Source-of-Truth**: `build_log.is_current` (genau 1 Build
+  als current markiert), `setup_sha` und `tray_sha` werden bei
+  erfolgreichem Build automatisch berechnet und persistiert.
+  `database.get_current_build()` ist die Quelle fuer
+  „welche Tray-Version sollen Agents haben".
+- **Version-Distribution-Banner** im Clients-Tab: zeigt
+  `<aktuell> / <veraltet> / <unbekannt>` mit Soll-Version + Button
+  „Alle veralteten updaten".
+- **Filter-Chips Alle / Veraltet / Unbekannt** im Clients-Tab.
+- **Bulk-Select + Update-Button** pro Agent + global.
+- **`POST /admin/api/agents/{id}/update-client`**: Server schickt
+  PowerShell via Tactical run_command — Setup.exe runterladen,
+  sha256-verifizieren, silent installieren. Setup.exe ersetzt
+  Tray-Files in-place.
+- **`POST /admin/api/agents/bulk-update-client`** mit
+  `only_outdated` und optional `agent_ids[]`. Wenn keine IDs:
+  ganze Flotte (gefiltert nach `only_outdated`).
+- **`GET /admin/api/clients/version-distribution`**: Aggregat-
+  Endpoint fuer das Banner.
+- **`GET /api/v1/client-version-check`**: Public-Endpoint
+  (Tray-JWT) — liefert `{latest, setup_url, setup_sha,
+  min_required, deferred_until}`. Foundation fuer spaeteren
+  Self-Update-Loop, MVP nutzt nur Push.
+- **Settings-Key `client_min_required_version`**: optionaler
+  Force-Update-Floor. Wenn gesetzt + Tray-Version darunter,
+  zeigt Tray einen Force-Modal (Phase 3, aktuell nicht
+  implementiert; Endpoint liefert den Wert bereits).
+
+### Changed
+
+- `get_agents()` liefert jetzt zusaetzlich client_version,
+  os_version, tray_uptime_s, last_telemetry_at.
+
+---
+
 ## [2.3.0] – 2026-05-06
 
 Plugin-Pakettyp, MS-Store-Support, Workflow-Übersicht-Redesign,

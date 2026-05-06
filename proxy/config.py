@@ -137,6 +137,34 @@ RUNTIME_KEYS: dict[str, dict] = {
         "required": False,
         "default": "Softshelf",
     },
+    "client_min_required_version": {
+        "label": "Client-Min-Required-Version",
+        "help": (
+            "Wenn gesetzt: Tray-Apps deren BUILD_VERSION kleiner als dieser "
+            "Wert ist, bekommen einen Force-Update-Modal (kann nicht weggeklickt "
+            "werden). Leer lassen um Force-Updates zu deaktivieren — Tray "
+            "zeigt dann nur eine optionale Update-Benachrichtigung. "
+            "Format: Semver-aehnlich (z. B. 2.3.0). Schmaler Charset: a-z, "
+            "0-9, Punkt, Strich."
+        ),
+        "type": "version",
+        "secret": False,
+        "required": False,
+        "default": "",
+    },
+    "client_reinstall_url": {
+        "label": "Reinstall-URL (Client-Token widerrufen)",
+        "help": (
+            "URL die im Client-Overlay verlinkt wird, wenn der Machine-Token "
+            "vom Server abgelehnt wurde (HTTP 401). Sollte auf eine Seite "
+            "zeigen wo der Setup-Installer heruntergeladen werden kann. "
+            "Leer lassen um den Button zu verstecken."
+        ),
+        "type": "string",
+        "secret": False,
+        "required": False,
+        "default": "",
+    },
     "admin_portal_title": {
         "label": "Admin-Portal-Titel",
         "help": (
@@ -375,6 +403,16 @@ def validate_runtime_value(key: str, value: str) -> str:
                 f"Steuerzeichen oder HTML-Sonderzeichen (<, >, \", ', `) enthalten"
             )
         return normalized
+
+    if t == "version":
+        # Semver-aehnlich, schmaler Charset weil der Wert in PowerShell-
+        # Wrappern und JS-Vergleichen landet. Optional leer.
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._\-+]{0,49}", value):
+            raise ValueError(
+                f"{meta['label']} ist keine gueltige Version (a-z, 0-9, "
+                f"Punkt, Strich, Plus, max 50 Zeichen)"
+            )
+        return value
 
     # string
     min_len = meta.get("min_length", 0)

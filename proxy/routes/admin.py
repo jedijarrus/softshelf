@@ -5142,6 +5142,24 @@ async def trigger_build():
     return {"ok": True, "build_id": build_id, "status": "running"}
 
 
+async def _compute_sha256(path: str) -> str | None:
+    """sha256 einer Datei. Async via to_thread um nicht zu blocken."""
+    import hashlib
+    try:
+        def _calc():
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                while True:
+                    chunk = f.read(1 << 20)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+            return h.hexdigest()
+        return await asyncio.to_thread(_calc)
+    except Exception:
+        return None
+
+
 async def _run_build_async(
     build_id: int,
     builder_url: str,
@@ -5152,9 +5170,17 @@ async def _run_build_async(
     app_name: str,
     icon_b64: str | None,
 ):
-    """Ruft den Builder-Container auf und speichert das Ergebnis im build_log."""
+    """Ruft den Builder-Container auf und speichert das Ergebnis im build_log.
+
+    Bei Erfolg werden die sha256-Hashes der gebauten EXEs (Setup + Tray)
+    berechnet und persistiert — Source-of-Truth fuer Tray-Self-Update.
+    `database.finish_build_log` markiert den erfolgreichen Build automatisch
+    als is_current (alte Builds entmarken).
+    """
     status = "failed"
     log = ""
+    setup_sha: str | None = None
+    tray_sha: str | None = None
     try:
         async with httpx.AsyncClient(timeout=600) as c:
             payload = {
@@ -5174,7 +5200,161 @@ async def _run_build_async(
         log = f"Builder nicht erreichbar: {e}"
         status = "failed"
     finally:
-        await database.finish_build_log(build_id, status, log)
+        # Bei Erfolg sha256 der gebauten EXEs berechnen
+        if status == "success":
+            downloads_dir = "/app/downloads"
+            setup_path = os.path.join(downloads_dir, f"{slug}-setup.exe")
+            tray_path = os.path.join(downloads_dir, f"{slug}.exe")
+            if os.path.isfile(setup_path):
+                setup_sha = await _compute_sha256(setup_path)
+            if os.path.isfile(tray_path):
+                tray_sha = await _compute_sha256(tray_path)
+        await database.finish_build_log(
+            build_id, status, log,
+            setup_sha=setup_sha, tray_sha=tray_sha,
+        )
+
+
+# ── Agent-Management (v2.4 Modul) ─────────────────────────────────────────────
+#
+# Tray-App-Lifecycle: Version-Tracking + Push-Update + Self-Update-Source.
+# Komplementaer zu Tactical (Online-Status, OS-Inventur) — wir tracken das
+# was Tactical NICHT weiss: welche Softshelf-Tray-Version laeuft auf dem
+# Geraet, ist sie aktuell, und wenn nicht: zentral pushen.
+
+@router.get("/admin/api/clients/version-distribution",
+            dependencies=[Depends(_require_admin)])
+async def clients_version_distribution():
+    """Aggregiert Tray-Client-Versions ueber alle Agents.
+
+    Wird vom Banner im Clients-Tab gelesen ("12 von 35 outdated") und
+    fuer den Filter 'outdated_only'."""
+    return await database.get_client_version_distribution()
+
+
+@router.post("/admin/api/agents/{agent_id}/update-client",
+             dependencies=[Depends(_require_admin)])
+async def update_client_for_agent(agent_id: str):
+    """Pushed das aktuelle Setup.exe auf einen Agent via Tactical run_command.
+
+    Setup.exe ist im Container unter /app/downloads/<slug>-setup.exe.
+    Tactical laedt es ueber den Proxy-Public-Endpoint /download/<file>
+    und ruft es silent auf. Setup.exe killt vorher die laufende Tray-App
+    und ersetzt die Files in-place.
+    """
+    if not _AGENT_ID_RE.fullmatch(agent_id):
+        raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
+    agent = await database.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent nicht gefunden")
+
+    current = await database.get_current_build()
+    if not current or current.get("status") != "success":
+        raise HTTPException(
+            status_code=400,
+            detail="Kein aktueller Build vorhanden — bitte zuerst EXEs bauen.",
+        )
+
+    proxy_url = await runtime_value("proxy_public_url")
+    if not proxy_url:
+        raise HTTPException(
+            status_code=400,
+            detail="proxy_public_url nicht gesetzt — Setup-Download ginge nicht.",
+        )
+
+    slug = (await runtime_value("product_slug")) or "Softshelf"
+    setup_url = f"{proxy_url.rstrip('/')}/download/{slug}-setup.exe"
+
+    # PowerShell-Command: Setup runterladen, sha verifizieren, silent-install.
+    # Tactical run_command laeuft als SYSTEM (default), keine User-Interaktion
+    # noetig. Setup.exe kuemmert sich um Tray-Kill + Replace.
+    setup_sha = current.get("setup_sha") or ""
+    sha_check = ""
+    if setup_sha and re.fullmatch(r"[a-f0-9]{64}", setup_sha):
+        sha_check = (
+            f"$want = '{setup_sha}'\n"
+            f"$got = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()\n"
+            f"if ($got -ne $want) {{ throw \"sha-Mismatch: erwartet $want, bekam $got\" }}\n"
+        )
+
+    ps = (
+        "$ErrorActionPreference = 'Stop'\n"
+        f"$tmp = Join-Path $env:TEMP 'softshelf-setup-{current['id']}.exe'\n"
+        f"$url = '{setup_url}'\n"
+        "$wc = New-Object Net.WebClient\n"
+        "$wc.Proxy = [Net.GlobalProxySelection]::GetEmptyWebProxy()\n"
+        "$wc.DownloadFile($url, $tmp)\n"
+        + sha_check +
+        "Start-Process -FilePath $tmp -ArgumentList '/SILENT','/NORESTART' -Verb RunAs\n"
+    )
+
+    try:
+        await TacticalClient().run_command(
+            agent_id, ps, shell="powershell", timeout=60,
+        )
+    except httpx.ReadTimeout:
+        # NATS-Timeout ist OK — Bootstrap ist fire-and-forget
+        pass
+    except Exception as e:
+        logger.warning("update-client delivery failed for %s: %s", agent_id, e)
+        raise HTTPException(status_code=502, detail=f"Tactical-Delivery fehlgeschlagen: {e}")
+
+    return {
+        "ok": True,
+        "agent_id": agent_id,
+        "target_version": current.get("version"),
+    }
+
+
+class BulkUpdateClientBody(BaseModel):
+    agent_ids: list[str] = Field(default_factory=list, max_length=500)
+    only_outdated: bool = True
+
+
+@router.post("/admin/api/agents/bulk-update-client",
+             dependencies=[Depends(_require_admin)])
+async def bulk_update_client(body: BulkUpdateClientBody):
+    """Pusht Setup.exe auf eine Liste von Agents.
+
+    Wenn `only_outdated=True` (Default), werden Agents auf der aktuellen
+    Build-Version uebersprungen. Wenn `agent_ids` leer ist, wird die ganze
+    Flotte adressiert (mit `only_outdated`-Filter).
+    """
+    current = await database.get_current_build()
+    if not current or current.get("status") != "success":
+        raise HTTPException(status_code=400, detail="Kein aktueller Build vorhanden.")
+    target_version = current.get("version")
+
+    # Agent-Liste bestimmen
+    agents = await database.get_agents()
+    if body.agent_ids:
+        wanted = set(body.agent_ids)
+        agents = [a for a in agents if a["agent_id"] in wanted]
+    if body.only_outdated:
+        agents = [a for a in agents if (a.get("client_version") or "") != target_version]
+
+    dispatched = 0
+    skipped = 0
+    failed: list[str] = []
+    for a in agents:
+        if not _AGENT_ID_RE.fullmatch(a["agent_id"]):
+            skipped += 1
+            continue
+        try:
+            await update_client_for_agent(a["agent_id"])
+            dispatched += 1
+        except HTTPException as e:
+            failed.append(f"{a.get('hostname')}: {e.detail}")
+        except Exception as e:
+            failed.append(f"{a.get('hostname')}: {e}")
+
+    return {
+        "ok": True,
+        "target_version": target_version,
+        "dispatched": dispatched,
+        "skipped": skipped,
+        "failed": failed,
+    }
 
 
 # ── Winget ────────────────────────────────────────────────────────────────────

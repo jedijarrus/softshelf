@@ -546,9 +546,13 @@ async def client_config():
     """
     from config import runtime_value
     app_name = await runtime_value("client_app_name") or "Softshelf"
+    # Optional: Reinstall-URL fuer das 401-Overlay (Token-widerrufen).
+    # Wenn nicht gesetzt, fallt das Frontend auf einen IT-Hinweis-Text zurueck.
+    reinstall_url = await runtime_value("client_reinstall_url") or ""
     return {
         "app_name": app_name,
         "version": VERSION,
+        "reinstall_url": reinstall_url,
     }
 
 
@@ -559,6 +563,12 @@ async def public_icon():
     if not os.path.isfile(icon_path):
         raise HTTPException(status_code=404)
     return FileResponse(icon_path, media_type="image/x-icon")
+
+
+# Validation patterns fuer Tray-Telemetrie-Header (v2.4 Agent-Mgmt-Modul).
+# Defensive — landet in DB, deshalb strikt charset-limit.
+_TEL_VERSION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-+]{0,49}$")
+_TEL_OS_RE = re.compile(r"^[A-Za-z0-9 ._\-/()]{1,80}$")
 
 
 @app.get("/api/v1/health")
@@ -586,9 +596,89 @@ async def health(request: Request):
                 win_user = request.headers.get("x-softshelf-user", "").strip()[:60]
                 if win_user and re.fullmatch(r'[^\x00-\x1f\x7f<>"\'`]{1,60}', win_user):
                     await database.update_agent_user(agent_id, win_user)
+
+                # Tray-Telemetrie via Header (v2.4). Leise schlucken bei
+                # Validierungsfehlern damit das Health-Polling nicht bricht.
+                try:
+                    cv = request.headers.get("x-softshelf-client-version", "").strip()
+                    ov = request.headers.get("x-softshelf-os-version", "").strip()
+                    tu = request.headers.get("x-softshelf-tray-uptime", "").strip()
+                    update_kwargs: dict = {}
+                    if cv and _TEL_VERSION_RE.fullmatch(cv):
+                        update_kwargs["client_version"] = cv
+                    if ov and _TEL_OS_RE.fullmatch(ov):
+                        update_kwargs["os_version"] = ov
+                    if tu and tu.isdigit() and 0 <= int(tu) <= 31_536_000:  # max 1y
+                        update_kwargs["tray_uptime_s"] = int(tu)
+                    if update_kwargs:
+                        await database.update_agent_telemetry(agent_id, **update_kwargs)
+                except Exception:
+                    pass
     except Exception:
         pass  # kein gueltiges Token — kein pending_actions, das ist ok
     return result
+
+
+@app.get("/api/v1/client-version-check")
+async def client_version_check(request: Request):
+    """Tray-Self-Update: liefert latest gebauten Tray-Build + Setup-URL.
+
+    Tray pollt das alle paar Stunden, vergleicht eigene BUILD_VERSION mit
+    `latest`, zieht bei Bedarf das Setup.exe und installiert es.
+
+    Authentication: Machine-JWT (gleicher Mechanismus wie /packages).
+
+    Response:
+        latest          str  — Version-Tag des aktuellen Build (z.B. "2.3.0")
+                              oder null wenn noch nie gebaut
+        setup_url       str  — relativer Pfad zum Setup.exe Download
+        setup_sha       str  — sha256 des aktuellen Setup.exe (Integrity)
+        min_required    str  — wenn gesetzt + tray.current < min_required,
+                              MUSS Tray Force-Update zeigen (Modal nicht
+                              wegklickbar). Default null.
+        deferred_until  str  — ISO-Timestamp; bis dann darf Tray die
+                              Update-Notification verschoben halten. Wird
+                              vom User durch "Spaeter erinnern" gesetzt.
+                              Aktuell server-seitig nicht persistiert (TODO).
+    """
+    # Lockerer Auth: kein 401 hier, weil das Polling unauthenticated
+    # Tray-Apps auch funktionieren sollte (z.B. nach Token-Revocation
+    # zeigen wir trotzdem ob Update verfuegbar). Wir wollen aber
+    # missbrauch-resistent sein.
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        # Kein Token = nur public-Build-Info, kein min_required-Override
+        pass
+
+    try:
+        current_build = await database.get_current_build()
+    except Exception:
+        current_build = None
+
+    latest = (current_build or {}).get("version")
+    setup_sha = (current_build or {}).get("setup_sha")
+
+    # Slug aus Settings holen — der Setup.exe-Filename ist
+    # `<slug>-setup.exe`. Default Softshelf wenn nicht konfiguriert.
+    try:
+        slug = (await runtime_value("product_slug")) or "Softshelf"
+    except Exception:
+        slug = "Softshelf"
+    setup_filename = f"{slug}-setup.exe"
+
+    try:
+        min_required = await runtime_value("client_min_required_version")
+    except Exception:
+        min_required = None
+
+    return {
+        "latest": latest,
+        "setup_url": f"/download/{setup_filename}",
+        "setup_filename": setup_filename,
+        "setup_sha": setup_sha,
+        "min_required": min_required or None,
+        "deferred_until": None,
+    }
 
 
 _LANDING_PATH = os.path.join(os.path.dirname(__file__), "templates", "landing.html")
