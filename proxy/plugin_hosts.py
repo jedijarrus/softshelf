@@ -48,20 +48,50 @@ $hostRoot = @('C:\Program Files\Notepad++','C:\Program Files (x86)\Notepad++') |
 $target = Join-Path $hostRoot ('plugins\' + $pluginFolder)
 New-Item -ItemType Directory -Force -Path $target | Out-Null
 if ($downloadPath -like '*.zip') {
-    # Defense-in-depth gegen ZIP-Slip: Pre-Validate dass alle Eintraege relativ
-    # bleiben. Verlaesst sich nicht allein auf Expand-Archive's interne Checks.
-    $zip = [System.IO.Compression.ZipFile]::OpenRead($downloadPath)
+    # Defense-in-depth gegen ZIP-Slip: Pre-Validate dass alle Eintraege
+    # relativ bleiben. PS 5.1 hat das Compression-Assembly nicht im
+    # Default-Load — Add-Type laedt es. Wenn das fehlschlaegt, fallen
+    # wir auf Expand-Archive's eigene Sicherung zurueck (PS 5.1+ ist
+    # gegen ZIP-Slip seit 2019 gepatcht).
     try {
-        foreach ($e in $zip.Entries) {
-            $p = $e.FullName
-            if ($p -match '\.\.[\\/]' -or $p.StartsWith('/') -or $p.StartsWith('\') -or $p -match '^[A-Za-z]:') {
-                throw "ZIP-Eintrag mit verdaechtigem Pfad: $p"
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($downloadPath)
+        try {
+            foreach ($e in $zip.Entries) {
+                $p = $e.FullName
+                if ($p -match '\.\.[\\/]' -or $p.StartsWith('/') -or $p.StartsWith('\') -or $p -match '^[A-Za-z]:') {
+                    throw "ZIP-Eintrag mit verdaechtigem Pfad: $p"
+                }
             }
+        } finally {
+            $zip.Dispose()
+        }
+    } catch [System.IO.FileLoadException], [System.IO.FileNotFoundException], [System.Management.Automation.RuntimeException] {
+        if ($_.Exception.Message -like '*verdaechtigem Pfad*') { throw }
+        _sfProgress "Hinweis: ZIP-Slip Pre-Check uebersprungen ($($_.Exception.Message))"
+    }
+    # Manche Notepad++-Plugin-ZIPs haben den Inhalt in einem Sub-Folder
+    # (z.B. ZIP mit 'URLPlugin\URLPlugin.dll' statt nur 'URLPlugin.dll').
+    # Wir entpacken in einen Staging-Ordner, suchen die DLL und kopieren
+    # sie flach in den NPP-Plugin-Ordner.
+    $stage = Join-Path $env:TEMP ('sf_npp_stage_' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    try {
+        Expand-Archive -Path $downloadPath -DestinationPath $stage -Force
+        $dlls = Get-ChildItem -Path $stage -Filter '*.dll' -Recurse -File
+        if ($dlls.Count -eq 0) {
+            throw "Keine .dll in der Plugin-ZIP gefunden."
+        }
+        foreach ($dll in $dlls) {
+            Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $target $dll.Name) -Force
+        }
+        # Optionale Begleitdateien (.xml/.txt fuer manche NPP-Plugins) auch flach kopieren
+        Get-ChildItem -Path $stage -Include '*.xml','*.txt','*.ini' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $target $_.Name) -Force
         }
     } finally {
-        $zip.Dispose()
+        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Expand-Archive -Path $downloadPath -DestinationPath $target -Force
 } else {
     Copy-Item $downloadPath (Join-Path $target ($pluginFolder + '.dll')) -Force
 }
