@@ -947,7 +947,14 @@ function renderRow(pkg) {{
 
   // Meta line
   let meta = '';
-  const source = pkg.type === 'custom' ? 'Eigenes Paket' : pkg.type;
+  let source;
+  if (pkg.type === 'custom') {{
+    source = 'Eigenes Paket';
+  }} else if (pkg.type === 'plugin') {{
+    source = (pkg.plugin_host_label || 'Plugin') + ' Plugin';
+  }} else {{
+    source = pkg.type;
+  }}
   if (isUpdate && pkg.installed_version_label && pkg.current_version_label) {{
     meta = `<span class="update-label">Update: ${{escHtml(pkg.installed_version_label)}} \\u2192 ${{escHtml(pkg.current_version_label)}}</span>`;
   }} else if (isUpdate) {{
@@ -1187,6 +1194,8 @@ class PackageApi:
                     "update_available": p.update_available,
                     "hide_uninstall": getattr(p, "hide_uninstall", False),
                     "process_check": getattr(p, "process_check", "") or "",
+                    "plugin_host": getattr(p, "plugin_host", None),
+                    "plugin_host_label": getattr(p, "plugin_host_label", None),
                 }
                 for p in pkgs
             ]

@@ -4467,7 +4467,12 @@ async def upload_plugin_file(
         raise HTTPException(status_code=400, detail=f"Unbekannter Plugin-Host: {plugin_host}")
 
     display_name = (display_name or "").strip()
-    category = (category or "").strip() or "Plugins"
+    # Default-Kategorie: Host-Label (z.B. "Notepad++") damit Plugins automatisch
+    # unter ihrer Host-App im Kiosk-Grid gruppiert werden. Ueberschreibbar.
+    if not (category or "").strip() or (category or "").strip() == "Plugins":
+        category = host.label
+    else:
+        category = (category or "").strip()
     plugin_folder = (plugin_folder or "").strip()
 
     if not _TEXT_RE.fullmatch(category):
