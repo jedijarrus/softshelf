@@ -1,6 +1,6 @@
 # Softshelf – Systemarchitektur
 
-**Version:** 2.3.0
+**Version:** 2.4.0
 **Stand:** 2026-05-06
 
 > **Softshelf ist eine Windows-Software-Verteilungs-Plattform** mit Tactical-
@@ -138,6 +138,11 @@ agents
   last_seen
   token_version             -- JWT-Revocation
   ring          INTEGER    -- 1=Canary, 2=Pilot, 3=Produktion (Default)
+  client_version            -- Tray-EXE-Version (BUILD_VERSION) — v2.4
+  client_version_at         -- letzte Telemetrie-Meldung — v2.4
+  os_version                -- aus Tray-Header X-Softshelf-Os-Version — v2.4
+  tray_uptime_s             -- Tray-Process-Uptime in Sekunden — v2.4
+  last_telemetry_at         -- letzter Telemetrie-Header-Empfang — v2.4
 
 agent_blocklist
   agent_id      PK
@@ -654,6 +659,12 @@ Alle mit `max_instances=1, coalesce=True`.
 **Home/Monitoring:**
 - `GET /dashboard`, `/fleet-errors`, `/ack-error`, `/fleet-errors/ack-all`
 - `GET /agents/{id}/last-action-output`, `POST /agents/{id}/ack-error`
+
+**Agent-Management (v2.4):**
+- `GET /clients/version-distribution` — Aggregat fuer Banner (current/outdated/unknown)
+- `POST /agents/{id}/update-client` — Setup.exe via Tactical pushen
+- `POST /agents/bulk-update-client` — Bulk mit `only_outdated`-Filter
+- `GET /api/v1/client-version-check` (public, Tray-JWT) — liefert latest + setup_url + setup_sha + min_required
 
 **Pakete:**
 - `GET /enabled`, `POST /enable`, `PATCH /enable/{name}`, `POST /disable/{name}`

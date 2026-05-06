@@ -430,6 +430,30 @@ async def init_db():
         if "logged_in_user" not in cols:
             await db.execute("ALTER TABLE agents ADD COLUMN logged_in_user TEXT")
 
+        # Migration: Client-Telemetrie (v2.4 / Agent-Management-Modul)
+        if "client_version" not in cols:
+            await db.execute("ALTER TABLE agents ADD COLUMN client_version TEXT")
+        if "client_version_at" not in cols:
+            await db.execute("ALTER TABLE agents ADD COLUMN client_version_at TEXT")
+        if "os_version" not in cols:
+            await db.execute("ALTER TABLE agents ADD COLUMN os_version TEXT")
+        if "tray_uptime_s" not in cols:
+            await db.execute("ALTER TABLE agents ADD COLUMN tray_uptime_s INTEGER")
+        if "last_telemetry_at" not in cols:
+            await db.execute("ALTER TABLE agents ADD COLUMN last_telemetry_at TEXT")
+
+        # Migration: build_log.is_current + setup_sha (v2.4)
+        async with db.execute("PRAGMA table_info(build_log)") as cur:
+            bl_cols = {row[1] for row in await cur.fetchall()}
+        if "is_current" not in bl_cols:
+            await db.execute(
+                "ALTER TABLE build_log ADD COLUMN is_current INTEGER NOT NULL DEFAULT 0"
+            )
+        if "setup_sha" not in bl_cols:
+            await db.execute("ALTER TABLE build_log ADD COLUMN setup_sha TEXT")
+        if "tray_sha" not in bl_cols:
+            await db.execute("ALTER TABLE build_log ADD COLUMN tray_sha TEXT")
+
         # Migration: agent_installations.installed_sha (fuer Plugin-Updates)
         async with db.execute("PRAGMA table_info(agent_installations)") as cur:
             ai_cols = {row[1] for row in await cur.fetchall()}
@@ -1298,7 +1322,10 @@ async def get_agents() -> list[dict]:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT a.agent_id, a.hostname, a.registered_at, a.last_seen, "
-            "a.ring, a.logged_in_user, (b.agent_id IS NOT NULL) AS banned "
+            "a.ring, a.logged_in_user, "
+            "a.client_version, a.client_version_at, a.os_version, "
+            "a.tray_uptime_s, a.last_telemetry_at, "
+            "(b.agent_id IS NOT NULL) AS banned "
             "FROM agents a "
             "LEFT JOIN agent_blocklist b ON b.agent_id = a.agent_id "
             "ORDER BY a.hostname"
@@ -1750,13 +1777,137 @@ async def start_build_log(proxy_url: str, version: str) -> int:
         return cur.lastrowid
 
 
-async def finish_build_log(build_id: int, status: str, log: str):
+async def finish_build_log(
+    build_id: int, status: str, log: str,
+    setup_sha: str | None = None, tray_sha: str | None = None,
+):
+    """Schliesst einen Build-Log-Eintrag ab. Bei Erfolg + sha-Werten wird
+    der Build automatisch als is_current markiert (alte Builds entmarken)."""
     async with _db() as db:
         await db.execute(
-            "UPDATE build_log SET status = ?, log = ?, finished_at = datetime('now') WHERE id = ?",
-            (status, log, build_id),
+            "UPDATE build_log SET status = ?, log = ?, finished_at = datetime('now'), "
+            "setup_sha = ?, tray_sha = ? WHERE id = ?",
+            (status, log, setup_sha, tray_sha, build_id),
+        )
+        if status == "success":
+            # Auto-mark dieses Build als current, alle anderen entmarken.
+            await db.execute("UPDATE build_log SET is_current = 0")
+            await db.execute(
+                "UPDATE build_log SET is_current = 1 WHERE id = ?", (build_id,)
+            )
+        await db.commit()
+
+
+async def get_current_build() -> dict | None:
+    """Liefert den aktuell als 'is_current' markierten Build oder None.
+
+    Quelle of truth fuer 'welche Tray-Version sollen Agents haben'.
+    """
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, started_at, finished_at, status, version, "
+            "setup_sha, tray_sha "
+            "FROM build_log WHERE is_current = 1 ORDER BY id DESC LIMIT 1"
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def set_current_build(build_id: int):
+    """Manuell einen Build als current setzen (Admin-Override / Rollback)."""
+    async with _db() as db:
+        await db.execute("UPDATE build_log SET is_current = 0")
+        await db.execute(
+            "UPDATE build_log SET is_current = 1 WHERE id = ?", (build_id,)
         )
         await db.commit()
+
+
+async def update_agent_telemetry(
+    agent_id: str, *, client_version: str | None = None,
+    os_version: str | None = None, tray_uptime_s: int | None = None,
+):
+    """Aktualisiert die Telemetrie-Felder eines Agents — wird vom
+    /api/v1/health-Endpoint aufgerufen wenn der Tray-Client einen
+    erweiterten Body schickt."""
+    sets: list[str] = []
+    vals: list = []
+    if client_version is not None:
+        sets.append("client_version = ?")
+        sets.append("client_version_at = datetime('now')")
+        vals.append(client_version)
+    if os_version is not None:
+        sets.append("os_version = ?")
+        vals.append(os_version)
+    if tray_uptime_s is not None:
+        sets.append("tray_uptime_s = ?")
+        vals.append(int(tray_uptime_s))
+    sets.append("last_telemetry_at = datetime('now')")
+    if not sets:
+        return
+    vals.append(agent_id)
+    async with _db() as db:
+        await db.execute(
+            f"UPDATE agents SET {', '.join(sets)} WHERE agent_id = ?",
+            tuple(vals),
+        )
+        await db.commit()
+
+
+async def get_client_version_distribution() -> dict:
+    """Aggregiert client_version ueber alle Agents — fuer Banner und Charts.
+
+    Returns:
+        {
+          "by_version": {"2.3.0": 28, "2.2.0": 6, None: 3},
+          "total": 37,
+          "current": <count auf current_build>,
+          "outdated": <count auf andere known versions>,
+          "unknown": <count mit client_version=NULL>,
+          "current_version": "2.3.0",
+        }
+    """
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        # Get current build version
+        async with db.execute(
+            "SELECT version FROM build_log WHERE is_current = 1 ORDER BY id DESC LIMIT 1"
+        ) as cur:
+            cb = await cur.fetchone()
+        current_version = cb["version"] if cb else None
+
+        async with db.execute(
+            "SELECT client_version, COUNT(*) AS n FROM agents "
+            "GROUP BY client_version"
+        ) as cur:
+            rows = await cur.fetchall()
+
+    by_version: dict[str | None, int] = {}
+    total = 0
+    current = 0
+    outdated = 0
+    unknown = 0
+    for r in rows:
+        v = r["client_version"]
+        n = r["n"]
+        by_version[v] = n
+        total += n
+        if v is None or v == "":
+            unknown += n
+        elif current_version and v == current_version:
+            current += n
+        else:
+            outdated += n
+
+    return {
+        "by_version": by_version,
+        "total": total,
+        "current": current,
+        "outdated": outdated,
+        "unknown": unknown,
+        "current_version": current_version,
+    }
 
 
 async def get_builds(limit: int = 10) -> list[dict]:

@@ -8,6 +8,34 @@ from dataclasses import dataclass
 
 from config import ClientConfig
 
+# Tray-Start-Time fuer Uptime-Telemetrie. Wird beim ersten Modul-Import
+# gesetzt — also beim Tray-App-Boot.
+_TRAY_START_TS = time.time()
+
+
+def _build_version() -> str:
+    """Liefert die einkompilierte BUILD_VERSION oder fallback."""
+    try:
+        from _build_config import BUILD_VERSION  # type: ignore
+        return str(BUILD_VERSION)
+    except Exception:
+        return "0.0.0-dev"
+
+
+def _os_version() -> str:
+    """Windows-Version als kurzer String fuer Telemetrie. Best-effort."""
+    try:
+        import platform
+        # Beispiel: "Windows-10-10.0.22631-SP0" → "Win11 22631"
+        rel = platform.release() or ""
+        ver = platform.version() or ""
+        # Verkurzte Form
+        if rel and ver:
+            return f"Win{rel} {ver.split('.')[-1]}"[:80]
+        return platform.platform()[:80]
+    except Exception:
+        return ""
+
 # Retry-Verhalten fuer transiente Netzwerkfehler bei idempotenten GETs.
 # Wir retryen GENAU EIN MAL nach 2s. Nur bei Connection-Fehlern oder
 # 502/503/504. Niemals fuer POST (nicht idempotent) und nicht fuer 4xx.
@@ -63,14 +91,23 @@ def _get_windows_user() -> str:
 class KioskApiClient:
     def __init__(self, config: ClientConfig):
         self._base = config.proxy_url
+        # Telemetrie-Header: Tray-Version + OS einmal beim Init bestimmen
+        # (aendern sich nicht zur Laufzeit). Tray-Uptime wird per-call gesetzt.
+        self._build_version = _build_version()
+        self._os_version = _os_version()
         self._headers = {
             "Authorization": f"Bearer {config.machine_token}",
             "Content-Type": "application/json",
             "X-Softshelf-User": _get_windows_user(),
+            "X-Softshelf-Client-Version": self._build_version,
+            "X-Softshelf-Os-Version": self._os_version,
         }
 
     def _client(self) -> httpx.Client:
-        return httpx.Client(headers=self._headers, timeout=15, verify=True)
+        # Per-call Uptime-Header damit der Server lange Tray-Sessions sieht
+        headers = dict(self._headers)
+        headers["X-Softshelf-Tray-Uptime"] = str(int(time.time() - _TRAY_START_TS))
+        return httpx.Client(headers=headers, timeout=15, verify=True)
 
     def get_packages(self) -> list[Package]:
         with self._client() as c:
@@ -146,6 +183,26 @@ class KioskApiClient:
         except Exception:
             pass
         return {"status": "error"}
+
+    def client_version_check(self) -> dict | None:
+        """Holt Tray-Self-Update-Info vom Server.
+
+        Returns dict mit `latest`, `setup_url`, `setup_sha`, `min_required`
+        oder None bei Fehler. Tray-App vergleicht selbst current vs latest.
+        """
+        try:
+            with self._client() as c:
+                r = _get_with_retry(
+                    c, f"{self._base}/api/v1/client-version-check", timeout=5,
+                )
+                if r.status_code == 200:
+                    return r.json()
+        except Exception:
+            pass
+        return None
+
+    def current_build_version(self) -> str:
+        return self._build_version
 
     def workflow_reboot_now(self, run_id: int) -> bool:
         """Returns True only if server accepted the reboot (ok=true)."""
