@@ -5892,6 +5892,10 @@ body.help-active [data-help]:not(.tab)::after {
                oninput="onWingetSearch(this.value)" autocomplete="off">
       </div>
     </div>
+    <div style="padding:0 24px 4px;font-size:11px;color:var(--fg-4)">
+      Nur Community-Source. MS-Store-Apps (z. B. GlobalProtect)
+      <a href="javascript:openMsstoreModal()" style="color:var(--fg);text-decoration:underline;cursor:pointer">per ID hinzufuegen →</a>
+    </div>
     <div class="panel-body" id="winget-search-results">
       <div class="panel-hint">Tippe einen Paket- oder Hersteller-Namen um im Microsoft-Catalog zu suchen.</div>
     </div>
@@ -6288,6 +6292,48 @@ body.help-active [data-help]:not(.tab)::after {
 </div>
 
 <!-- BAN MODAL -->
+<!-- MS-STORE direct-add Modal -->
+<div class="modal" id="msstore-modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="modal-tag">MS STORE</div>
+      <h3 class="modal-title">Microsoft-Store-App per ID hinzufuegen</h3>
+    </div>
+    <div class="modal-body" style="padding: 0 20px 16px">
+      <p style="font-size: 12.5px; color: var(--fg-3); margin: 0 0 14px; line-height: 1.55">
+        Auf einem Test-Agent <code>winget search &lt;name&gt;</code> ausfuehren — die ID
+        beginnt mit <code>9</code> und ist 12 Zeichen lang (z. B. <code>9NBLGGH6BZL3</code>).
+        Wird bei Install/Uninstall mit <code>--source msstore</code> und im User-Kontext ausgefuehrt.
+      </p>
+      <div class="pw-field">
+        <label for="msstore-id">Store-ID</label>
+        <input class="input" type="text" id="msstore-id" maxlength="12"
+               placeholder="9NBLGGH6BZL3" style="font-family:var(--mono)">
+      </div>
+      <div class="pw-field">
+        <label for="msstore-display">Anzeigename</label>
+        <input class="input" type="text" id="msstore-display" maxlength="80"
+               placeholder="z. B. GlobalProtect">
+      </div>
+      <div class="pw-field">
+        <label for="msstore-publisher">Publisher (optional)</label>
+        <input class="input" type="text" id="msstore-publisher" maxlength="120"
+               placeholder="z. B. Palo Alto Networks">
+      </div>
+      <div class="pw-field">
+        <label for="msstore-category">Kategorie</label>
+        <input class="input" type="text" id="msstore-category" maxlength="40"
+               value="Allgemein">
+      </div>
+      <div class="pw-error" id="msstore-error"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost btn-sm" type="button" onclick="closeMsstoreModal()">Abbrechen</button>
+      <button class="btn btn-primary btn-sm" type="button" id="msstore-submit" onclick="submitMsstore()">Hinzufuegen</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="ban-modal">
   <div class="modal-card">
     <div class="modal-head">
@@ -11648,6 +11694,62 @@ function agentBan() {
 
 function closeBanModal() {
   document.getElementById('ban-modal').classList.remove('open');
+}
+
+// ── MS-Store direct-add ────────────────────────────────────────────────
+function openMsstoreModal() {
+  document.getElementById('msstore-id').value = '';
+  document.getElementById('msstore-display').value = '';
+  document.getElementById('msstore-publisher').value = '';
+  document.getElementById('msstore-category').value = 'Allgemein';
+  document.getElementById('msstore-error').textContent = '';
+  const btn = document.getElementById('msstore-submit');
+  btn.disabled = false;
+  btn.textContent = 'Hinzufuegen';
+  document.getElementById('msstore-modal').classList.add('open');
+  setTimeout(() => document.getElementById('msstore-id').focus(), 120);
+}
+
+function closeMsstoreModal() {
+  document.getElementById('msstore-modal').classList.remove('open');
+}
+
+async function submitMsstore() {
+  const id = document.getElementById('msstore-id').value.trim().toUpperCase();
+  const display = document.getElementById('msstore-display').value.trim();
+  const publisher = document.getElementById('msstore-publisher').value.trim();
+  const category = document.getElementById('msstore-category').value.trim() || 'Allgemein';
+  const errEl = document.getElementById('msstore-error');
+  errEl.textContent = '';
+  if (!/^9[A-Z0-9]{11}$/.test(id)) {
+    errEl.textContent = 'ID muss mit "9" beginnen und 12 Zeichen alphanumerisch sein.';
+    return;
+  }
+  if (!display) {
+    errEl.textContent = 'Anzeigename fehlt.';
+    return;
+  }
+  const btn = document.getElementById('msstore-submit');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Speichere…';
+  try {
+    await api('POST', '/admin/api/winget/activate', {
+      id: id,
+      display_name: display,
+      category: category,
+      publisher: publisher,
+      latest_version: '',
+      scope: 'user',
+    });
+    toast(`MS-Store-App „${display}" hinzugefuegt`);
+    closeMsstoreModal();
+    closeAll();
+    await init();
+  } catch (e) {
+    errEl.textContent = e.message || 'Fehler beim Hinzufuegen';
+    btn.disabled = false;
+    btn.textContent = 'Hinzufuegen';
+  }
 }
 
 async function submitBan() {

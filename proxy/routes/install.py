@@ -52,10 +52,16 @@ async def _deliver_command_bg(
     action: str,
     pkg_type: str,
     log_id: int | None = None,
+    run_as_user: bool = False,
 ):
     """Unified delivery for all package types. Fire-and-forget.
     Pre-Flight → Bootstrap senden → FERTIG.
-    Result comes via callback endpoint — no output parsing here."""
+    Result comes via callback endpoint — no output parsing here.
+
+    `run_as_user=True` schickt den Befehl an Tactical mit run_as_user-Flag —
+    noetig fuer msstore-Apps und winget-per-user-Pakete (LastPass etc).
+    Voraussetzung: ein User ist am Agent eingeloggt.
+    """
     if log_id:
         try:
             await database.update_action_log_status(log_id, "running")
@@ -82,10 +88,15 @@ async def _deliver_command_bg(
 
     # Bootstrap senden — fire-and-forget
     try:
-        await TacticalClient().run_command(agent_id, cmd, shell="powershell", timeout=60)
-        logger.info("%s %s delivered: %s auf %s", pkg_type, action, display_name, hostname)
+        await TacticalClient().run_command(
+            agent_id, cmd, shell="powershell", timeout=60,
+            run_as_user=run_as_user,
+        )
+        suffix = " (run_as_user)" if run_as_user else ""
+        logger.info("%s %s delivered%s: %s auf %s", pkg_type, action, suffix, display_name, hostname)
     except httpx.ReadTimeout:
-        logger.info("%s %s delivered (async): %s auf %s", pkg_type, action, display_name, hostname)
+        suffix = " (run_as_user)" if run_as_user else ""
+        logger.info("%s %s delivered (async)%s: %s auf %s", pkg_type, action, suffix, display_name, hostname)
     except Exception as e:
         error_msg = str(e)[:300]
         logger.warning("%s %s delivery failed: %s auf %s — %s", pkg_type, action, display_name, hostname, error_msg)
@@ -641,6 +652,16 @@ if ($running.Count -gt 0) {{
 """
 
 
+# MS-Store-Pakete haben eine andere ID-Form: 12-Zeichen, beginnend mit '9'.
+# Beispiel: 9NBLGGH6BZL3 (GlobalProtect). Werden via `--source msstore`
+# installiert und sind ueberwiegend per-user-Apps (UWP/Appx).
+_MSSTORE_ID_RE = re.compile(r"^9[A-Z0-9]{11}$")
+
+
+def _is_msstore_id(winget_id: str) -> bool:
+    return bool(_MSSTORE_ID_RE.fullmatch(winget_id or ""))
+
+
 def _build_winget_command(
     action: str,
     winget_id: str,
@@ -672,6 +693,8 @@ def _build_winget_command(
         raise ValueError(f"unsupported winget action: {action}")
     _check_winget_id(winget_id)
     safe_id = winget_id  # Regex-validiert, kein extra Escape nötig
+    is_msstore = _is_msstore_id(winget_id)
+    source_name = "msstore" if is_msstore else "winget"
     version_arg = ""
     if version and action in ("install", "upgrade"):
         # Defense-in-depth: Version nur alphanumerisch + Punkt + Bindestrich
@@ -689,9 +712,14 @@ def _build_winget_command(
         if safe_extra:
             winget_args = f"{winget_args} {safe_extra}"
     else:
-        scope_arg = "--scope machine " if include_scope_machine else ""
+        # msstore-Pakete sind ueberwiegend per-user und kennen kein
+        # --scope machine. Wir lassen den scope-Flag dort weg.
+        if is_msstore:
+            scope_arg = ""
+        else:
+            scope_arg = "--scope machine " if include_scope_machine else ""
         winget_args = (
-            f"{action} --id '{safe_id}' --source winget {scope_arg}--silent "
+            f"{action} --id '{safe_id}' --source {source_name} {scope_arg}--silent "
             f"--accept-package-agreements --accept-source-agreements "
             f"--disable-interactivity -h "
             f"{version_arg}{safe_extra}"
@@ -777,6 +805,17 @@ _WINGET_SOFT_ERROR_PATTERNS: list[tuple[str, str]] = [
         "no uninstall information found",
         "winget hat keine Uninstall-Information gefunden — typisch bei "
         "per-user oder Microsoft-Store-Apps die SYSTEM nicht entfernen kann.",
+    ),
+    (
+        "you must accept the license agreements",
+        "MS-Store-Paket: License-Agreement nicht akzeptiert. Sollte mit "
+        "--accept-package-agreements eigentlich passieren — moeglicherweise "
+        "kennt der Agent die msstore-Source noch nicht (winget source reset & update).",
+    ),
+    (
+        "no application is installed matching",
+        "MS-Store-Paket nicht gefunden — entweder ID falsch oder die App ist "
+        "in dieser Region nicht verfuegbar.",
     ),
 ]
 
@@ -1047,6 +1086,7 @@ async def install_package(
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
             cmd, action, "winget", log_id=log_id,
+            run_as_user=_is_msstore_id(body.package_name),
         ))
         verb = "Aktualisierung" if action == "upgrade" else "Installation"
         msg = (
@@ -1148,6 +1188,7 @@ async def uninstall_package(
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
             cmd, "uninstall", "winget", log_id=log_id,
+            run_as_user=_is_msstore_id(body.package_name),
         ))
         msg = (
             f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
@@ -1274,6 +1315,7 @@ async def dispatch_install_for_agent(
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
             cmd, action, "winget", log_id=log_id,
+            run_as_user=_is_msstore_id(package_name),
         ))
 
     elif ptype == "plugin":
@@ -1375,6 +1417,7 @@ async def dispatch_uninstall_for_agent(
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
             cmd, "uninstall", "winget", log_id=log_id,
+            run_as_user=_is_msstore_id(package_name),
         ))
 
     elif ptype == "plugin":
