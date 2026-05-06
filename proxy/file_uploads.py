@@ -107,6 +107,26 @@ async def save_upload(file: UploadFile, max_size_bytes: int) -> tuple[str, int, 
     return final_path, size, sha256
 
 
+# Magic-Byte-Signatures fuer Defense-in-depth Datei-Validation.
+# Match wenn die Datei mit einem dieser Prefixes startet.
+_EXT_MAGIC: dict[str, tuple[bytes, ...]] = {
+    ".zip":  (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"),  # ZIP + empty + spanned
+    ".dll":  (b"MZ",),                                         # PE32/PE32+
+    ".exe":  (b"MZ",),
+    ".msi":  (b"\xd0\xcf\x11\xe0",),                          # OLE compound (MSI)
+    ".plgx": (b"PK\x03\x04",),                                 # KeePass plgx = ZIP
+}
+
+
+def _check_magic(first_chunk: bytes, ext: str) -> bool:
+    """True wenn ext nicht im Whitelist-Mapping steht (kein Check) ODER
+    der Datei-Beginn zu einem der Magic-Bytes passt."""
+    sigs = _EXT_MAGIC.get(ext)
+    if not sigs:
+        return True  # keine Signatur fuer diese Endung — durchwinken
+    return any(first_chunk.startswith(s) for s in sigs)
+
+
 async def save_upload_with_ext(
     file: UploadFile,
     max_size_bytes: int,
@@ -117,6 +137,9 @@ async def save_upload_with_ext(
     Wird fuer Plugin-Pakete verwendet (.dll, .zip, .plgx, ...). Gibt
     (final_path, size_bytes, sha256, ext) zurueck — der Aufrufer braucht
     die Endung um zu wissen ob es eine ZIP- oder Single-File-Plugin ist.
+
+    Validiert zusaetzlich Magic-Bytes der Datei (Defense-in-depth gegen
+    Spoofing der Datei-Endung).
     """
     _ensure_upload_dir()
 
@@ -130,12 +153,20 @@ async def save_upload_with_ext(
     tmp_path = os.path.join(UPLOAD_DIR, f"_tmp_{secrets.token_hex(8)}{ext}")
     h = hashlib.sha256()
     size = 0
+    first_chunk: bytes | None = None
     try:
         with open(tmp_path, "wb") as out:
             while True:
                 chunk = await file.read(1024 * 1024)
                 if not chunk:
                     break
+                if first_chunk is None:
+                    first_chunk = chunk[:8]
+                    if not _check_magic(first_chunk, ext):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Datei-Inhalt passt nicht zur Endung {ext} (Magic-Bytes-Mismatch).",
+                        )
                 size += len(chunk)
                 if size > max_size_bytes:
                     raise HTTPException(

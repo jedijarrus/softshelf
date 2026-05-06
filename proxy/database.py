@@ -430,6 +430,15 @@ async def init_db():
         if "logged_in_user" not in cols:
             await db.execute("ALTER TABLE agents ADD COLUMN logged_in_user TEXT")
 
+        # Migration: agent_installations.installed_sha (fuer Plugin-Updates)
+        async with db.execute("PRAGMA table_info(agent_installations)") as cur:
+            ai_cols = {row[1] for row in await cur.fetchall()}
+        if "installed_sha" not in ai_cols:
+            await db.execute(
+                "ALTER TABLE agent_installations ADD COLUMN installed_sha TEXT"
+            )
+        await db.commit()
+
         # Migration: custom-package-Felder + winget-Felder
         async with db.execute("PRAGMA table_info(packages)") as cur:
             pkg_cols = {row[1] for row in await cur.fetchall()}
@@ -1050,18 +1059,23 @@ async def update_version_entry_point(version_id: int, entry_point: str):
 
 
 async def set_agent_installation(
-    agent_id: str, package_name: str, version_id: int | None
+    agent_id: str, package_name: str, version_id: int | None,
+    installed_sha: str | None = None,
 ):
     """Trackt dass ein Agent ein bestimmtes Paket auf einer bestimmten Version
-    installiert hat. Upsert-safe."""
+    installiert hat. Upsert-safe.
+
+    `installed_sha` wird fuer Plugins (kein package_versions-Eintrag) benutzt
+    um Update-Detection per sha-Vergleich zu ermoeglichen."""
     async with _db() as db:
         await db.execute(
-            "INSERT INTO agent_installations (agent_id, package_name, version_id) "
-            "VALUES (?, ?, ?) "
+            "INSERT INTO agent_installations (agent_id, package_name, version_id, installed_sha) "
+            "VALUES (?, ?, ?, ?) "
             "ON CONFLICT(agent_id, package_name) DO UPDATE SET "
             "version_id = excluded.version_id, "
+            "installed_sha = excluded.installed_sha, "
             "installed_at = datetime('now')",
-            (agent_id, package_name, version_id),
+            (agent_id, package_name, version_id, installed_sha),
         )
         await db.commit()
 
@@ -1086,16 +1100,28 @@ async def delete_installations_for_package(package_name: str):
 
 
 async def get_agent_installations(agent_id: str) -> list[dict]:
-    """Welche Pakete hat dieser Agent über das Self-Service-Center installiert?"""
+    """Welche Pakete hat dieser Agent über das Self-Service-Center installiert?
+
+    Outdated-Logik:
+      - custom: i.version_id != p.current_version_id
+      - plugin: p.type='plugin' und i.installed_sha != p.sha256 (re-upload mit
+        neuem File-Hash markiert Agents mit altem Hash als outdated)
+    """
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT i.package_name, i.version_id, i.installed_at, "
-            "p.display_name, p.type, p.current_version_id, "
+            "SELECT i.package_name, i.version_id, i.installed_at, i.installed_sha, "
+            "p.display_name, p.type, p.current_version_id, p.sha256 AS pkg_sha256, "
             "v.version_label, "
-            "(i.version_id IS NOT NULL "
-            " AND p.current_version_id IS NOT NULL "
-            " AND i.version_id != p.current_version_id) AS outdated "
+            "(CASE "
+            "   WHEN p.type = 'plugin' THEN "
+            "        (p.sha256 IS NOT NULL AND i.installed_sha IS NOT NULL "
+            "         AND i.installed_sha != p.sha256) "
+            "   ELSE "
+            "        (i.version_id IS NOT NULL "
+            "         AND p.current_version_id IS NOT NULL "
+            "         AND i.version_id != p.current_version_id) "
+            " END) AS outdated "
             "FROM agent_installations i "
             "JOIN packages p ON p.name = i.package_name "
             "LEFT JOIN package_versions v ON v.id = i.version_id "
@@ -1107,22 +1133,51 @@ async def get_agent_installations(agent_id: str) -> list[dict]:
 
 
 async def get_installations_for_package(package_name: str) -> list[dict]:
-    """Welche Agents haben dieses Paket installiert (mit Version-Info)?"""
+    """Welche Agents haben dieses Paket installiert (mit Version-Info)?
+
+    Outdated wird type-aware berechnet: custom via version_id, plugin via sha256."""
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT i.agent_id, i.version_id, i.installed_at, "
+            "SELECT i.agent_id, i.version_id, i.installed_at, i.installed_sha, "
             "a.hostname, a.last_seen, "
             "v.version_label, "
-            "p.current_version_id, "
-            "(i.version_id IS NOT NULL "
-            " AND p.current_version_id IS NOT NULL "
-            " AND i.version_id != p.current_version_id) AS outdated "
+            "p.current_version_id, p.sha256 AS pkg_sha256, p.type AS pkg_type, "
+            "(CASE "
+            "   WHEN p.type = 'plugin' THEN "
+            "     (p.sha256 IS NOT NULL AND i.installed_sha IS NOT NULL "
+            "      AND i.installed_sha != p.sha256) "
+            "   ELSE "
+            "     (i.version_id IS NOT NULL "
+            "      AND p.current_version_id IS NOT NULL "
+            "      AND i.version_id != p.current_version_id) "
+            " END) AS outdated "
             "FROM agent_installations i "
             "JOIN agents a ON a.agent_id = i.agent_id "
             "JOIN packages p ON p.name = i.package_name "
             "LEFT JOIN package_versions v ON v.id = i.version_id "
             "WHERE i.package_name = ? "
+            "ORDER BY a.hostname",
+            (package_name,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_outdated_plugin_agents(package_name: str) -> list[dict]:
+    """Plugin-Variante: Agents die ein Plugin installiert haben, aber mit
+    einem alten sha256 (sprich: Admin hat eine neue Version hochgeladen)."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT i.agent_id, i.installed_sha, i.installed_at, "
+            "a.hostname, a.last_seen "
+            "FROM agent_installations i "
+            "JOIN agents a ON a.agent_id = i.agent_id "
+            "JOIN packages p ON p.name = i.package_name "
+            "WHERE i.package_name = ? "
+            "AND p.type = 'plugin' "
+            "AND p.sha256 IS NOT NULL "
+            "AND (i.installed_sha IS NULL OR i.installed_sha != p.sha256) "
             "ORDER BY a.hostname",
             (package_name,),
         ) as cur:
@@ -1152,20 +1207,44 @@ async def get_outdated_agents_for_package(package_name: str) -> list[dict]:
 
 
 async def get_agent_installation_summary(package_name: str) -> dict:
-    """Übersicht: total, current, outdated, unknown-Version."""
+    """Übersicht: total, current, outdated, unknown-Version.
+
+    Plugin-Aware: bei type='plugin' wird outdated via sha256-Vergleich
+    bestimmt (kein package_versions vorhanden)."""
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT "
             "COUNT(*) AS total, "
-            "SUM(CASE WHEN i.version_id IS NULL THEN 1 ELSE 0 END) AS unknown, "
-            "SUM(CASE WHEN i.version_id IS NOT NULL "
-            "         AND i.version_id = p.current_version_id "
-            "         THEN 1 ELSE 0 END) AS current, "
-            "SUM(CASE WHEN i.version_id IS NOT NULL "
-            "         AND p.current_version_id IS NOT NULL "
-            "         AND i.version_id != p.current_version_id "
-            "         THEN 1 ELSE 0 END) AS outdated "
+            "SUM(CASE "
+            "      WHEN p.type = 'plugin' THEN "
+            "        (CASE WHEN i.installed_sha IS NULL THEN 1 ELSE 0 END) "
+            "      ELSE "
+            "        (CASE WHEN i.version_id IS NULL THEN 1 ELSE 0 END) "
+            "    END) AS unknown, "
+            "SUM(CASE "
+            "      WHEN p.type = 'plugin' THEN "
+            "        (CASE WHEN i.installed_sha IS NOT NULL "
+            "                   AND p.sha256 IS NOT NULL "
+            "                   AND i.installed_sha = p.sha256 "
+            "              THEN 1 ELSE 0 END) "
+            "      ELSE "
+            "        (CASE WHEN i.version_id IS NOT NULL "
+            "                   AND i.version_id = p.current_version_id "
+            "              THEN 1 ELSE 0 END) "
+            "    END) AS current, "
+            "SUM(CASE "
+            "      WHEN p.type = 'plugin' THEN "
+            "        (CASE WHEN i.installed_sha IS NOT NULL "
+            "                   AND p.sha256 IS NOT NULL "
+            "                   AND i.installed_sha != p.sha256 "
+            "              THEN 1 ELSE 0 END) "
+            "      ELSE "
+            "        (CASE WHEN i.version_id IS NOT NULL "
+            "                   AND p.current_version_id IS NOT NULL "
+            "                   AND i.version_id != p.current_version_id "
+            "              THEN 1 ELSE 0 END) "
+            "    END) AS outdated "
             "FROM agent_installations i "
             "JOIN packages p ON p.name = i.package_name "
             "WHERE i.package_name = ?",
