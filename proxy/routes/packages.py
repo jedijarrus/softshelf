@@ -60,6 +60,7 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
     needs_tactical = any(
         (row.get("type") or "choco") in ("choco", "custom") for row in pkg_rows
     )
+    # plugin/winget brauchen Tactical-Scan nicht, sind nur Self-Tracking.
     installed_meta: dict[str, tuple[str, str]] = {}
     if needs_tactical:
         try:
@@ -92,6 +93,34 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
     result = []
     for row in pkg_rows:
         ptype = row.get("type") or "choco"
+
+        if ptype == "plugin":
+            # Plugin-Status: heuristisch via agent_installations Tracking.
+            # Tactical sieht Plugin-Files nicht (kein ARP-Eintrag), wir
+            # vertrauen unserem eigenen Install-Tracking. Update-Flag
+            # gibt's nicht — Re-Upload ueber Admin = neue Version, der
+            # Kiosk-Client zeigt einfach den Install/Updaten-Button nach
+            # dem naechsten push_update.
+            pname = row["name"]
+            t = tracked_by_pkg.get(pname)
+            is_installed = bool(t)
+            installed_label = (t or {}).get("version_label") if t else None
+            update_avail = bool((t or {}).get("outdated")) if t else False
+            result.append(Package(
+                name=pname,
+                display_name=row["display_name"],
+                category=row.get("category", "Plugins"),
+                type="plugin",
+                version=installed_label,
+                publisher=row.get("plugin_host") or None,
+                installed=is_installed,
+                installed_version_label=installed_label,
+                current_version_label=None,
+                update_available=update_avail,
+                hide_uninstall=bool(row.get("hide_uninstall")),
+                process_check=row.get("process_check") or "",
+            ))
+            continue
 
         if ptype == "winget":
             # Status primaer aus agent_winget_state. Fallback: agent_installations
