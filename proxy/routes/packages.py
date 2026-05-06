@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import database
+import plugin_hosts
 import winget_catalog
 from auth import verify_machine_token
 from tactical_client import TacticalClient
@@ -37,6 +38,10 @@ class Package(BaseModel):
     # Komma-separierte Prozessnamen die VOR Install lokal geprueft werden.
     # Kiosk-Client zeigt Modal "Bitte X schliessen" wenn ein Prozess matcht.
     process_check: str = ""
+    # Plugin-Host (notepad++/keepass/...) falls type==plugin — fuer Anzeige
+    # im Kiosk ("Notepad++ Plugin" statt nur "plugin").
+    plugin_host: str | None = None
+    plugin_host_label: str | None = None
 
 
 @router.get("/packages", response_model=list[Package])
@@ -106,19 +111,24 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
             is_installed = bool(t)
             installed_label = (t or {}).get("version_label") if t else None
             update_avail = bool((t or {}).get("outdated")) if t else False
+            host_id = row.get("plugin_host") or None
+            host_obj = plugin_hosts.get_host(host_id) if host_id else None
+            host_label = host_obj.label if host_obj else (host_id or None)
             result.append(Package(
                 name=pname,
                 display_name=row["display_name"],
                 category=row.get("category", "Plugins"),
                 type="plugin",
                 version=installed_label,
-                publisher=row.get("plugin_host") or None,
+                publisher=host_label,
                 installed=is_installed,
                 installed_version_label=installed_label,
                 current_version_label=None,
                 update_available=update_avail,
                 hide_uninstall=bool(row.get("hide_uninstall")),
                 process_check=row.get("process_check") or "",
+                plugin_host=host_id,
+                plugin_host_label=host_label,
             ))
             continue
 

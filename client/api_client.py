@@ -2,10 +2,35 @@
 HTTP Client für die Kommunikation mit dem Proxy-Server.
 Kein direkter Tactical RMM Zugriff.
 """
+import time
 import httpx
 from dataclasses import dataclass
 
 from config import ClientConfig
+
+# Retry-Verhalten fuer transiente Netzwerkfehler bei idempotenten GETs.
+# Wir retryen GENAU EIN MAL nach 2s. Nur bei Connection-Fehlern oder
+# 502/503/504. Niemals fuer POST (nicht idempotent) und nicht fuer 4xx.
+_RETRY_DELAY_S = 2.0
+_RETRY_HTTP_STATUS = {502, 503, 504}
+_RETRY_EXCEPTIONS = (
+    httpx.ConnectError,
+    httpx.ReadTimeout,
+    httpx.ConnectTimeout,
+)
+
+
+def _get_with_retry(client: httpx.Client, url: str, **kwargs) -> httpx.Response:
+    """GET mit einem Retry bei transientem Fehler. Nur fuer idempotente Calls."""
+    try:
+        r = client.get(url, **kwargs)
+        if r.status_code in _RETRY_HTTP_STATUS:
+            time.sleep(_RETRY_DELAY_S)
+            r = client.get(url, **kwargs)
+        return r
+    except _RETRY_EXCEPTIONS:
+        time.sleep(_RETRY_DELAY_S)
+        return client.get(url, **kwargs)
 
 
 @dataclass
@@ -15,11 +40,15 @@ class Package:
     version: str | None
     installed: bool
     category: str = "Allgemein"
-    type: str = "choco"          # "choco" oder "custom"
+    type: str = "choco"          # "choco" / "custom" / "winget" / "plugin"
     publisher: str | None = None
     installed_version_label: str | None = None
     current_version_label: str | None = None
     update_available: bool = False
+    hide_uninstall: bool = False
+    process_check: str = ""
+    plugin_host: str | None = None
+    plugin_host_label: str | None = None
 
 
 def _get_windows_user() -> str:
@@ -45,7 +74,7 @@ class KioskApiClient:
 
     def get_packages(self) -> list[Package]:
         with self._client() as c:
-            r = c.get(f"{self._base}/api/v1/packages")
+            r = _get_with_retry(c, f"{self._base}/api/v1/packages")
             r.raise_for_status()
             return [
                 Package(
@@ -59,6 +88,10 @@ class KioskApiClient:
                     installed_version_label=p.get("installed_version_label"),
                     current_version_label=p.get("current_version_label"),
                     update_available=p.get("update_available", False),
+                    hide_uninstall=p.get("hide_uninstall", False),
+                    process_check=p.get("process_check", "") or "",
+                    plugin_host=p.get("plugin_host"),
+                    plugin_host_label=p.get("plugin_host_label"),
                 )
                 for p in r.json()
             ]
@@ -89,7 +122,7 @@ class KioskApiClient:
         """
         try:
             with self._client() as c:
-                r = c.get(f"{self._base}/api/v1/client-config", timeout=3)
+                r = _get_with_retry(c, f"{self._base}/api/v1/client-config", timeout=3)
                 r.raise_for_status()
                 return r.json()
         except Exception:
@@ -98,7 +131,7 @@ class KioskApiClient:
     def health_check(self) -> bool:
         try:
             with self._client() as c:
-                r = c.get(f"{self._base}/api/v1/health", timeout=5)
+                r = _get_with_retry(c, f"{self._base}/api/v1/health", timeout=5)
                 return r.status_code == 200
         except Exception:
             return False
@@ -107,7 +140,7 @@ class KioskApiClient:
         """Health-Check mit vollem Response-Body (pending_actions etc.)."""
         try:
             with self._client() as c:
-                r = c.get(f"{self._base}/api/v1/health", timeout=5)
+                r = _get_with_retry(c, f"{self._base}/api/v1/health", timeout=5)
                 if r.status_code == 200:
                     return r.json()
         except Exception:
@@ -148,7 +181,7 @@ class KioskApiClient:
         """Branding-Icon vom Server laden (ICO). None wenn nicht vorhanden."""
         try:
             with self._client() as c:
-                r = c.get(f"{self._base}/api/v1/icon", timeout=5)
+                r = _get_with_retry(c, f"{self._base}/api/v1/icon", timeout=5)
                 if r.status_code == 200:
                     return r.content
         except Exception:

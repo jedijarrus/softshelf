@@ -5823,7 +5823,8 @@ body.help-active [data-help]:not(.tab)::after {
 
       <div class="field">
         <label>Kategorie</label>
-        <input class="input" id="plugin-category" placeholder="Plugins" value="Plugins">
+        <input class="input" id="plugin-category" placeholder="Auto: Host-Name" value="">
+        <div class="hint">Leer lassen = automatisch der Host-Name als Kategorie (z.B. "Notepad++"). So wird das Plugin im Kiosk-Grid unter seiner Host-App gruppiert.</div>
       </div>
 
       <div class="field">
@@ -6954,6 +6955,12 @@ function _typePillHtml(type) {
   return `<span class="pkg-type-pill ${esc(t)}">${esc(label)}</span>`;
 }
 
+function _pluginHostLabel(hostId) {
+  if (!hostId) return 'Plugin';
+  const found = (_pluginHostsCache || []).find(h => h.id === hostId);
+  return found ? found.label : hostId;
+}
+
 function addPackageFromPicker(pkgName) {
   if (_profileEditorPackages.find(p => p.package_name === pkgName)) {
     toast('Paket ist schon im Profil', false);
@@ -7440,8 +7447,19 @@ async function init() {
       notes:              p.notes || '',
       install_timeout:    p.install_timeout || 120,
       check_reboot:       p.check_reboot ? 1 : 0,
+      hide_uninstall:     p.hide_uninstall ? 1 : 0,
+      process_check:      p.process_check || '',
+      plugin_host:        p.plugin_host || null,
+      plugin_folder:      p.plugin_folder || null,
       _outdated:          0,
     });
+    // Plugin-Host-Liste eager laden damit Render-Code Host-Labels aufloesen kann
+    if (!_pluginHostsCache) {
+      api('GET', '/admin/api/plugin-hosts').then(r => {
+        _pluginHostsCache = (r && r.hosts) || [];
+        render();
+      }).catch(() => { _pluginHostsCache = []; });
+    }
     render();
     // Outdated-Counts für custom-Pakete async nachladen, dann nochmal rendern
     fetchOutdatedCounts();
@@ -7574,13 +7592,18 @@ function renderPackages() {
   const bodyHtml = filtered.map(pkg => {
     const isCustom = pkg.type === 'custom';
     const isWinget = pkg.type === 'winget';
-    const typeClass = isWinget ? 'winget' : isCustom ? 'custom' : 'choco';
-    const typeLabel = isWinget ? 'winget' : isCustom ? 'custom' : 'choco';
+    const isPlugin = pkg.type === 'plugin';
+    const typeClass = isWinget ? 'winget' : isCustom ? 'custom' : isPlugin ? 'plugin' : 'choco';
+    const typeLabel = isWinget ? 'winget' : isCustom ? 'custom' : isPlugin ? 'plugin' : 'choco';
     let subText;
     if (isCustom) {
       subText = esc(pkg.filename || pkg.name) + (pkg.size_bytes ? ' · ' + fmtBytes(pkg.size_bytes) : '');
     } else if (isWinget) {
       subText = esc(pkg.name) + (pkg.winget_publisher ? ' · ' + esc(pkg.winget_publisher) : '');
+    } else if (isPlugin) {
+      const hostLabel = _pluginHostLabel(pkg.plugin_host);
+      const folder = pkg.plugin_folder ? ' · ' + esc(pkg.plugin_folder) : '';
+      subText = esc(hostLabel) + folder + (pkg.size_bytes ? ' · ' + fmtBytes(pkg.size_bytes) : '');
     } else {
       subText = esc(pkg.name);
     }
@@ -11782,6 +11805,7 @@ async function doPluginUpload() {
   const fd = new FormData();
   fd.append('file', file);
   fd.append('display_name', display);
+  // Empty = backend uses host.label as category
   fd.append('category', document.getElementById('plugin-category').value.trim() || 'Plugins');
   fd.append('plugin_host', host);
   fd.append('plugin_folder', document.getElementById('plugin-folder').value.trim());
