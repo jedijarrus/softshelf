@@ -11150,7 +11150,8 @@ function _renderBulkBar() {
   el.style.display = '';
   const target = (_agentVersionDist || {}).current_version || '?';
   el.innerHTML = '<span><strong>' + n + '</strong> Client' + (n !== 1 ? 's' : '') + ' ausgewaehlt</span>'
-    + '<button class="btn btn-primary btn-sm" onclick="bulkUpdateClients()">Auf ' + esc(target) + ' updaten</button>'
+    + '<button class="btn btn-primary btn-sm" onclick="bulkUpdateClients(false)">Auf ' + esc(target) + ' updaten</button>'
+    + '<button class="btn btn-ghost btn-sm" onclick="bulkUpdateClients(true)" title="Auch Clients re-installieren die schon auf der aktuellen Version sind">Force-Reinstall</button>'
     + '<button class="btn btn-ghost btn-sm" onclick="clearAgentSelection()">Auswahl aufheben</button>';
 }
 
@@ -11160,14 +11161,17 @@ function clearAgentSelection() {
   _renderBulkBar();
 }
 
-async function bulkUpdateClients() {
+async function bulkUpdateClients(force) {
   if (_selectedAgentIds.size === 0) return;
   const list = Array.from(_selectedAgentIds);
-  if (!confirm('Setup.exe auf ' + list.length + ' Client' + (list.length !== 1 ? 's' : '') + ' pushen?\n\nUebersprungen werden Clients die schon auf der aktuellen Version sind.')) return;
+  const msg = force
+    ? 'Setup.exe auf ' + list.length + ' Client' + (list.length !== 1 ? 's' : '') + ' force-installieren?\n\nAuch Clients die schon auf der aktuellen Version sind werden re-installiert (Tray wird gekillt + ersetzt).'
+    : 'Setup.exe auf ' + list.length + ' Client' + (list.length !== 1 ? 's' : '') + ' pushen?\n\nUebersprungen werden Clients die schon auf der aktuellen Version sind.';
+  if (!confirm(msg)) return;
   try {
     const r = await api('POST', '/admin/api/agents/bulk-update-client', {
       agent_ids: list,
-      only_outdated: true,
+      only_outdated: !force,
     });
     toast((r.dispatched || 0) + ' Update' + (r.dispatched !== 1 ? 's' : '') + ' dispatched');
     clearAgentSelection();
@@ -11278,9 +11282,15 @@ function renderAgents() {
       const verStat = _agentVersionStatus(a, cv);
       const verCell = `<span class="agent-ver agent-ver-${verStat.cls}" title="${esc(a.os_version || '')}">${esc(verStat.label)}</span>`;
       const isSel = _selectedAgentIds.has(a.agent_id);
-      const updateBtn = (verStat.cls === 'outdated' && !a.banned)
-        ? `<button class="icon-btn" title="Setup.exe pushen" onclick="event.stopPropagation();updateSingleClient(${jsStr(a.agent_id)},${jsStr(a.hostname)})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>`
-        : '';
+      // Update/Reinstall-Icon fuer alle Agents (ausser banned). Tooltip + Wirkung
+      // unterscheiden sich nach Status: outdated = Update, current = Reinstall,
+      // unknown = Setup pushen (z.B. Tray fehlt evtl.).
+      const upTip = verStat.cls === 'outdated'
+        ? 'Update auf neue Version pushen'
+        : (verStat.cls === 'current' ? 'Tray-EXE neu installieren (force-reinstall)' : 'Setup.exe pushen');
+      const updateBtn = a.banned
+        ? ''
+        : `<button class="icon-btn" title="${esc(upTip)}" onclick="event.stopPropagation();updateSingleClient(${jsStr(a.agent_id)},${jsStr(a.hostname)})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>`;
       return `<tr class="${a.banned ? 'row-banned' : ''}">
         <td><input type="checkbox" class="agent-select-cb" ${isSel?'checked':''} onclick="event.stopPropagation();toggleAgentSelected(${jsStr(a.agent_id)},this.checked)"></td>
         <td><span class="status ${st.cls}">${st.label}</span></td>

@@ -5329,6 +5329,11 @@ async def update_client_for_agent(agent_id: str):
             f"if ($got -ne $want) {{ throw \"sha-Mismatch: erwartet $want, bekam $got\" }}\n"
         )
 
+    # Slug-aware Tray-Kill vor Setup. Setup-Installer ueberschreibt Files
+    # und scheitert sonst wenn Tray die EXE locked hat. taskkill /F ist
+    # idempotent — kein Fehler wenn Process nicht laeuft.
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,30}", slug):
+        raise HTTPException(status_code=500, detail="Ungueltiger product_slug")
     ps = (
         "$ErrorActionPreference = 'Stop'\n"
         f"$tmp = Join-Path $env:TEMP 'softshelf-setup-{current['id']}.exe'\n"
@@ -5337,6 +5342,9 @@ async def update_client_for_agent(agent_id: str):
         "$wc.Proxy = [Net.GlobalProxySelection]::GetEmptyWebProxy()\n"
         "$wc.DownloadFile($url, $tmp)\n"
         + sha_check +
+        # Tray killen damit Setup die EXE ersetzen kann (nicht-lethaler Fail)
+        f"taskkill /F /IM '{slug}.exe' 2>$null | Out-Null\n"
+        "Start-Sleep -Milliseconds 800\n"
         "Start-Process -FilePath $tmp -ArgumentList '/SILENT','/NORESTART' -Verb RunAs\n"
     )
 
