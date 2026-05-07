@@ -13713,6 +13713,8 @@ async function renderDeploySnippet() {
   el.textContent =
 `# Softshelf Tactical-Deploy-Script
 # In Tactical \u2192 Scripts \u2192 PowerShell einf\u00fcgen und auf Agents ausf\u00fchren.
+# Funktioniert sowohl als Initial-Deploy als auch als Re-Install
+# (laufende Tray wird vorher gekillt, eindeutige tmp-Datei pro Run).
 
 $ProxyUrl           = "${proxyUrl}"
 $RegistrationSecret = "${secretDisplay}"
@@ -13724,24 +13726,46 @@ $ProgressPreference    = "SilentlyContinue"
 
 $SetupFile = [System.IO.Path]::GetFileName(([Uri]$SetupExeUrl).AbsolutePath)
 if ([string]::IsNullOrWhiteSpace($SetupFile)) { $SetupFile = "setup.exe" }
-$TempSetup = Join-Path $env:TEMP $SetupFile
 $Slug      = [System.IO.Path]::GetFileNameWithoutExtension($SetupFile) -replace '-setup$',''
+# Eindeutiger tmp-Pfad pro Run damit ein vorheriger laufender Setup
+# die Datei nicht mehr lockt (HRESULT 0x80070020).
+$nonce     = [Guid]::NewGuid().ToString("N").Substring(0,8)
+$TempSetup = Join-Path $env:TEMP "$Slug-setup-$nonce.exe"
 $ErrorLog  = Join-Path $env:TEMP ("{0}_setup_error.txt" -f $Slug.ToLower())
 
 Write-Host "=== Deployment ===" -ForegroundColor Cyan
 Write-Host "Proxy: $ProxyUrl"
-Write-Host "Setup: $SetupFile"
+Write-Host "Setup: $SetupFile (-> $TempSetup)"
 
+# 1) Eventuelle vorherige Setup-Instanz killen (loest tmp-File-Lock)
+cmd /c "taskkill /F /IM $Slug-setup.exe >nul 2>&1" | Out-Null
+
+# 2) Setup runterladen via Net.WebClient
+#    (Invoke-WebRequest hat unter SYSTEM oft Proxy-Probleme)
 Write-Host "Lade $SetupFile herunter..."
 try {
-    Invoke-WebRequest -Uri $SetupExeUrl -OutFile $TempSetup -UseBasicParsing
+    $wc = New-Object Net.WebClient
+    $wc.Proxy = [Net.GlobalProxySelection]::GetEmptyWebProxy()
+    $wc.DownloadFile($SetupExeUrl, $TempSetup)
 } catch {
-    Write-Host "Download fehlgeschlagen: $($_.Exception.Message)" -ForegroundColor Red
-    exit 2
+    Write-Host "Download fehlgeschlagen, versuche BITS..." -ForegroundColor Yellow
+    try {
+        Start-BitsTransfer -Source $SetupExeUrl -Destination $TempSetup -Priority Foreground
+    } catch {
+        Write-Host "Download endgueltig fehlgeschlagen: $($_.Exception.Message)" -ForegroundColor Red
+        exit 2
+    }
 }
 Write-Host "Download abgeschlossen." -ForegroundColor Green
 
-Write-Host "Starte Installation..."
+# 3) Laufende Tray killen (idempotent \u2014 Fail wenn Process nicht da)
+#    sonst kann der Setup die Tray-EXE nicht ersetzen.
+Write-Host "Kille laufende Tray ($Slug.exe falls vorhanden)..."
+cmd /c "taskkill /F /IM $Slug.exe >nul 2>&1" | Out-Null
+Start-Sleep -Milliseconds 1500
+
+# 4) Silent Setup
+Write-Host "Starte Setup silent..."
 $proc = Start-Process \`
     -FilePath $TempSetup \`
     -ArgumentList @("--proxy-url", $ProxyUrl, "--reg-secret", $RegistrationSecret) \`
