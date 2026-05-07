@@ -1830,7 +1830,14 @@ async def update_agent_telemetry(
 ):
     """Aktualisiert die Telemetrie-Felder eines Agents — wird vom
     /api/v1/health-Endpoint aufgerufen wenn der Tray-Client einen
-    erweiterten Body schickt."""
+    erweiterten Body schickt.
+
+    Side-effect: wenn ein client_update-action_log fuer diesen Agent
+    in Status `pending`/`running` haengt UND der gemeldete client_version
+    die im action_log gespeicherte target_version erreicht hat, wird
+    der Eintrag auto-completed (status=success). Das ist der
+    Auto-Complete-Pfad fuer Tactical-Script-Triggers (output=forget).
+    """
     sets: list[str] = []
     vals: list = []
     if client_version is not None:
@@ -1853,6 +1860,44 @@ async def update_agent_telemetry(
             tuple(vals),
         )
         await db.commit()
+
+    # Auto-Complete pending client_update wenn Version matched
+    if client_version:
+        try:
+            import json as _json
+            async with _db() as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    "SELECT id, metadata FROM action_log "
+                    "WHERE agent_id = ? AND pkg_type = 'client_update' "
+                    "AND status IN ('pending', 'running') "
+                    "ORDER BY id DESC LIMIT 1",
+                    (agent_id,),
+                ) as cur:
+                    row = await cur.fetchone()
+                if row:
+                    target = ""
+                    try:
+                        meta = _json.loads(row["metadata"] or "{}")
+                        target = (meta.get("target_version") or "").strip()
+                    except Exception:
+                        target = ""
+                    if target and target == client_version:
+                        await db.execute(
+                            "UPDATE action_log SET status = 'success', "
+                            "exit_code = 0, "
+                            "completed_at = datetime('now'), "
+                            "stdout = COALESCE(stdout, '') || "
+                            "  CHAR(10) || ? "
+                            "WHERE id = ?",
+                            (
+                                f"Auto-Complete via Telemetrie: Tray meldet client_version={client_version}",
+                                row["id"],
+                            ),
+                        )
+                        await db.commit()
+        except Exception:
+            pass
 
 
 async def get_client_version_distribution() -> dict:
