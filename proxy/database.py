@@ -1187,6 +1187,42 @@ async def get_installations_for_package(package_name: str) -> list[dict]:
             return [dict(r) for r in await cur.fetchall()]
 
 
+async def has_pending_action(
+    agent_id: str, package_name: str, action: str | None = None,
+) -> dict | None:
+    """Liefert action_log-Eintrag wenn fuer (agent, package[, action]) eine
+    pending/running Aktion existiert. None sonst.
+
+    Wird vor Dispatch genutzt um Doppelt-Klick / Re-Dispatch zu verhindern.
+    Aktionen die laenger als 30 min running sind, werden ignoriert (gelten
+    als stale — das ist die Recovery-Frist; der Workflow-Timeout-Job kuemmert
+    sich um echtes Cleanup).
+    """
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        if action:
+            sql = (
+                "SELECT id, status, action, created_at FROM action_log "
+                "WHERE agent_id = ? AND package_name = ? AND action = ? "
+                "AND status IN ('pending', 'running') "
+                "AND created_at > datetime('now', '-30 minutes') "
+                "ORDER BY id DESC LIMIT 1"
+            )
+            params = (agent_id, package_name, action)
+        else:
+            sql = (
+                "SELECT id, status, action, created_at FROM action_log "
+                "WHERE agent_id = ? AND package_name = ? "
+                "AND status IN ('pending', 'running') "
+                "AND created_at > datetime('now', '-30 minutes') "
+                "ORDER BY id DESC LIMIT 1"
+            )
+            params = (agent_id, package_name)
+        async with db.execute(sql, params) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
 async def get_outdated_plugin_agents(package_name: str) -> list[dict]:
     """Plugin-Variante: Agents die ein Plugin installiert haben, aber mit
     einem alten sha256 (sprich: Admin hat eine neue Version hochgeladen)."""
