@@ -5331,15 +5331,23 @@ async def update_client_for_agent(agent_id: str):
             f"if ($got -ne $want) {{ throw \"sha-Mismatch: erwartet $want, bekam $got\" }}\n"
             "_sfProgress \"sha-Verify ok\"\n"
         )
+    # Unique tmp-Filename damit ein zuvor abgebrochener Run die Datei nicht
+    # offen haelt (HRESULT 0x80070020 file-in-use). Dazu vor dem Download
+    # eventuelle vorherige Setup-Prozesse killen.
+    import secrets as _secrets
+    nonce = _secrets.token_hex(4)
     inner = (
         "$ErrorActionPreference = 'Stop'\n"
-        f"$tmp = Join-Path $env:TEMP 'softshelf-setup-{current['id']}.exe'\n"
+        # Falls vorherige Setup-Instanz noch laeuft: killen (gleiche Endung).
+        # Idempotent — kein Fehler wenn nichts laeuft.
+        f"cmd /c \"taskkill /F /IM {slug}-setup.exe >nul 2>&1\" | Out-Null\n"
+        f"$tmp = Join-Path $env:TEMP 'sf-setup-{current['id']}-{nonce}.exe'\n"
+        "if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }\n"
         "_sfProgress 'Setup runterladen...'\n"
         f"_sfDownload '{setup_url}' $tmp\n"
         + sha_check +
         # Tray killen — Setup-Installer ersetzt sonst die EXE nicht.
         # taskkill /F ist idempotent (kein Fehler wenn Process nicht laeuft).
-        # Stderr nach $null umleiten damit fehlende Process keinen FEHLER triggert.
         f"_sfProgress 'Killen alter Tray ({slug}.exe)...'\n"
         f"cmd /c \"taskkill /F /IM {slug}.exe >nul 2>&1\" | Out-Null\n"
         "Start-Sleep -Milliseconds 1500\n"
