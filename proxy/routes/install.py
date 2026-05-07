@@ -1055,6 +1055,19 @@ async def install_package(
     if not pkg:
         raise HTTPException(status_code=404, detail="Paket nicht freigegeben")
 
+    # Dedup: existiert schon ein pending/running Eintrag fuer
+    # (agent, package), blockt Re-Dispatch (Doppelklick / Re-Trigger).
+    existing = await database.has_pending_action(agent_id, body.package_name)
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Bereits eine Aktion fuer '{body.package_name}' in Arbeit "
+                f"(status={existing['status']}, action={existing['action']}). "
+                f"Bitte abwarten."
+            ),
+        )
+
     ptype = pkg.get("type") or "choco"
 
     if ptype == "winget":
@@ -1170,6 +1183,18 @@ async def uninstall_package(
     if not pkg:
         raise HTTPException(status_code=404, detail="Paket nicht freigegeben")
 
+    # Dedup: existiert schon ein pending/running Eintrag fuer
+    # (agent, package), blockt Re-Dispatch.
+    existing = await database.has_pending_action(agent_id, body.package_name)
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Bereits eine Aktion fuer '{body.package_name}' in Arbeit "
+                f"(status={existing['status']}, action={existing['action']})."
+            ),
+        )
+
     ptype = pkg.get("type") or "choco"
 
     if ptype == "winget":
@@ -1273,6 +1298,7 @@ async def dispatch_install_for_agent(
     pkg: dict,
     version_pin: str | None = None,
     workflow_run_id: int | None = None,
+    allow_duplicate: bool = False,
 ) -> dict:
     """Spawned einen install (oder upgrade fuer winget) für genau ein
     (Agent, Paket)-Pair und logged in install_log.
@@ -1280,10 +1306,27 @@ async def dispatch_install_for_agent(
     Wird sowohl vom admin per-package-install endpoint als auch vom Profile-
     Apply und Bulk-Install benutzt — der ganze type-dispatch sitzt hier.
 
+    Dedup: wenn fuer dieses (agent, package) bereits ein pending/running
+    action_log-Eintrag existiert (jünger als 30 min), wird HTTP 409
+    geworfen. Workflow-Aufrufe duerfen das via `allow_duplicate=True`
+    umgehen (z.B. fuer expliziten Re-Try).
+
     Returns ein dict mit Metadaten fuer den Caller (action, package_name).
     """
     package_name = pkg["name"]
     ptype = pkg.get("type") or "choco"
+
+    if not allow_duplicate:
+        existing = await database.has_pending_action(agent_id, package_name)
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Bereits eine Aktion fuer '{package_name}' auf {hostname} "
+                    f"in Arbeit (id={existing['id']}, status={existing['status']}, "
+                    f"action={existing['action']}). Warte bis sie abgeschlossen ist."
+                ),
+            )
 
     if ptype == "winget":
         _check_winget_id(package_name)
@@ -1392,14 +1435,30 @@ async def dispatch_uninstall_for_agent(
     agent_id: str,
     hostname: str,
     pkg: dict,
+    allow_duplicate: bool = False,
 ) -> dict:
     """Spawned uninstall-Aktion fuer ein (Agent, Paket)-Pair.
 
     Wird vom Profile-Unassign-mit-Uninstall-Pfad und vom existing per-package
     Admin-Uninstall-Endpoint genutzt. Type-dispatch identisch zum Install-Pfad.
+
+    Dedup wie dispatch_install_for_agent — verhindert parallele
+    Aktionen fuer das gleiche (agent, package).
     """
     package_name = pkg["name"]
     ptype = pkg.get("type") or "choco"
+
+    if not allow_duplicate:
+        existing = await database.has_pending_action(agent_id, package_name)
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Bereits eine Aktion fuer '{package_name}' auf {hostname} "
+                    f"in Arbeit (id={existing['id']}, status={existing['status']}, "
+                    f"action={existing['action']})."
+                ),
+            )
 
     if ptype == "winget":
         _check_winget_id(package_name)
