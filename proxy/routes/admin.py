@@ -5341,7 +5341,7 @@ async def update_client_for_agent(agent_id: str):
         # Falls vorherige Setup-Instanz noch laeuft: killen (gleiche Endung).
         # Idempotent — kein Fehler wenn nichts laeuft.
         f"cmd /c \"taskkill /F /IM {slug}-setup.exe >nul 2>&1\" | Out-Null\n"
-        f"$tmp = Join-Path $env:TEMP 'sf-setup-{current['id']}-{nonce}.exe'\n"
+        f"$tmp = Join-Path $env:TEMP '{slug}-setup-{current['id']}-{nonce}.exe'\n"
         "if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }\n"
         "_sfProgress 'Setup runterladen...'\n"
         f"_sfDownload '{setup_url}' $tmp\n"
