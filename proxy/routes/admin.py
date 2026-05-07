@@ -5315,11 +5315,13 @@ async def update_client_for_agent(agent_id: str):
         )
 
     slug = (await runtime_value("product_slug")) or "Softshelf"
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,30}", slug):
+        raise HTTPException(status_code=500, detail="Ungueltiger product_slug")
     setup_url = f"{proxy_url.rstrip('/')}/download/{slug}-setup.exe"
 
-    # PowerShell-Command: Setup runterladen, sha verifizieren, silent-install.
-    # Tactical run_command laeuft als SYSTEM (default), keine User-Interaktion
-    # noetig. Setup.exe kuemmert sich um Tray-Kill + Replace.
+    # PowerShell-inner-Script — wird via _build_script_and_bootstrap mit
+    # Progress/Callback-Wrapper umhuellt, damit das action_log das Ergebnis
+    # bekommt und der Admin-UI Live-Output zeigt.
     setup_sha = current.get("setup_sha") or ""
     sha_check = ""
     if setup_sha and re.fullmatch(r"[a-f0-9]{64}", setup_sha):
@@ -5327,42 +5329,61 @@ async def update_client_for_agent(agent_id: str):
             f"$want = '{setup_sha}'\n"
             f"$got = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()\n"
             f"if ($got -ne $want) {{ throw \"sha-Mismatch: erwartet $want, bekam $got\" }}\n"
+            "_sfProgress \"sha-Verify ok\"\n"
         )
-
-    # Slug-aware Tray-Kill vor Setup. Setup-Installer ueberschreibt Files
-    # und scheitert sonst wenn Tray die EXE locked hat. taskkill /F ist
-    # idempotent — kein Fehler wenn Process nicht laeuft.
-    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,30}", slug):
-        raise HTTPException(status_code=500, detail="Ungueltiger product_slug")
-    ps = (
+    inner = (
         "$ErrorActionPreference = 'Stop'\n"
         f"$tmp = Join-Path $env:TEMP 'softshelf-setup-{current['id']}.exe'\n"
-        f"$url = '{setup_url}'\n"
-        "$wc = New-Object Net.WebClient\n"
-        "$wc.Proxy = [Net.GlobalProxySelection]::GetEmptyWebProxy()\n"
-        "$wc.DownloadFile($url, $tmp)\n"
+        "_sfProgress 'Setup runterladen...'\n"
+        f"_sfDownload '{setup_url}' $tmp\n"
         + sha_check +
-        # Tray killen damit Setup die EXE ersetzen kann (nicht-lethaler Fail)
-        f"taskkill /F /IM '{slug}.exe' 2>$null | Out-Null\n"
-        "Start-Sleep -Milliseconds 800\n"
-        "Start-Process -FilePath $tmp -ArgumentList '/SILENT','/NORESTART' -Verb RunAs\n"
+        # Tray killen — Setup-Installer ersetzt sonst die EXE nicht.
+        # taskkill /F ist idempotent (kein Fehler wenn Process nicht laeuft).
+        # Stderr nach $null umleiten damit fehlende Process keinen FEHLER triggert.
+        f"_sfProgress 'Killen alter Tray ({slug}.exe)...'\n"
+        f"cmd /c \"taskkill /F /IM {slug}.exe >nul 2>&1\" | Out-Null\n"
+        "Start-Sleep -Milliseconds 1500\n"
+        "_sfProgress 'Starte Setup silent...'\n"
+        # SYSTEM ist schon Admin — kein -Verb RunAs noetig (das fordert UAC,
+        # was unter SYSTEM kaputt sein kann). -Wait sync ExitCode.
+        "$proc = Start-Process -FilePath $tmp -ArgumentList '/SILENT','/NORESTART' -PassThru -Wait\n"
+        "$ec = if ($null -eq $proc.ExitCode) { 0 } else { $proc.ExitCode }\n"
+        "_sfProgress \"Setup beendet mit ExitCode $ec\"\n"
+        "Remove-Item $tmp -Force -ErrorAction SilentlyContinue\n"
+        # Throw triggert den outer catch im wrapper-footer → success=false
+        # damit der Server status=error setzt. cmd /c exit allein wuerde
+        # success=true + exit_code=ec liefern und ggf. als success geloggt.
+        "if ($ec -ne 0) { throw \"Setup beendete mit ExitCode $ec\" }\n"
+        "cmd /c \"exit 0\"\n"
     )
 
-    try:
-        await TacticalClient().run_command(
-            agent_id, ps, shell="powershell", timeout=60,
-        )
-    except httpx.ReadTimeout:
-        # NATS-Timeout ist OK — Bootstrap ist fire-and-forget
-        pass
-    except Exception as e:
-        logger.warning("update-client delivery failed for %s: %s", agent_id, e)
-        raise HTTPException(status_code=502, detail=f"Tactical-Delivery fehlgeschlagen: {e}")
+    # Standard-Dispatch-Pfad: Wrapper + action_log + Callback-Bg-Task.
+    from routes.install import (
+        _build_script_and_bootstrap, _generate_job_id,
+        _deliver_command_bg, _spawn_bg,
+    )
+    job_id = _generate_job_id()
+    cmd = await _build_script_and_bootstrap(inner, job_id)
+    target_version = current.get("version") or "?"
+    log_id = await database.create_action_log(
+        agent_id, agent.get("hostname") or "",
+        f"client-update:{target_version}",
+        f"Tray-Update auf {target_version}",
+        "client_update", "install",
+        job_id=job_id,
+    )
+    _spawn_bg(_deliver_command_bg(
+        agent_id, agent.get("hostname") or "",
+        f"client-update:{target_version}",
+        f"Tray-Update auf {target_version}",
+        cmd, "install", "client_update", log_id=log_id,
+    ))
 
     return {
         "ok": True,
         "agent_id": agent_id,
-        "target_version": current.get("version"),
+        "target_version": target_version,
+        "job_id": job_id,
     }
 
 
