@@ -5319,6 +5319,19 @@ async def update_client_for_agent(agent_id: str):
         raise HTTPException(status_code=500, detail="Ungueltiger product_slug")
     setup_url = f"{proxy_url.rstrip('/')}/download/{slug}-setup.exe"
 
+    # Setup.py erwartet --proxy-url + --reg-secret fuer CLI-Pfad. Ohne
+    # diese Args faellt der Installer auf GUI (tkinter) zurueck — und
+    # haengt unter SYSTEM weil dort kein Desktop verfuegbar ist.
+    reg_secret = await runtime_value("registration_secret")
+    if not reg_secret:
+        raise HTTPException(
+            status_code=400,
+            detail="registration_secret nicht gesetzt — Setup braucht's fuer CLI-Install.",
+        )
+    # Defense: keine Quotes / Backslash im Secret damit PS-String nicht bricht
+    if any(ch in reg_secret for ch in ('"', "'", "\\", "\n", "\r")):
+        raise HTTPException(status_code=500, detail="registration_secret enthaelt unzulaessige Zeichen")
+
     # PowerShell-inner-Script — wird via _build_script_and_bootstrap mit
     # Progress/Callback-Wrapper umhuellt, damit das action_log das Ergebnis
     # bekommt und der Admin-UI Live-Output zeigt.
@@ -5354,7 +5367,12 @@ async def update_client_for_agent(agent_id: str):
         "_sfProgress 'Starte Setup silent...'\n"
         # SYSTEM ist schon Admin — kein -Verb RunAs noetig (das fordert UAC,
         # was unter SYSTEM kaputt sein kann). -Wait sync ExitCode.
-        "$proc = Start-Process -FilePath $tmp -ArgumentList '/SILENT','/NORESTART' -PassThru -Wait\n"
+        # Args: --proxy-url + --reg-secret triggern den CLI-Pfad in setup.py.
+        # Ohne Args = GUI-Mode → haengt unter SYSTEM (kein Desktop).
+        # --agent-id reicht setup.py weiter, sonst macht setup.py
+        # get_tactical_agent_id() das selbst (auch ok).
+        f"$args = @('--proxy-url', '{proxy_url.rstrip('/')}', '--reg-secret', '{reg_secret}', '--agent-id', '{agent_id}')\n"
+        "$proc = Start-Process -FilePath $tmp -ArgumentList $args -PassThru -Wait -NoNewWindow\n"
         "$ec = if ($null -eq $proc.ExitCode) { 0 } else { $proc.ExitCode }\n"
         "_sfProgress \"Setup beendet mit ExitCode $ec\"\n"
         "Remove-Item $tmp -Force -ErrorAction SilentlyContinue\n"
