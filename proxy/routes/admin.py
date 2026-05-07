@@ -5314,103 +5314,62 @@ async def update_client_for_agent(agent_id: str):
             detail="proxy_public_url nicht gesetzt — Setup-Download ginge nicht.",
         )
 
-    slug = (await runtime_value("product_slug")) or "Softshelf"
-    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,30}", slug):
-        raise HTTPException(status_code=500, detail="Ungueltiger product_slug")
-    setup_url = f"{proxy_url.rstrip('/')}/download/{slug}-setup.exe"
-
-    # Setup.py erwartet --proxy-url + --reg-secret fuer CLI-Pfad. Ohne
-    # diese Args faellt der Installer auf GUI (tkinter) zurueck — und
-    # haengt unter SYSTEM weil dort kein Desktop verfuegbar ist.
-    reg_secret = await runtime_value("registration_secret")
-    if not reg_secret:
-        raise HTTPException(
-            status_code=400,
-            detail="registration_secret nicht gesetzt — Setup braucht's fuer CLI-Install.",
-        )
-    # Defense: keine Quotes / Backslash im Secret damit PS-String nicht bricht
-    if any(ch in reg_secret for ch in ('"', "'", "\\", "\n", "\r")):
-        raise HTTPException(status_code=500, detail="registration_secret enthaelt unzulaessige Zeichen")
-
-    # PowerShell-inner-Script — wird via _build_script_and_bootstrap mit
-    # Progress/Callback-Wrapper umhuellt, damit das action_log das Ergebnis
-    # bekommt und der Admin-UI Live-Output zeigt.
-    setup_sha = current.get("setup_sha") or ""
-    sha_check = ""
-    if setup_sha and re.fullmatch(r"[a-f0-9]{64}", setup_sha):
-        sha_check = (
-            f"$want = '{setup_sha}'\n"
-            f"$got = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()\n"
-            f"if ($got -ne $want) {{ throw \"sha-Mismatch: erwartet $want, bekam $got\" }}\n"
-            "_sfProgress \"sha-Verify ok\"\n"
-        )
-    # Unique tmp-Filename damit ein zuvor abgebrochener Run die Datei nicht
-    # offen haelt (HRESULT 0x80070020 file-in-use). Dazu vor dem Download
-    # eventuelle vorherige Setup-Prozesse killen.
-    import secrets as _secrets
-    nonce = _secrets.token_hex(4)
-    inner = (
-        "$ErrorActionPreference = 'Stop'\n"
-        # Falls vorherige Setup-Instanz noch laeuft: killen (gleiche Endung).
-        # Idempotent — kein Fehler wenn nichts laeuft.
-        f"cmd /c \"taskkill /F /IM {slug}-setup.exe >nul 2>&1\" | Out-Null\n"
-        f"$tmp = Join-Path $env:TEMP '{slug}-setup-{current['id']}-{nonce}.exe'\n"
-        "if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }\n"
-        "_sfProgress 'Setup runterladen...'\n"
-        f"_sfDownload '{setup_url}' $tmp\n"
-        + sha_check +
-        # Tray killen — Setup-Installer ersetzt sonst die EXE nicht.
-        # taskkill /F ist idempotent (kein Fehler wenn Process nicht laeuft).
-        f"_sfProgress 'Killen alter Tray ({slug}.exe)...'\n"
-        f"cmd /c \"taskkill /F /IM {slug}.exe >nul 2>&1\" | Out-Null\n"
-        "Start-Sleep -Milliseconds 1500\n"
-        "_sfProgress 'Starte Setup silent...'\n"
-        # SYSTEM ist schon Admin — kein -Verb RunAs noetig (das fordert UAC,
-        # was unter SYSTEM kaputt sein kann). -Wait sync ExitCode.
-        # Args: --proxy-url + --reg-secret triggern den CLI-Pfad in setup.py.
-        # Ohne Args = GUI-Mode → haengt unter SYSTEM (kein Desktop).
-        # --agent-id reicht setup.py weiter, sonst macht setup.py
-        # get_tactical_agent_id() das selbst (auch ok).
-        f"$args = @('--proxy-url', '{proxy_url.rstrip('/')}', '--reg-secret', '{reg_secret}', '--agent-id', '{agent_id}')\n"
-        "$proc = Start-Process -FilePath $tmp -ArgumentList $args -PassThru -Wait -NoNewWindow\n"
-        "$ec = if ($null -eq $proc.ExitCode) { 0 } else { $proc.ExitCode }\n"
-        "_sfProgress \"Setup beendet mit ExitCode $ec\"\n"
-        "Remove-Item $tmp -Force -ErrorAction SilentlyContinue\n"
-        # Throw triggert den outer catch im wrapper-footer → success=false
-        # damit der Server status=error setzt. cmd /c exit allein wuerde
-        # success=true + exit_code=ec liefern und ggf. als success geloggt.
-        "if ($ec -ne 0) { throw \"Setup beendete mit ExitCode $ec\" }\n"
-        "cmd /c \"exit 0\"\n"
-    )
-
-    # Standard-Dispatch-Pfad: Wrapper + action_log + Callback-Bg-Task.
-    from routes.install import (
-        _build_script_and_bootstrap, _generate_job_id,
-        _deliver_command_bg, _spawn_bg,
-    )
-    job_id = _generate_job_id()
-    cmd = await _build_script_and_bootstrap(inner, job_id)
+    # Tactical-Script-Pfad: triggert das vom Admin in Tactical gepflegte
+    # "Kiosk Install"-Script. Vorteile vs. eigener PS-Wrapper:
+    #  - Single Source of Truth fuer die Setup-Args + Tray-Kill-Logik
+    #  - Tactical kennt das Setup-Argument-Schema schon vom Initial-Deploy
+    #  - Keine Doppelpflege bei Setup-py-Aenderungen
+    # Nachteil: kein Result-Callback (output=forget). action_log bleibt
+    # auf "running" bis das Tray die neue Version per Telemetrie meldet
+    # (siehe update_agent_telemetry: matched-Version → status=success).
     target_version = current.get("version") or "?"
+    job_id = _make_random_token()
     log_id = await database.create_action_log(
         agent_id, agent.get("hostname") or "",
         f"client-update:{target_version}",
         f"Tray-Update auf {target_version}",
         "client_update", "install",
         job_id=job_id,
+        metadata=__import__("json").dumps({"target_version": target_version}),
     )
-    _spawn_bg(_deliver_command_bg(
-        agent_id, agent.get("hostname") or "",
-        f"client-update:{target_version}",
-        f"Tray-Update auf {target_version}",
-        cmd, "install", "client_update", log_id=log_id,
-    ))
+
+    try:
+        result = await TacticalClient().run_script_by_name(
+            agent_id, "Kiosk Install", timeout=600,
+        )
+    except Exception as e:
+        await database.complete_action_log(
+            log_id, "error", error_summary=f"Tactical-Aufruf fehlgeschlagen: {e}",
+        )
+        raise HTTPException(status_code=502, detail=f"Tactical-Aufruf fehlgeschlagen: {e}")
+
+    if not result.get("ok"):
+        # Script in Tactical nicht gefunden oder HTTP-Error
+        msg = f"{result.get('status')}: {result.get('body','')[:200]}"
+        await database.complete_action_log(
+            log_id, "error", error_summary=msg,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tactical Script-Trigger fehlgeschlagen: {msg}",
+        )
+
+    # Status auf running setzen — wird auto-completed von der Telemetrie
+    # sobald das Tray die neue Version meldet (oder via timeout-Job).
+    await database.update_action_log_status(log_id, "running")
 
     return {
         "ok": True,
         "agent_id": agent_id,
         "target_version": target_version,
         "job_id": job_id,
+        "tactical_script_id": result.get("script_id"),
     }
+
+
+def _make_random_token() -> str:
+    import secrets as _secrets
+    return _secrets.token_hex(32)
 
 
 class BulkUpdateClientBody(BaseModel):
