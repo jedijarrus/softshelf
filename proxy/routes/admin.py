@@ -1242,6 +1242,43 @@ async def list_package_installations(name: str):
     return {"installations": installs, "summary": summary}
 
 
+async def resolve_target_version(pkg: dict) -> str | None:
+    """Ziel-Version eines Pakets: version_pin > catalog-latest (winget) >
+    aktuelle Custom/Plugin-Version > dominante fleet-available_version.
+    Single source of truth — wird vom staged-overview, list_package_agents,
+    start_rollout und _rollout_auto_start_tick gleichermassen genutzt."""
+    name = pkg["name"]
+    ptype = pkg.get("type") or "choco"
+    target = pkg.get("version_pin")
+    if target:
+        return target
+    if ptype == "winget":
+        try:
+            details = await winget_catalog.get_details(name)
+            if details and details.get("latest_version"):
+                return details["latest_version"]
+        except Exception:
+            pass
+        fleet = await database.get_agents_with_winget_package(name)
+        avs = [r.get("available_version") for r in fleet if r.get("available_version")]
+        if avs:
+            return winget_catalog.latest_version(avs)
+        return None
+    if ptype == "choco":
+        fleet = await database.get_agents_with_choco_package(name)
+        avs = [r.get("available_version") for r in fleet if r.get("available_version")]
+        if avs:
+            return winget_catalog.latest_version(avs)
+        return None
+    # custom + plugin: aktuelle Version aus package_versions
+    cv_id = pkg.get("current_version_id")
+    if cv_id:
+        cv = await database.get_package_version(cv_id)
+        if cv:
+            return cv.get("version_label")
+    return None
+
+
 @router.get(
     "/admin/api/packages/{name}/agents",
     dependencies=[Depends(_require_admin)],
@@ -1276,48 +1313,17 @@ async def list_package_agents(
     ptype = pkg.get("type") or "choco"
     needle = (q or "").strip().lower()
 
-    # Target-Version ermitteln (analog staged-overview): version_pin >
-    # catalog-latest > dominante available_version im Fleet.
-    target_version: str | None = None
-    if ptype == "winget":
-        target_version = pkg.get("version_pin")
-        if not target_version:
-            try:
-                details = await winget_catalog.get_details(name)
-                if details:
-                    target_version = details.get("latest_version")
-            except Exception:
-                pass
-            if not target_version:
-                fleet = await database.get_agents_with_winget_package(name)
-                avs = [r.get("available_version") for r in fleet if r.get("available_version")]
-                if avs:
-                    target_version = max(avs)
-    elif ptype == "choco":
-        target_version = pkg.get("version_pin")
-        if not target_version:
-            fleet = await database.get_agents_with_choco_package(name)
-            avs = [r.get("available_version") for r in fleet if r.get("available_version")]
-            if avs:
-                target_version = max(avs)
-    else:
-        cv_id = pkg.get("current_version_id")
-        if cv_id:
-            cv = await database.get_package_version(cv_id)
-            if cv:
-                target_version = cv.get("version_label")
+    target_version = await resolve_target_version(pkg)
 
     agents: list[dict] = []
     def _outdated(installed: str | None, available: str | None) -> bool:
-        # winget/choco-Outdated: entweder available_version aus per-agent scan
-        # ODER installed != target_version (catalog-latest). Letzteres faengt
-        # Faelle ab wo winget-upgrade auf dem Agent nichts findet (z.B.
-        # per-user-Install, scope-Filter) aber das Paket trotzdem alt ist.
+        # Outdated wenn winget-/choco-scan ein Update meldet, ODER wenn
+        # installed gegen target_version semver-kleiner ist. Letzteres
+        # faengt Faelle ab wo per-agent-scan nichts findet (per-user-Install,
+        # scope-Filter), das Paket aber tatsaechlich alt ist.
         if available:
             return True
-        if installed and target_version and installed != target_version:
-            return True
-        return False
+        return winget_catalog.is_outdated(installed, target_version)
 
     if ptype == "winget":
         rows = await database.get_agents_with_winget_package(name)
@@ -1825,39 +1831,20 @@ async def start_rollout(name: str, body: StartRolloutBody, user: dict = Depends(
     pkg = await database.get_package(name)
     if not pkg:
         raise HTTPException(status_code=404, detail="Paket nicht gefunden")
-    # Target-Version eingefrieren fuer Historie. Analog zu staged-overview.
-    target_version: str | None = pkg.get("version_pin")
-    ptype = pkg.get("type") or "choco"
-    if not target_version and ptype == "winget":
-        try:
-            details = await winget_catalog.get_details(name)
-            if details:
-                target_version = details.get("latest_version")
-        except Exception:
-            pass
-        if not target_version:
-            fleet = await database.get_agents_with_winget_package(name)
-            avs = [r.get("available_version") for r in fleet if r.get("available_version")]
-            if avs:
-                target_version = max(avs)
-    elif not target_version and ptype == "choco":
-        fleet = await database.get_agents_with_choco_package(name)
-        avs = [r.get("available_version") for r in fleet if r.get("available_version")]
-        if avs:
-            target_version = max(avs)
-    elif not target_version:
-        cv_id = pkg.get("current_version_id")
-        if cv_id:
-            cv = await database.get_package_version(cv_id)
-            if cv:
-                target_version = cv.get("version_label")
-    rollout_id = await database.create_rollout(
-        package_name=name,
-        display_name=pkg.get("display_name") or name,
-        action=body.action,
-        created_by=user.get("user_id"),
-        target_version=target_version,
-    )
+    target_version = await resolve_target_version(pkg)
+    try:
+        rollout_id = await database.create_rollout(
+            package_name=name,
+            display_name=pkg.get("display_name") or name,
+            action=body.action,
+            created_by=user.get("user_id"),
+            target_version=target_version,
+        )
+    except database.ActiveRolloutExists:
+        raise HTTPException(
+            status_code=409,
+            detail="Fuer dieses Paket laeuft bereits ein Rollout — bitte abbrechen oder abwarten.",
+        )
     result = await _dispatch_rollout_phase(pkg, 1)
     return {"ok": True, "rollout_id": rollout_id, "phase": 1, **result}
 
@@ -1992,34 +1979,7 @@ async def get_staged_overview():
         name = pkg["name"]
         ptype = pkg.get("type") or "choco"
 
-        # Target-Version ermitteln (je nach Paket-Typ)
-        target_version = None
-        if ptype == "winget":
-            target_version = pkg.get("version_pin")
-            if not target_version:
-                # Latest aus Catalog ODER dominante available_version im Fleet
-                try:
-                    details = await winget_catalog.get_details(name)
-                    if details:
-                        target_version = details.get("latest_version")
-                except Exception:
-                    pass
-                if not target_version:
-                    fleet = await database.get_agents_with_winget_package(name)
-                    avs = [r.get("available_version") for r in fleet if r.get("available_version")]
-                    if avs:
-                        target_version = max(avs)
-        elif ptype == "choco":
-            fleet = await database.get_agents_with_choco_package(name)
-            avs = [r.get("available_version") for r in fleet if r.get("available_version")]
-            if avs:
-                target_version = max(avs)
-        else:  # custom
-            cv_id = pkg.get("current_version_id")
-            if cv_id:
-                cv = await database.get_package_version(cv_id)
-                if cv:
-                    target_version = cv.get("version_label")
+        target_version = await resolve_target_version(pkg)
 
         # Per-Ring Version-Split
         split = await database.get_package_agents_version_split(name, ptype, target_version)
@@ -2035,7 +1995,7 @@ async def get_staged_overview():
                 if not iv:
                     continue
                 all_vers_counter[iv] = all_vers_counter.get(iv, 0) + 1
-                if iv != target_version:
+                if not winget_catalog.versions_equivalent(iv, target_version):
                     old_vers_counter[iv] = old_vers_counter.get(iv, 0) + 1
         current_installed_version = max(all_vers_counter, key=all_vers_counter.get) if all_vers_counter else None
         installed_version = max(old_vers_counter, key=old_vers_counter.get) if old_vers_counter else None

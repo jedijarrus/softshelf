@@ -182,6 +182,60 @@ def _publisher_from_id(package_id: str) -> str:
 _VERSION_PART_RE = re.compile(r"^(\d+)(.*)$")
 
 
+_NUM_PREFIX_RE = re.compile(r"^\d+")
+
+
+def _normalize_version(v: str | None) -> tuple[int, ...] | None:
+    """Numerische Version-Komponenten extrahieren, trailing-zero-Komponenten
+    strippen. Macht "1.2", "1.2.0", "1.2.0.0", "1.2 (de_de)" alle gleich.
+    Returns None wenn keine numerische Komponente extrahierbar ist."""
+    if not v:
+        return None
+    parts: list[int] = []
+    for seg in v.split("."):
+        m = _NUM_PREFIX_RE.match(seg.strip())
+        if not m:
+            return None
+        parts.append(int(m.group(0)))
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+
+def versions_equivalent(a: str | None, b: str | None) -> bool:
+    """True wenn a und b semantisch die gleiche Version sind.
+    Fuer Catalog/Fleet-Vergleich: "1.2"=="1.2.0", "11.0.27"=="11.0.27.0 (de_de)"."""
+    if (a or "") == (b or ""):
+        return True
+    na, nb = _normalize_version(a), _normalize_version(b)
+    if na is None or nb is None:
+        return False
+    return na == nb
+
+
+def is_outdated(installed: str | None, target: str | None) -> bool:
+    """Installed-Version < Target-Version, semver-aware. Wenn eine Seite
+    nicht parsbar ist, Fallback auf strikten String-Vergleich (verschieden=outdated)."""
+    if not installed or not target:
+        return False
+    if versions_equivalent(installed, target):
+        return False
+    ni, nt = _normalize_version(installed), _normalize_version(target)
+    if ni is None or nt is None:
+        return installed != target
+    return ni < nt
+
+
+def latest_version(versions: list[str]) -> str | None:
+    """Größte Version aus der Liste (semver-aware). None wenn leer."""
+    if not versions:
+        return None
+    try:
+        return max(versions, key=_version_key)
+    except Exception:
+        return versions[0]
+
+
 def _version_key(version: str) -> tuple:
     """Best-effort semver-Sort-Key. Vergleicht Versions-Strings nach
     semantischen Regeln: numerische Komponenten werden numerisch verglichen,

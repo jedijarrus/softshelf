@@ -163,7 +163,7 @@ async def _rollout_auto_start_tick():
         if not candidates:
             return
         active = await database.get_active_rollout_phases()
-        from routes.admin import _dispatch_rollout_phase
+        from routes.admin import _dispatch_rollout_phase, resolve_target_version
         import winget_catalog
         # Phase ist Zeit-Konzept, kein Agent-Konzept. Auto-Start triggert
         # wenn IRGENDWO outdated Agents im Fleet sind (egal welcher Ring).
@@ -174,40 +174,23 @@ async def _rollout_auto_start_tick():
             if p["name"] in active:
                 continue  # Rollout laeuft bereits
             ptype = p.get("type") or "choco"
+            target_version = await resolve_target_version(p)
+            # has_updates: per-agent-scan ODER semver-outdated gegen target.
+            # Ohne target_version kein Auto-Start (sonst pushen wir leere
+            # Rollouts hinterher).
             has_updates = False
-            # Target-Version: version_pin > catalog-latest > Fleet-Max.
-            # Wichtig damit Auto-Start auch greift wenn per-agent winget-scan
-            # kein available_version meldet (per-user-Install, scope-Filter).
-            target_version = p.get("version_pin")
             if ptype == "winget":
                 raw = await database.get_agents_with_winget_package(p["name"])
-                if not target_version:
-                    try:
-                        details = await winget_catalog.get_details(p["name"])
-                        if details:
-                            target_version = details.get("latest_version")
-                    except Exception:
-                        pass
-                if not target_version:
-                    avs = [r.get("available_version") for r in raw if r.get("available_version")]
-                    if avs:
-                        target_version = max(avs)
                 has_updates = any(
                     r.get("available_version")
-                    or (target_version and r.get("installed_version")
-                        and r["installed_version"] != target_version)
+                    or winget_catalog.is_outdated(r.get("installed_version"), target_version)
                     for r in raw
                 )
             elif ptype == "choco":
                 raw = await database.get_agents_with_choco_package(p["name"])
-                if not target_version:
-                    avs = [r.get("available_version") for r in raw if r.get("available_version")]
-                    if avs:
-                        target_version = max(avs)
                 has_updates = any(
                     r.get("available_version")
-                    or (target_version and r.get("installed_version")
-                        and r["installed_version"] != target_version)
+                    or winget_catalog.is_outdated(r.get("installed_version"), target_version)
                     for r in raw
                 )
             else:
@@ -215,16 +198,19 @@ async def _rollout_auto_start_tick():
                 has_updates = any(r.get("outdated") for r in raw)
             if not has_updates:
                 continue
-            # Rollout anlegen + Phase 1 dispatchen.
-            # target_version eingefrieren, damit Historie spaeter zeigt
-            # was rolled out wurde (catalog-latest kann sich aendern).
-            rollout_id = await database.create_rollout(
-                package_name=p["name"],
-                display_name=p.get("display_name") or p["name"],
-                action="push_update",
-                created_by=None,  # system-gestartet
-                target_version=target_version,
-            )
+            # target_version eingefrieren — catalog-latest kann sich aendern,
+            # Historie soll zeigen welche Version damals rolled out wurde.
+            try:
+                rollout_id = await database.create_rollout(
+                    package_name=p["name"],
+                    display_name=p.get("display_name") or p["name"],
+                    action="push_update",
+                    created_by=None,  # system-gestartet
+                    target_version=target_version,
+                )
+            except database.ActiveRolloutExists:
+                # Race mit parallelem manuellen Start — skip diesen Durchlauf
+                continue
             try:
                 await _dispatch_rollout_phase(p, 1)
                 logger.info(
@@ -283,10 +269,16 @@ async def _rollout_auto_advance_tick():
             if not pkg_row:
                 continue
             # Per-Paket opt-in: auto_advance=1 schaltet Phase 1→2 und 2→3
-            # automatisch weiter. Phase 3 → done ist nur Status-Bookkeeping
-            # (kein neuer Dispatch) und laeuft IMMER, sonst blockt ein
-            # stuck Rollout fuer immer neue Versionen.
+            # automatisch weiter. Phase 3 → done (reines Bookkeeping, kein
+            # neuer Dispatch) laeuft auch ohne auto_advance — aber NUR wenn
+            # der Rollout system-gestartet war (created_by IS NULL). Bei
+            # manuellem Start behaelt der Admin die Kontrolle und schliesst
+            # selbst ab.
             if r["current_phase"] != 3 and not pkg_row.get("auto_advance"):
+                continue
+            if (r["current_phase"] == 3
+                    and not pkg_row.get("auto_advance")
+                    and r.get("created_by") is not None):
                 continue
             la_raw = r.get("last_advanced_at")
             if not la_raw:
