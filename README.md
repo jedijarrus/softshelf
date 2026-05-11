@@ -265,7 +265,6 @@ softshelf/
 │   ├── api_client.py
 │   └── setup.py
 ├── installer/            # manual build script + Tactical deploy template
-├── docs/ # design specs (e.g. winget feature)
 ├── ARCHITEKTUR.md        # full architecture doc (German)
 ├── docker-compose.yml
 └── .env.example

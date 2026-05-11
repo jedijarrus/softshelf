@@ -529,8 +529,6 @@ Profil-Anwendung, Phased Rollouts und Compliance-Enforcement.
 
 ### Removed
 
-- **``** aus git-Tracking entfernt (internes
-  Planungs-Material).
 - Globaler `rollout_auto_advance_enabled` Setting entfernt — per-Paket-
   Flag ersetzt das vollständig.
 
