@@ -55,5 +55,7 @@ desktop.ini
 *.swo
 *~
 
-
+# Internal handoff & planning notes (not tracked in public repo)
+docs/internal/
+HANDOFF.md
 
