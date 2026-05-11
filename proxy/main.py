@@ -163,36 +163,26 @@ async def _rollout_auto_start_tick():
         if not candidates:
             return
         active = await database.get_active_rollout_phases()
-        from routes.admin import _dispatch_rollout_phase, _stage_to_ring_filter
-        # Phase 1 trifft ring1 (Canary). Auto-Start nur sinnvoll wenn dort
-        # outdated Agents existieren — sonst spammen wir leere Rollouts.
-        ring1_agents = {a["agent_id"] for a in
-                        await database.get_agents_by_ring(_stage_to_ring_filter("ring1"))}
+        from routes.admin import _dispatch_rollout_phase
+        # Phase ist Zeit-Konzept, kein Agent-Konzept. Auto-Start triggert
+        # wenn IRGENDWO outdated Agents im Fleet sind (egal welcher Ring).
+        # Leere Phasen laufen no-op durch und werden vom Auto-Advance-Tick
+        # weitergeschaltet — wichtig damit der Admin trotzdem den
+        # Phasen-Fortschritt im UI sieht.
         for p in candidates:
             if p["name"] in active:
                 continue  # Rollout laeuft bereits
-            if not ring1_agents:
-                continue
             ptype = p.get("type") or "choco"
             has_updates = False
             if ptype == "winget":
                 raw = await database.get_agents_with_winget_package(p["name"])
-                has_updates = any(
-                    r.get("available_version") and r["agent_id"] in ring1_agents
-                    for r in raw
-                )
+                has_updates = any(r.get("available_version") for r in raw)
             elif ptype == "choco":
                 raw = await database.get_agents_with_choco_package(p["name"])
-                has_updates = any(
-                    r.get("available_version") and r["agent_id"] in ring1_agents
-                    for r in raw
-                )
+                has_updates = any(r.get("available_version") for r in raw)
             else:
                 raw = await database.get_installations_for_package(p["name"])
-                has_updates = any(
-                    r.get("outdated") and r.get("agent_id") in ring1_agents
-                    for r in raw
-                )
+                has_updates = any(r.get("outdated") for r in raw)
             if not has_updates:
                 continue
             # Rollout anlegen + Phase 1 dispatchen
