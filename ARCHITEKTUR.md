@@ -81,6 +81,8 @@ Background-Jobs. Auf dem Host unter `/opt/softshelf/`.
 | `file_uploads.py` | MSI/EXE/Ordner-Uploads, Plugin-Uploads (.dll/.zip/.plgx), msiinfo-Metadata, ZIP-Handling, **Magic-Byte-Validation** (PE/OLE/ZIP/PLGX). |
 | `plugin_hosts.py` | Registry der unterstützten Plugin-Hosts (Notepad++, KeePass 2). Pro Host PowerShell-Snippets für `resolve_root` / `install` / `uninstall` / `detect`. Erweiterung neuer Hosts = neuer Eintrag im Dict. |
 | `tactical_client.py` | Tactical RMM API wrapper — `run_command` mit `run_as_user`-Flag. |
+| `rmm/__init__.py` | Factory `get_rmm_client()` — dispatcht auf `settings.rmm_backend`. Aktuell nur Tactical. |
+| `rmm/base.py` | `RMMClient` Protocol — Schnittstelle die jedes Backend implementieren muss. |
 | `winget_catalog.py` | Lokal gemirrowter Microsoft-winget-Source (täglich cdn.winget.microsoft.com). |
 | `winget_scanner.py` | Per-Agent winget-Inventur via `winget export` + `winget upgrade`. |
 | `choco_scanner.py` | Per-Agent choco-Inventur. |
@@ -889,6 +891,69 @@ ssh user@host "cd /opt/softshelf && \
 - `/app/data/uploads/`
 
 Regenerierbar via Tools: `winget_index.db`, `downloads/*.exe`.
+
+---
+
+## RMM-Backend austauschen
+
+Softshelf nutzt seit jeher Tactical RMM, ist aber seit v2.4.1 von der
+konkreten Implementierung abstrahiert. Der gesamte Code spricht nur noch
+ueber `rmm.get_rmm_client()` mit dem RMM — die Factory dispatcht intern
+auf `settings.rmm_backend`.
+
+### Was Softshelf vom RMM braucht
+
+Siehe `proxy/rmm/base.py` fuer die vollstaendige `RMMClient`-Protocol-
+Signatur. Kernfunktionen:
+
+| Methode | Wofuer |
+|---|---|
+| `run_command(agent_id, ps_code, run_as_user=False)` | Bootstrap-Script auf Agent starten (fire-and-forget) |
+| `run_script_by_name(agent_id, name)` | Force-Reinstall via vorgehaltenes RMM-Script |
+| `get_installed_software(agent_id)` | Software-Inventur (winget-Enrichment, custom-Detection) |
+| `find_agent_by_hostname(host)` | Setup-Register-Flow |
+| `check_agent_status(agent_id)` | Pre-Flight-Check vor Dispatch |
+
+### Schritte fuer einen Wechsel
+
+1. **Neuen Adapter schreiben.** `proxy/rmm/<name>.py` mit Class die die
+   `RMMClient`-Methoden bereitstellt (Duck-Typing, kein zwingender Inherit).
+2. **Factory erweitern.** In `rmm/__init__.py:get_rmm_client()` einen
+   Branch fuer `settings.rmm_backend == "<name>"` ergaenzen.
+3. **Settings registrieren.** In `config.py:RUNTIME_KEYS` Eintraege fuer
+   `<name>_url` / `<name>_api_key` analog zu `tactical_url`/`tactical_api_key`
+   anlegen + `allowed_values` von `rmm_backend` erweitern.
+4. **Agent-ID-Migration** wenn das neue RMM andere IDs nutzt:
+   - Spalte `agents.rmm_agent_id` als sekundaeren Schluessel einfuehren
+   - Softshelf-interne UUID als neuen Primary Key etablieren
+   - Setup.exe-Register-Flow um neue ID-Quelle erweitern (Machine-GUID
+     + hostname-Lookup gegen das neue RMM)
+   - Alle FK-Spalten (`action_log.agent_id`, `agent_winget_state.agent_id`,
+     `workflow_runs.agent_id` etc.) entsprechend migrieren
+5. **Deploy-Script-Variante** in `admin_help.html` ergaenzen (z.B.
+   Intune-Snippet, NinjaOne-Automation, SCCM-Package).
+6. **Force-Reinstall-Script-Name** im neuen RMM hinterlegen (Default
+   "Kiosk Install") oder Setting `rmm_kiosk_install_script_name` einfuehren.
+7. **Soft-Error-Detection** in `receive_callback` bleibt — die parst
+   Agent-stdout und ist RMM-agnostisch. Aber: `run_command`-Returnformate
+   unterscheiden sich (Tactical wrappt stdout als JSON-string, andere nicht).
+   Im Adapter abfangen.
+
+### Was UN-betroffen bleibt
+
+- Tray-Heartbeat geht direkt an den Proxy (`/api/v1/health`) — kein RMM-Touch
+- Setup.exe registriert via `/api/v1/register` mit `reg-secret` — independent
+- Agent-Callbacks `/api/v1/callback/{job_id}` werden vom Bootstrap-Script
+  selbst gesendet, nicht ueber das RMM
+- Workflows, Rollouts, Profile, Action-Log — alles Softshelf-intern
+
+### Aufwand-Schaetzung
+
+| Szenario | Aufwand |
+|---|---|
+| RMM mit aehnlicher API (run_command + software_scan) | 3-5 Tage |
+| RMM ohne software_scan oder ohne async run_command | 2-3 Wochen |
+| Plus Agent-ID-Wechsel | +1-2 Tage Migration |
 
 ---
 

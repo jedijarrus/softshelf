@@ -26,7 +26,7 @@ import re
 from typing import Any
 
 import database
-from tactical_client import TacticalClient
+from rmm import get_rmm_client
 
 logger = logging.getLogger("softshelf.winget.scanner")
 
@@ -468,7 +468,7 @@ async def scan_agent(agent_id: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str
     agent_scan_meta — ein Caller muss das Ergebnis nicht selbst persistieren.
     """
     try:
-        text = await TacticalClient().run_command(
+        text = await get_rmm_client().run_command(
             agent_id, _SCAN_SCRIPT, timeout=timeout
         )
     except Exception as e:

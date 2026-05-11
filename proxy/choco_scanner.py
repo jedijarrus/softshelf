@@ -19,7 +19,7 @@ import logging
 from typing import Any
 
 import database
-from tactical_client import TacticalClient
+from rmm import get_rmm_client
 
 logger = logging.getLogger("softshelf.choco.scanner")
 
@@ -172,7 +172,7 @@ async def scan_agent(agent_id: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str
     Returns: dict mit `ok`, `count`, `error`. Schreibt agent_choco_state und
     bumpt scan_meta.last_scan_at."""
     try:
-        text = await TacticalClient().run_command(
+        text = await get_rmm_client().run_command(
             agent_id, _SCAN_SCRIPT, timeout=timeout
         )
     except Exception as e:

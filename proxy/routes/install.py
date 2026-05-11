@@ -28,7 +28,7 @@ import plugin_hosts
 import winget_scanner
 from auth import create_download_token, verify_machine_token
 from config import get_settings, runtime_value
-from tactical_client import TacticalClient
+from rmm import get_rmm_client
 
 router = APIRouter()
 logger = logging.getLogger("softshelf")
@@ -70,7 +70,7 @@ async def _deliver_command_bg(
 
     # Pre-Flight: Agent existiert + online?
     try:
-        status = await TacticalClient().check_agent_status(agent_id)
+        status = await get_rmm_client().check_agent_status(agent_id)
         if not status["exists"]:
             error_msg = f"Agent existiert nicht in Tactical (Status: {status['status']})"
             logger.warning("%s %s pre-flight failed: %s — %s", pkg_type, action, display_name, error_msg)
@@ -88,7 +88,7 @@ async def _deliver_command_bg(
 
     # Bootstrap senden — fire-and-forget
     try:
-        await TacticalClient().run_command(
+        await get_rmm_client().run_command(
             agent_id, cmd, shell="powershell", timeout=60,
             run_as_user=run_as_user,
         )
@@ -1734,7 +1734,7 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                 workflow_run_id=entry.get("workflow_run_id"),
             )
             try:
-                await TacticalClient().run_command(
+                await get_rmm_client().run_command(
                     entry["agent_id"], retry_cmd,
                     shell="powershell", timeout=60, run_as_user=True,
                 )

@@ -284,8 +284,8 @@ async def cancel(run_id: int):
         state = _parse_json(run.get("step_state"), {})
         task_name = state.get("task_name")
         if task_name and state.get("reboot_pending"):
-            from tactical_client import TacticalClient
-            tc = TacticalClient()
+            from rmm import get_rmm_client
+            tc = get_rmm_client()
             cmd = f"schtasks /Delete /TN '{task_name}' /F 2>$null; Write-Output 'task deleted'"
             _spawn_bg(tc.run_command(run["agent_id"], cmd, timeout=10))
             logger.info("workflow run %d: cleanup AtStartup task %s on agent", run_id, task_name)
@@ -352,8 +352,8 @@ async def check_timeouts():
                     run["id"],
                 )
                 try:
-                    from tactical_client import TacticalClient
-                    tc = TacticalClient()
+                    from rmm import get_rmm_client
+                    tc = get_rmm_client()
                     await tc.run_command(
                         fresh["agent_id"],
                         'shutdown /r /t 60 /c "Softshelf: Erzwungener Neustart" /d p:4:1',

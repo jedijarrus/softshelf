@@ -17,7 +17,7 @@ import database
 import plugin_hosts
 import winget_catalog
 from auth import verify_machine_token
-from tactical_client import TacticalClient
+from rmm import get_rmm_client
 
 router = APIRouter()
 
@@ -69,7 +69,7 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
     installed_meta: dict[str, tuple[str, str]] = {}
     if needs_tactical:
         try:
-            installed_list = await TacticalClient().get_installed_software(agent_id)
+            installed_list = await get_rmm_client().get_installed_software(agent_id)
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Tactical RMM nicht erreichbar: {e}")
         installed_meta = {

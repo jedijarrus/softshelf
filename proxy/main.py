@@ -32,7 +32,7 @@ from middleware.csrf import csrf_middleware
 from middleware.rate_limit import rate_limit_middleware
 from middleware.rate_limit import is_trusted_peer as _is_trusted_peer
 from routes import packages, install, admin, register
-from tactical_client import TacticalClient
+from rmm import get_rmm_client
 
 logger = logging.getLogger("softshelf")
 
@@ -761,7 +761,7 @@ async def _resolve_caller_agent(request: Request) -> tuple[dict | None, str | No
     client_ip = _landing_client_ip(request)
     if not client_ip:
         return (None, "no_client_ip")
-    agent = await TacticalClient().find_agent_by_ip(client_ip)
+    agent = await get_rmm_client().find_agent_by_ip(client_ip)
     if agent is None:
         return (None, "not_in_tactical")
     short = (agent.get("hostname") or "").split(".")[0]
@@ -907,7 +907,7 @@ async def landing_trigger_install(request: Request):
         raise HTTPException(status_code=409, detail="Self-Service-Portal ist bereits installiert")
 
     # Trigger script — agent.agent_id kennen wir bereits aus Tactical-by-IP
-    tc = TacticalClient()
+    tc = get_rmm_client()
     result = await tc.run_script_by_name(
         agent["agent_id"],
         _LANDING_INSTALL_SCRIPT_NAME,
@@ -1010,7 +1010,7 @@ async def workflow_reboot_now(run_id: int, request: Request):
         return {"ok": False, "reason": f"Run ist {run['status']}, kein Reboot"}
     # Shutdown via Tactical dispatchen
     try:
-        tc = TacticalClient()
+        tc = get_rmm_client()
         await tc.run_command(agent_id, 'shutdown /r /t 5 /d p:4:1', timeout=10)
     except Exception as e:
         logger.warning("reboot-now: shutdown dispatch failed: %s", e)

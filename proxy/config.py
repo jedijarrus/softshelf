@@ -71,6 +71,15 @@ def get_settings() -> BootstrapSettings:
 # Definition + Defaults + Validierung pro Key
 
 RUNTIME_KEYS: dict[str, dict] = {
+    "rmm_backend": {
+        "label": "RMM-Backend",
+        "help": "Welches RMM-Tool fuer Agent-Commands genutzt wird. Aktuell nur 'tactical'. Siehe ARCHITEKTUR.md 'RMM-Backend austauschen'.",
+        "type": "string",
+        "secret": False,
+        "required": False,
+        "default": "tactical",
+        "allowed_values": ["tactical"],
+    },
     "tactical_url": {
         "label": "Tactical RMM URL",
         "help": "Basis-URL der Tactical-API, z. B. https://api.example.com",
