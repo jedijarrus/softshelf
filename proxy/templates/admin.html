@@ -9555,7 +9555,7 @@ async function _loadStagedDetail(pkgName, container) {
             ? phases.map(h => `Phase ${h.phase}${h.auto ? '·auto' : ''}`).join(' → ')
             : '—';
           const reached = r.current_phase > 3 ? 3 : (r.current_phase - (r.status === 'active' ? 0 : 1));
-          const verBadge = r.target_version
+          const verBadge = r.target_version && r.action !== 'push_uninstall'
             ? `<span class="shr-ver">→ ${esc(r.target_version)}</span>`
             : '';
           return `
