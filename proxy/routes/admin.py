@@ -1825,11 +1825,38 @@ async def start_rollout(name: str, body: StartRolloutBody, user: dict = Depends(
     pkg = await database.get_package(name)
     if not pkg:
         raise HTTPException(status_code=404, detail="Paket nicht gefunden")
+    # Target-Version eingefrieren fuer Historie. Analog zu staged-overview.
+    target_version: str | None = pkg.get("version_pin")
+    ptype = pkg.get("type") or "choco"
+    if not target_version and ptype == "winget":
+        try:
+            details = await winget_catalog.get_details(name)
+            if details:
+                target_version = details.get("latest_version")
+        except Exception:
+            pass
+        if not target_version:
+            fleet = await database.get_agents_with_winget_package(name)
+            avs = [r.get("available_version") for r in fleet if r.get("available_version")]
+            if avs:
+                target_version = max(avs)
+    elif not target_version and ptype == "choco":
+        fleet = await database.get_agents_with_choco_package(name)
+        avs = [r.get("available_version") for r in fleet if r.get("available_version")]
+        if avs:
+            target_version = max(avs)
+    elif not target_version:
+        cv_id = pkg.get("current_version_id")
+        if cv_id:
+            cv = await database.get_package_version(cv_id)
+            if cv:
+                target_version = cv.get("version_label")
     rollout_id = await database.create_rollout(
         package_name=name,
         display_name=pkg.get("display_name") or name,
         action=body.action,
         created_by=user.get("user_id"),
+        target_version=target_version,
     )
     result = await _dispatch_rollout_phase(pkg, 1)
     return {"ok": True, "rollout_id": rollout_id, "phase": 1, **result}

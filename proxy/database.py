@@ -284,6 +284,15 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_rollouts_status ON rollouts(status)"
         )
+        # Migration: target_version (Version die beim Start eingefroren wurde,
+        # damit Historie spaeter zeigt was rolled out wurde — Catalog-latest
+        # kann sich aendern).
+        async with db.execute("PRAGMA table_info(rollouts)") as cur:
+            ro_cols = {row[1] for row in await cur.fetchall()}
+        if "target_version" not in ro_cols:
+            await db.execute(
+                "ALTER TABLE rollouts ADD COLUMN target_version TEXT"
+            )
 
         # Action-Log (Install-Observability: pending → running → success/error)
         # Migration: alte Tabelle mit defekter FK droppen (packages hat name PK, nicht id)
@@ -2894,16 +2903,17 @@ async def cancel_scheduled_job(job_id: int):
 
 async def create_rollout(
     package_name: str, display_name: str, action: str,
-    created_by: int | None,
+    created_by: int | None, target_version: str | None = None,
 ) -> int:
     import json as _json
     async with _db() as db:
         cur = await db.execute(
             "INSERT INTO rollouts "
             "(package_name, display_name, action, current_phase, status, "
-            " created_by, last_advanced_at, phase_history) "
-            "VALUES (?, ?, ?, 1, 'active', ?, datetime('now'), ?)",
-            (package_name, display_name, action, created_by, _json.dumps([])),
+            " created_by, last_advanced_at, phase_history, target_version) "
+            "VALUES (?, ?, ?, 1, 'active', ?, datetime('now'), ?, ?)",
+            (package_name, display_name, action, created_by,
+             _json.dumps([]), target_version),
         )
         await db.commit()
         return cur.lastrowid
