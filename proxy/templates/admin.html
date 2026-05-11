@@ -9561,6 +9561,7 @@ async function _loadStagedDetail(pkgName, container) {
       : '<div class="empty-mini">Noch keine Rollouts für dieses Paket</div>';
 
     const agents = agentsResp.agents || [];
+    const targetVersion = agentsResp.package?.target_version || null;
     // Pro Ring gruppieren und je Agent Status-Pill basierend auf last_action +
     // outdated-Flag. So sieht Admin sofort: wer ist auf Target, wo hängt was.
     const statusPill = (a) => {
@@ -9579,12 +9580,23 @@ async function _loadStagedDetail(pkgName, container) {
       }
       return `<span class="sr-ag-status sr-ag-missing">nicht installiert</span>`;
     };
+    const verCell = (a) => {
+      const iv = a.installed_version;
+      if (!iv) return '—';
+      if (a.outdated && targetVersion && iv !== targetVersion) {
+        return `<span class="sr-v-old">${esc(iv)}</span><span class="sr-v-arrow"> → </span><span class="sr-v-new">${esc(targetVersion)}</span>`;
+      }
+      if (a.available_version) {
+        return `${esc(iv)} → ${esc(a.available_version)}`;
+      }
+      return esc(iv);
+    };
     const byRing = {1:[], 2:[], 3:[]};
     agents.forEach(a => { const r = a.ring || 3; (byRing[r] || byRing[3]).push(a); });
     const renderAgent = a => `
       <div class="sr-agent-row">
         <span class="sr-ag-host" onclick="openAgentFromHome(${jsStr(a.agent_id)},${jsStr(a.hostname||'')})" style="cursor:pointer">${esc(a.hostname || '—')}</span>
-        <span class="sr-ag-ver">${esc(a.installed_version || '—')}${a.available_version ? ` → ${esc(a.available_version)}` : ''}</span>
+        <span class="sr-ag-ver">${verCell(a)}</span>
         ${statusPill(a)}
       </div>`;
     const ringSections = [1,2,3].map(ring => {
