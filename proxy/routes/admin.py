@@ -1276,7 +1276,49 @@ async def list_package_agents(
     ptype = pkg.get("type") or "choco"
     needle = (q or "").strip().lower()
 
+    # Target-Version ermitteln (analog staged-overview): version_pin >
+    # catalog-latest > dominante available_version im Fleet.
+    target_version: str | None = None
+    if ptype == "winget":
+        target_version = pkg.get("version_pin")
+        if not target_version:
+            try:
+                details = await winget_catalog.get_details(name)
+                if details:
+                    target_version = details.get("latest_version")
+            except Exception:
+                pass
+            if not target_version:
+                fleet = await database.get_agents_with_winget_package(name)
+                avs = [r.get("available_version") for r in fleet if r.get("available_version")]
+                if avs:
+                    target_version = max(avs)
+    elif ptype == "choco":
+        target_version = pkg.get("version_pin")
+        if not target_version:
+            fleet = await database.get_agents_with_choco_package(name)
+            avs = [r.get("available_version") for r in fleet if r.get("available_version")]
+            if avs:
+                target_version = max(avs)
+    else:
+        cv_id = pkg.get("current_version_id")
+        if cv_id:
+            cv = await database.get_package_version(cv_id)
+            if cv:
+                target_version = cv.get("version_label")
+
     agents: list[dict] = []
+    def _outdated(installed: str | None, available: str | None) -> bool:
+        # winget/choco-Outdated: entweder available_version aus per-agent scan
+        # ODER installed != target_version (catalog-latest). Letzteres faengt
+        # Faelle ab wo winget-upgrade auf dem Agent nichts findet (z.B.
+        # per-user-Install, scope-Filter) aber das Paket trotzdem alt ist.
+        if available:
+            return True
+        if installed and target_version and installed != target_version:
+            return True
+        return False
+
     if ptype == "winget":
         rows = await database.get_agents_with_winget_package(name)
         for r in rows:
@@ -1288,7 +1330,7 @@ async def list_package_agents(
                 "installed_version": r["installed_version"],
                 "available_version": r["available_version"],
                 "scanned_at":        r["scanned_at"],
-                "outdated":          bool(r["available_version"]),
+                "outdated":          _outdated(r["installed_version"], r["available_version"]),
             })
     elif ptype == "choco":
         rows = await database.get_agents_with_choco_package(name)
@@ -1301,7 +1343,7 @@ async def list_package_agents(
                 "installed_version": r["installed_version"],
                 "available_version": r["available_version"],
                 "scanned_at":        r["scanned_at"],
-                "outdated":          bool(r["available_version"]),
+                "outdated":          _outdated(r["installed_version"], r["available_version"]),
             })
     else:
         # custom: Zwei Quellen zusammenfuehren:
@@ -1407,10 +1449,11 @@ async def list_package_agents(
 
     return {
         "package": {
-            "name":         name,
-            "display_name": pkg.get("display_name"),
-            "type":         ptype,
-            "category":     pkg.get("category"),
+            "name":           name,
+            "display_name":   pkg.get("display_name"),
+            "type":           ptype,
+            "category":       pkg.get("category"),
+            "target_version": target_version,
         },
         "total":          total_all,
         "total_filtered": len(agents),
