@@ -1284,6 +1284,7 @@ async def list_package_agents(
                 "agent_id":          r["agent_id"],
                 "hostname":          r["hostname"],
                 "last_seen":         r["last_seen"],
+                "ring":              r["ring"] or 3,
                 "installed_version": r["installed_version"],
                 "available_version": r["available_version"],
                 "scanned_at":        r["scanned_at"],
@@ -1296,6 +1297,7 @@ async def list_package_agents(
                 "agent_id":          r["agent_id"],
                 "hostname":          r["hostname"],
                 "last_seen":         r["last_seen"],
+                "ring":              r["ring"] or 3,
                 "installed_version": r["installed_version"],
                 "available_version": r["available_version"],
                 "scanned_at":        r["scanned_at"],
@@ -1314,6 +1316,7 @@ async def list_package_agents(
                 "agent_id":          r["agent_id"],
                 "hostname":          r["hostname"],
                 "last_seen":         r["last_seen"],
+                "ring":              r.get("ring") or 3,
                 "installed_version": r.get("version_label"),
                 "available_version": None,
                 "scanned_at":        r.get("installed_at"),
@@ -1359,6 +1362,7 @@ async def list_package_agents(
                             "agent_id":          agent["agent_id"],
                             "hostname":          agent.get("hostname"),
                             "last_seen":         agent.get("last_seen"),
+                            "ring":              agent.get("ring") or 3,
                             "installed_version": item.get("version") or None,
                             "available_version": None,
                             "scanned_at":        None,
@@ -1373,6 +1377,23 @@ async def list_package_agents(
             for r in results:
                 if isinstance(r, dict):
                     agents.append(r)
+
+    # Letzte action_log-Eintraege pro Agent fuer dieses Paket dazu — zeigt
+    # im Detail ob/wie ein laufender Rollout den jeweiligen Agent erreicht
+    # hat (pending / running / success / error).
+    last_actions = await database.get_latest_action_per_agent(name)
+    for a in agents:
+        la = last_actions.get(a["agent_id"])
+        if la:
+            a["last_action"] = {
+                "id":            la["id"],
+                "action":        la["action"],
+                "status":        la["status"],
+                "exit_code":     la["exit_code"],
+                "error_summary": la["error_summary"],
+                "created_at":    la["created_at"],
+                "completed_at":  la["completed_at"],
+            }
 
     total_all = len(agents)
     if needle:
