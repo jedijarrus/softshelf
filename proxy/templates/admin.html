@@ -9293,25 +9293,10 @@ function renderStagedRow(p, settings) {
 
   if (p.status === 'ready') {
     const outdated = (p.phases || []).reduce((sum, ph) => sum + (ph.on_old || 0), 0);
-    const ring1Phase = (p.phases || []).find(ph => ph.phase === 1) || {};
-    const ring1Outdated = ring1Phase.on_old || 0;
-    const ring1Total = ring1Phase.total || 0;
-    // Auto-Start dispatcht Phase 1 — braucht outdated Ring-1-Agents. Sonst
-    // Hinweis statt falsches "Auto-Start beim naechsten Check"-Tag, plus
-    // immer manuellen Start-Button anbieten.
-    let actionsRight;
-    if (p.auto_advance && ring1Outdated > 0) {
-      actionsRight = `<span class="sr-state-tag sr-state-auto">${outdated} outdated · Auto-Start beim nächsten Check</span>`;
-    } else if (p.auto_advance && ring1Total === 0) {
-      actionsRight = `<span class="sr-state-tag sr-state-ready" title="Auto-Modus aktiv aber Ring 1 hat keine Agents — Auto-Start kann nicht greifen. Agents Ring 1 zuweisen oder manuell starten.">${outdated} outdated · Ring 1 leer</span>
-                      <button class="dist-row-btn primary" onclick="startRollout(${jsStr(p.name)}, ${jsStr(p.display_name)})">Manuell starten</button>`;
-    } else if (p.auto_advance) {
-      actionsRight = `<span class="sr-state-tag sr-state-ready" title="Auto-Modus aktiv aber kein Ring-1-Agent ist outdated">${outdated} outdated · Ring 1 aktuell</span>
-                      <button class="dist-row-btn primary" onclick="startRollout(${jsStr(p.name)}, ${jsStr(p.display_name)})">Manuell starten</button>`;
-    } else {
-      actionsRight = `<span class="sr-state-tag sr-state-ready">${outdated} Clients outdated</span>
-                      <button class="dist-row-btn primary" onclick="startRollout(${jsStr(p.name)}, ${jsStr(p.display_name)})">Rollout starten</button>`;
-    }
+    const actionsRight = p.auto_advance
+      ? `<span class="sr-state-tag sr-state-auto">${outdated} outdated · Auto-Start beim nächsten Check</span>`
+      : `<span class="sr-state-tag sr-state-ready">${outdated} Clients outdated</span>
+         <button class="dist-row-btn primary" onclick="startRollout(${jsStr(p.name)}, ${jsStr(p.display_name)})">Rollout starten</button>`;
     return `
       <div class="sr-row sr-ready">
         <div class="sr-head">
