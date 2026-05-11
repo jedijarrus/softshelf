@@ -36,7 +36,7 @@ from tactical_client import TacticalClient
 
 logger = logging.getLogger("softshelf")
 
-VERSION = "2.2.0"
+VERSION = "2.4.1"
 
 # /app/downloads — shared volume mit dem builder-Container
 DOWNLOADS_DIR = "/app/downloads"

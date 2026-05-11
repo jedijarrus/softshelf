@@ -258,9 +258,11 @@ rollouts                  -- Phased-Rollout State-Machine
   display_name, action
   current_phase      -- 1 | 2 | 3 | >3=done
   status             -- active | done | cancelled
-  created_at, created_by
+  created_at, created_by  -- created_by IS NULL → system-gestartet
   last_advanced_at
   phase_history      JSON  -- [{phase, at, auto?}]
+  target_version           -- bei Start eingefrorene Ziel-Version (v2.4.1)
+  UNIQUE INDEX idx_rollouts_one_active(package_name) WHERE status='active'
 
 scheduled_jobs            -- Wartungsfenster
   id, run_at, action_type
@@ -502,6 +504,50 @@ Mode A Running hat zusätzlich `[Pause auto]`-Button:
 | 2 | ring=2 | ring2 (Pilot) |
 | 3 | ring=3 | ring3 / prod (Produktion) |
 
+**Phase ist Zeit-Konzept, nicht Agent-Konzept** (seit v2.4.1): Auto-Start
+triggert sobald irgendwo im Fleet outdated Agents existieren, egal in
+welchem Ring. Leere Phasen laufen no-op durch und werden vom Advance-Tick
+weitergeschaltet. Der Admin sieht den Phasen-Fortschritt durchgehend
+auch wenn die ersten Ringe (noch) leer sind.
+
+### target_version-Resolution
+
+Beim Start eines Rollouts (sowohl manuell als auch auto-gestartet) wird die
+Ziel-Version in `rollouts.target_version` eingefroren. Quelle (seit v2.4.1
+zentralisiert in `routes.admin.resolve_target_version(pkg)`):
+
+1. `packages.version_pin` (wenn gesetzt)
+2. winget-Catalog `latest_version` (fuer `type='winget'`)
+3. `package_versions.version_label` aus `current_version_id` (fuer
+   `type='custom'`/`'plugin'`)
+4. Maximaler `available_version` im Fleet (semver-aware via
+   `winget_catalog.latest_version`)
+
+`target_version` wird in der History angezeigt und ist die Basis fuer den
+`outdated`-Vergleich pro Agent.
+
+### Semver-aware Version-Compare
+
+`winget_catalog` exportiert seit v2.4.1:
+
+| Funktion | Verhalten |
+|---|---|
+| `versions_equivalent(a, b)` | `"1.2" == "1.2.0"`, locale-Suffix-tolerant (`"11.0.27.0 (de_de)"` == `"11.0.27"`). Trailing-zero werden gestrippt. |
+| `is_outdated(installed, target)` | semver-`<`. Wenn nicht parsbar: Fallback auf String-Vergleich. |
+| `latest_version(list)` | semver-`max`. |
+
+Genutzt von `_rollout_auto_start_tick.has_updates`,
+`list_package_agents._outdated`, `get_package_agents_version_split`,
+`staged-overview`-Buckets. Behebt lexikographische Bugs wie `"1.10" > "1.9"`.
+
+### Race-Schutz
+
+Partial UNIQUE Index `idx_rollouts_one_active` auf
+`rollouts(package_name) WHERE status='active'` verhindert zwei parallele
+active Rollouts pro Paket (Race zwischen API-Start und Tick-Start).
+`database.create_rollout` wirft `ActiveRolloutExists` bei Konflikt. API
+gibt `409`, Tick skipped diesen Durchlauf.
+
 ### Wartezeiten
 
 `rollout_auto_advance_hours_1_to_2` (Default 24h) und
@@ -513,6 +559,18 @@ konfigurierbar.
 `rollout_max_error_pct` (Default 0):
 - `0` = jeder einzelne Fehler blockt Auto-Advance
 - `>0` = Auto-Advance blockt wenn `offene_Fehler/Agents-in-Phase > Schwelle`
+
+### Phase-3-Auto-Completion-Policy
+
+`current_phase=3 → status=done` ist reines Bookkeeping (kein neuer
+Dispatch). Seit v2.4.1:
+
+- **System-gestartete Rollouts** (`created_by IS NULL`) werden auch ohne
+  `pkg.auto_advance` zu `done` weitergeschaltet — sonst wuerde ein
+  Stuck-Phase-3-Rollout fuer immer neue Versionen blockieren.
+- **Manuell gestartete Rollouts** behalten Admin-Kontrolle: Phase 3 bleibt
+  `active` bis Admin explizit `[Weiter]` klickt (welches auf `done` schaltet).
+- Fehler-Rate-Gate gilt weiterhin in beiden Faellen.
 
 ---
 

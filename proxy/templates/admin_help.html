@@ -501,6 +501,22 @@
 <div class="doc-callout warning">
   <b>Abbruch:</b> <code>Abbrechen</code>-Button stoppt den Rollout. Bereits dispatcht Phasen bleiben auf den Agents — Rollback ist ein separater Uninstall (Profil-Unassign mit Uninstall oder manuelles choco/winget uninstall).
 </div>
+
+<h3>Phase ist Zeit, nicht Agent (seit v2.4.1)</h3>
+<p>Ein Auto-Rollout startet Phase 1 sobald irgendwo im Fleet outdated Agents existieren — egal welcher Ring. Leere Phasen laufen no-op durch und werden vom Advance-Tick nach Ablauf der Wartezeit weitergeschaltet. So sieht der Admin den Phasen-Fortschritt durchgehend, auch wenn z.B. Ring 1 (Canary) noch leer ist.</p>
+
+<h3>Detailansicht pro Paket</h3>
+<p>Im Rollouts-Tab pro Zeile auf <b>▼ Details</b> klicken. Zeigt:</p>
+<ul>
+  <li><b>Agents pro Ring gruppiert</b> mit Counts (Ring 1/2/3 separate Sektionen)</li>
+  <li><b>Status-Pill pro Agent</b>: <code>✓ aktuell</code>, <code>outdated</code>, <code>⟳ läuft</code>, <code>⚠ Fehler</code>, <code>nicht installiert</code></li>
+  <li><b>Versions-Diff</b>: <code>installed → target</code> bei outdated Agents</li>
+  <li><b>Rollout-Historie</b> mit Versions-Badge <code>→ &lt;version&gt;</code> pro Eintrag</li>
+  <li>Klick auf Hostname springt zur Agent-Detailansicht</li>
+</ul>
+
+<h3>target_version eingefroren beim Start</h3>
+<p>Beim Anlegen eines Rollouts wird die Ziel-Version festgeschrieben (<code>rollouts.target_version</code>). Auch wenn der winget-Catalog danach eine neuere Version liefert, zeigt die Historie weiterhin was damals tatsächlich rolled out wurde. Outdated-Vergleich pro Agent nutzt seit v2.4.1 semver-Compare (toleriert <code>"1.2"</code> vs <code>"1.2.0"</code> und Locale-Suffixe wie <code>"11.0.27.0 (de_de)"</code>).</p>
 </section>
 
 <section id="rollout-auto">
