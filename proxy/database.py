@@ -284,6 +284,11 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_rollouts_status ON rollouts(status)"
         )
+        # Race-Schutz: nur ein active Rollout pro Paket gleichzeitig.
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_rollouts_one_active "
+            "ON rollouts(package_name) WHERE status = 'active'"
+        )
         # Migration: target_version (Version die beim Start eingefroren wurde,
         # damit Historie spaeter zeigt was rolled out wurde — Catalog-latest
         # kann sich aendern).
@@ -1616,12 +1621,21 @@ async def get_package_agents_version_split(
         agents_in_ring = [a for a in all_agents if (a["ring"] or 3) == ring]
         on_target = on_old = missing = 0
         agent_items = []
+        # Lokaler semver-equiv-Vergleich um Format-Drift (1.2 vs 1.2.0,
+        # locale-Suffix) abzufangen. Lazy-import um aiosqlite-Module clean
+        # zu halten.
+        from winget_catalog import versions_equivalent as _ve
         for a in agents_in_ring:
             iv = installed_map.get(a["agent_id"])
             if not iv:
                 state = "missing"
                 missing += 1
-            elif target_version and iv == target_version:
+            elif target_version and _ve(iv, target_version):
+                state = "on_target"
+                on_target += 1
+            elif not target_version:
+                # Ohne target_version koennen wir kein "old" sagen — alles
+                # was installiert ist gilt als on_target (Best-Effort).
                 state = "on_target"
                 on_target += 1
             else:
@@ -2901,22 +2915,32 @@ async def cancel_scheduled_job(job_id: int):
 
 # ── Rollouts (phased rollout state machine) ─────────────────────────────────
 
+class ActiveRolloutExists(Exception):
+    """Schon ein active rollout fuer dieses Paket vorhanden."""
+
+
 async def create_rollout(
     package_name: str, display_name: str, action: str,
     created_by: int | None, target_version: str | None = None,
 ) -> int:
     import json as _json
-    async with _db() as db:
-        cur = await db.execute(
-            "INSERT INTO rollouts "
-            "(package_name, display_name, action, current_phase, status, "
-            " created_by, last_advanced_at, phase_history, target_version) "
-            "VALUES (?, ?, ?, 1, 'active', ?, datetime('now'), ?, ?)",
-            (package_name, display_name, action, created_by,
-             _json.dumps([]), target_version),
-        )
-        await db.commit()
-        return cur.lastrowid
+    try:
+        async with _db() as db:
+            cur = await db.execute(
+                "INSERT INTO rollouts "
+                "(package_name, display_name, action, current_phase, status, "
+                " created_by, last_advanced_at, phase_history, target_version) "
+                "VALUES (?, ?, ?, 1, 'active', ?, datetime('now'), ?, ?)",
+                (package_name, display_name, action, created_by,
+                 _json.dumps([]), target_version),
+            )
+            await db.commit()
+            return cur.lastrowid
+    except aiosqlite.IntegrityError as e:
+        # idx_rollouts_one_active: schon ein active rollout fuer dieses Paket
+        if "idx_rollouts_one_active" in str(e) or "UNIQUE" in str(e):
+            raise ActiveRolloutExists(package_name) from e
+        raise
 
 
 async def get_rollout(rollout_id: int) -> dict | None:
