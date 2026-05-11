@@ -25,7 +25,7 @@ from typing import Any
 
 import database
 import winget_catalog
-from tactical_client import TacticalClient
+from rmm import get_rmm_client
 
 logger = logging.getLogger("softshelf.winget.enrichment")
 
@@ -147,7 +147,7 @@ async def _collect_fleet_software() -> dict[str, dict[str, Any]]:
 
     agg: dict[str, dict[str, Any]] = {}
     sem = asyncio.Semaphore(15)
-    tactical = TacticalClient()
+    tactical = get_rmm_client()
 
     async def _fetch(agent: dict):
         async with sem:

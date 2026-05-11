@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 import database
 from auth import create_machine_token
 from config import runtime_value
-from tactical_client import TacticalClient
+from rmm import get_rmm_client
 
 router = APIRouter()
 
@@ -66,7 +66,7 @@ async def register_client(body: RegisterRequest):
 
     # 3. Agent-ID in Tactical RMM verifizieren
     try:
-        await TacticalClient().get_installed_software(body.agent_id)
+        await get_rmm_client().get_installed_software(body.agent_id)
     except Exception:
         raise HTTPException(
             status_code=404,
