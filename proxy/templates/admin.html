@@ -1453,7 +1453,7 @@ body.is-not-admin .icon-btn[onclick*="togglePackageStaged"] {
 .sr-agent-list { display: flex; flex-direction: column; gap: 2px; }
 .sr-agent-row {
   display: grid;
-  grid-template-columns: 100px minmax(160px, 1fr) 180px;
+  grid-template-columns: minmax(160px, 1fr) 200px 110px;
   align-items: center;
   gap: 10px;
   padding: 6px 8px;
@@ -1462,7 +1462,31 @@ body.is-not-admin .icon-btn[onclick*="togglePackageStaged"] {
 }
 .sr-agent-row:hover { background: var(--bg-hover); }
 .sr-agent-row .sr-ag-host { font-weight: 500; color: var(--fg); }
+.sr-agent-row .sr-ag-host:hover { color: var(--accent); }
 .sr-agent-row .sr-ag-ver { font-family: var(--mono); font-size: 11px; color: var(--fg-4); }
+
+.sr-ring-section { margin-bottom: 14px; }
+.sr-ring-section-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.sr-ring-section-count { color: var(--fg-4); }
+.sr-ring-section-stats { display: inline-flex; gap: 6px; margin-left: auto; }
+
+.sr-ag-status {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 2px 8px; border-radius: 10px;
+  font-size: 10px; font-weight: 500;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.sr-ag-ok       { background: rgba(34,197,94,.12);  color: #16a34a; border-color: rgba(34,197,94,.25); }
+.sr-ag-outdated { background: rgba(245,158,11,.12); color: #d97706; border-color: rgba(245,158,11,.25); }
+.sr-ag-running  { background: rgba(59,130,246,.12); color: #2563eb; border-color: rgba(59,130,246,.25); }
+.sr-ag-error    { background: rgba(239,68,68,.12);  color: #dc2626; border-color: rgba(239,68,68,.25); }
+.sr-ag-missing  { background: var(--bg-2);           color: var(--fg-4); border-color: var(--border); }
 
 /* Collapse-Panels (Historie, Ring-Zuordnung, Einstellungen) */
 .collapse-panel {
@@ -9284,9 +9308,11 @@ function renderStagedRow(p, settings) {
             ${errorBadge}
             ${autoBadge}
             ${actionsRight}
+            <button class="dist-row-btn" onclick="toggleStagedDetail(${jsStr(p.name)})">▼ Details</button>
             ${rowMenu}
           </div>
         </div>
+        <div class="sr-detail" id="sr-detail-${esc(p.name.replace(/[^a-zA-Z0-9]/g,'_'))}" style="display:none"></div>
       </div>`;
   }
 
@@ -9304,9 +9330,11 @@ function renderStagedRow(p, settings) {
             ${errorBadge}
             ${autoBadge}
             <span class="sr-state-tag sr-state-done">${p.auto_advance ? 'wartet auf Update' : '✓ fertig'}</span>
+            <button class="dist-row-btn" onclick="toggleStagedDetail(${jsStr(p.name)})">▼ Details</button>
             ${rowMenu}
           </div>
         </div>
+        <div class="sr-detail" id="sr-detail-${esc(p.name.replace(/[^a-zA-Z0-9]/g,'_'))}" style="display:none"></div>
       </div>`;
   }
 
@@ -9342,9 +9370,11 @@ function renderStagedRow(p, settings) {
           <span class="sr-version-inline">${versionLine}</span>
           ${autoBadge}
           <span class="sr-state-tag ${totals.missing === 0 && totals.total > 0 ? 'sr-state-done' : ''}">${esc(idleTag)}</span>
+          <button class="dist-row-btn" onclick="toggleStagedDetail(${jsStr(p.name)})">▼ Details</button>
           ${rowMenu}
         </div>
       </div>
+      <div class="sr-detail" id="sr-detail-${esc(p.name.replace(/[^a-zA-Z0-9]/g,'_'))}" style="display:none"></div>
     </div>`;
 }
 
@@ -9531,16 +9561,56 @@ async function _loadStagedDetail(pkgName, container) {
       : '<div class="empty-mini">Noch keine Rollouts für dieses Paket</div>';
 
     const agents = agentsResp.agents || [];
-    const agentRows = agents.slice(0, 40).map(a => {
-      const ringLbl = _ringLabels[a.ring || 3] || `Ring ${a.ring || 3}`;
+    // Pro Ring gruppieren und je Agent Status-Pill basierend auf last_action +
+    // outdated-Flag. So sieht Admin sofort: wer ist auf Target, wo hängt was.
+    const statusPill = (a) => {
+      const la = a.last_action;
+      if (la && (la.status === 'pending' || la.status === 'running')) {
+        return `<span class="sr-ag-status sr-ag-running" title="${esc(la.action || '')} läuft seit ${esc(relTime(la.created_at || ''))}">⟳ läuft</span>`;
+      }
+      if (la && la.status === 'error') {
+        return `<span class="sr-ag-status sr-ag-error" title="${esc(la.error_summary || 'Fehler')}">⚠ Fehler</span>`;
+      }
+      if (a.outdated) {
+        return `<span class="sr-ag-status sr-ag-outdated">outdated</span>`;
+      }
+      if (a.installed_version) {
+        return `<span class="sr-ag-status sr-ag-ok">✓ aktuell</span>`;
+      }
+      return `<span class="sr-ag-status sr-ag-missing">nicht installiert</span>`;
+    };
+    const byRing = {1:[], 2:[], 3:[]};
+    agents.forEach(a => { const r = a.ring || 3; (byRing[r] || byRing[3]).push(a); });
+    const renderAgent = a => `
+      <div class="sr-agent-row">
+        <span class="sr-ag-host" onclick="openAgentFromHome(${jsStr(a.agent_id)},${jsStr(a.hostname||'')})" style="cursor:pointer">${esc(a.hostname || '—')}</span>
+        <span class="sr-ag-ver">${esc(a.installed_version || '—')}${a.available_version ? ` → ${esc(a.available_version)}` : ''}</span>
+        ${statusPill(a)}
+      </div>`;
+    const ringSections = [1,2,3].map(ring => {
+      const list = byRing[ring];
+      if (!list || !list.length) return '';
+      const ringLbl = _ringLabels[ring] || `Ring ${ring}`;
+      const okN = list.filter(a => !a.outdated && a.installed_version && !(a.last_action && ['pending','running','error'].includes(a.last_action.status))).length;
+      const outN = list.filter(a => a.outdated).length;
+      const errN = list.filter(a => a.last_action && a.last_action.status === 'error').length;
+      const runN = list.filter(a => a.last_action && ['pending','running'].includes(a.last_action.status)).length;
       return `
-        <div class="sr-agent-row">
-          <span class="ring-badge ring-${a.ring || 3}">${esc(ringLbl)}</span>
-          <span class="sr-ag-host">${esc(a.hostname || '—')}</span>
-          <span class="sr-ag-ver">${esc(a.installed_version || '—')}${a.available_version ? ` → ${esc(a.available_version)}` : ''}</span>
+        <div class="sr-ring-section">
+          <div class="sr-ring-section-head">
+            <span class="ring-badge ring-${ring}">${esc(ringLbl)}</span>
+            <span class="sr-ring-section-count">${list.length} Agents</span>
+            <span class="sr-ring-section-stats">
+              ${okN ? `<span class="sr-ag-status sr-ag-ok">${okN} aktuell</span>` : ''}
+              ${outN ? `<span class="sr-ag-status sr-ag-outdated">${outN} outdated</span>` : ''}
+              ${runN ? `<span class="sr-ag-status sr-ag-running">${runN} läuft</span>` : ''}
+              ${errN ? `<span class="sr-ag-status sr-ag-error">${errN} Fehler</span>` : ''}
+            </span>
+          </div>
+          <div class="sr-agent-list">${list.map(renderAgent).join('')}</div>
         </div>`;
     }).join('');
-    const agentsHtml = `<div class="sr-agent-list">${agentRows || '<div class="empty-mini">Keine Agents</div>'}</div>`;
+    const agentsHtml = ringSections || '<div class="empty-mini">Keine Agents</div>';
 
     container.innerHTML = `
       <div class="sr-detail-section">
