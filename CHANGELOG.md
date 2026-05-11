@@ -7,6 +7,81 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.4.1] – 2026-05-11
+
+Phased-Rollout-Harden: target_version Frozen-on-Start, semver-aware Compare,
+Per-Ring-Detail-UI, Race-Guard.
+
+### Added
+
+- **`rollouts.target_version`** (Schema-Migration): Ziel-Version wird beim
+  Start des Rollouts eingefroren. Catalog-`latest_version` kann sich danach
+  aendern — Historie zeigt trotzdem was damals rolled out wurde.
+- **Helper `resolve_target_version(pkg)`** in `routes/admin.py` als Single
+  Source of Truth fuer `version_pin > catalog-latest (winget) > current_version
+  (custom/plugin) > Fleet-Max`. Genutzt von `staged-overview`,
+  `list_package_agents`, `start_rollout`, `_rollout_auto_start_tick`.
+- **Semver-aware Version-Compare** in `winget_catalog`:
+  `versions_equivalent(a, b)` (`"1.2"` == `"1.2.0"`, locale-Suffix-tolerant),
+  `is_outdated(installed, target)` (semver-lt), `latest_version(list)`
+  (semver-max). Loest lexikographische Bugs wie `"1.10" > "1.9"` = False.
+- **Per-Ring Agent-Detailansicht** im Rollouts-Tab: Agents pro Paket nach
+  Ring 1/2/3 gruppiert mit Header + Counts, Status-Pill pro Agent
+  (`✓ aktuell` / `outdated` / `⟳ läuft` / `⚠ Fehler` / `nicht installiert`),
+  klickbarer Hostname springt zur Agent-Detailansicht. Details-Button auch
+  bei `ready`/`done`/`idle`-Status (vorher nur `running`).
+- **History-Versions-Badge**: Rollout-History zeigt `→ <version>` pro
+  Eintrag. Bei `action='push_uninstall'` ausgeblendet.
+- **`get_latest_action_per_agent(package_name)`**: Bulk-Query map
+  `agent_id → letzter action_log-Eintrag` fuer Per-Agent-Status-Pill.
+- **`ring`-Spalte** in `get_agents_with_winget_package`,
+  `get_agents_with_choco_package`, `get_installations_for_package` Results
+  fuer die Per-Ring-Detailansicht.
+
+### Changed
+
+- **Auto-Start ist ring-agnostic** (`_rollout_auto_start_tick`): startet
+  Phase 1 sobald irgendwo im Fleet outdated Agents existieren — egal welcher
+  Ring. Phase ist Zeit-Konzept, kein Agent-Konzept. Leere Phasen laufen
+  no-op durch und werden vom Advance-Tick nach Wartezeit weitergeschaltet.
+  Admin sieht Phasen-Fortschritt durchgehend im UI auch bei leeren Ringen.
+- **Phase-3-Auto-Completion-Policy**: System-gestartete Rollouts
+  (`created_by IS NULL`) werden auch ohne `pkg.auto_advance` zu `done`
+  weitergeschaltet (Bookkeeping, kein neuer Dispatch) — sonst blockiert ein
+  stuck Phase-3-Rollout fuer immer neue Versionen. Manuell gestartete
+  Rollouts behalten Admin-Kontrolle und muessen explizit abgeschlossen
+  werden.
+- **`outdated`-Flag in `list_package_agents`** nutzt jetzt zusaetzlich zu
+  `available_version` auch den semver-Vergleich gegen `target_version` —
+  faengt Faelle ab wo per-agent winget-scan kein Update meldet
+  (per-user-Install, scope-Filter) das Paket aber tatsaechlich alt ist.
+- **`get_package_agents_version_split`** nutzt `versions_equivalent` statt
+  `==` — Format-Drift `"1.2"` vs `"1.2.0"` wird korrekt als `on_target`
+  gebucket.
+
+### Fixed
+
+- **Lexikographischer Versionsvergleich**: `max(avs)` und `installed != target`
+  haben False-Positive-Outdated-Flags und falsche Targets produziert. Jetzt
+  ueberall semver-aware. (siehe Added oben.)
+- **Stuck-Phase-3-Rollouts blockieren neue Versionen**: Vor 2.4.1 ist ein
+  Rollout mit `auto_advance=0` in Phase 3 active geblieben und hat alle
+  zukuenftigen Auto-Start-Versuche fuer das Paket geblockt. Phase-3-
+  Auto-Completion behebt das fuer system-gestartete Rollouts.
+- **target_version-Resolution war 4x dupliziert** mit unterschiedlichen
+  Branches (`custom` nur in `start_rollout`, `version_pin` nicht in
+  staged-overview-Choco). Jetzt zentralisiert in `resolve_target_version`.
+
+### Security
+
+- **Partial UNIQUE Index `idx_rollouts_one_active`** auf
+  `rollouts(package_name) WHERE status='active'` verhindert Race zwischen
+  API-Start und Auto-Start-Tick. Neue Exception `database.ActiveRolloutExists`
+  wird vom API-Endpoint als `409 Conflict` zurueckgegeben und vom Tick
+  geskipped.
+
+---
+
 ## [2.4.0] – 2026-05-06
 
 Agent-Management-Modul: zentrale Sicht und Push-Update fuer Tray-Clients.
