@@ -38,7 +38,7 @@ from config import (
     runtime_value,
     validate_runtime_value,
 )
-from tactical_client import TacticalClient
+from rmm import get_rmm_client
 
 router = APIRouter()
 logger = logging.getLogger("softshelf.admin")
@@ -678,7 +678,7 @@ async def search_packages(q: str = Query(default="", min_length=0, max_length=10
     chocos = await database.get_cached_chocos()
     if chocos is None:
         try:
-            fresh = await TacticalClient().get_chocos()
+            fresh = await get_rmm_client().get_chocos()
             chocos = [pkg.get("name", "") for pkg in fresh if pkg.get("name")]
             await database.save_chocos_cache(chocos)
         except Exception:
@@ -870,7 +870,7 @@ async def detect_uninstall_cmd(name: str):
     agents.sort(key=lambda a: a.get("last_seen") or "", reverse=True)
     agents = agents[:30]
 
-    tactical = TacticalClient()
+    tactical = get_rmm_client()
     scanned = 0
     for agent in agents:
         try:
@@ -1393,7 +1393,7 @@ async def list_package_agents(
 
             import asyncio
             sem = asyncio.Semaphore(8)  # max 8 parallele Tactical-Calls
-            tactical = TacticalClient()
+            tactical = get_rmm_client()
 
             async def _scan_one(agent: dict):
                 async with sem:
@@ -2394,7 +2394,7 @@ async def get_compliance():
     if required_with_detection:
         # Pro Agent einmal Tactical-Scan holen (gecached fuer alle Pakete)
         all_agents = await database.get_agents()
-        tactical = TacticalClient()
+        tactical = get_rmm_client()
         agent_software_cache: dict[str, list[str]] = {}
         for a in all_agents:
             aid = a["agent_id"]
@@ -3226,7 +3226,7 @@ async def get_agent_software(agent_id: str):
     # Quelle 1: Tactical software-scan
     tactical_error: str | None = None
     try:
-        tactical_items = await TacticalClient().get_installed_software(agent_id)
+        tactical_items = await get_rmm_client().get_installed_software(agent_id)
     except httpx.HTTPStatusError as e:
         logger.warning("software-scan HTTP %s for %s", e.response.status_code, agent_id)
         tactical_items = []
@@ -3648,7 +3648,7 @@ async def _agent_state_snapshot(agent_id: str) -> tuple[dict, dict, set[str], li
     # Tactical Software-Scan (best-effort, timeout-tolerant)
     tactical_names: list[str] = []
     try:
-        tactical = TacticalClient()
+        tactical = get_rmm_client()
         sw = await tactical.get_installed_software(agent_id)
         tactical_names = [(s.get("name") or "").lower() for s in sw]
     except Exception:
@@ -5385,7 +5385,7 @@ async def update_client_for_agent(agent_id: str):
     )
 
     try:
-        result = await TacticalClient().run_script_by_name(
+        result = await get_rmm_client().run_script_by_name(
             agent_id, "Kiosk Install", timeout=600,
         )
     except Exception as e:
@@ -5946,5 +5946,5 @@ async def get_agent_workflow_runs(agent_id: str, limit: int = Query(default=20, 
 @router.get("/admin/api/tactical-queue", dependencies=[Depends(_require_admin)])
 async def get_tactical_queue():
     """Tactical Command Queue Status — aktive + wartende Commands."""
-    from tactical_client import get_queue_status
+    from rmm import get_queue_status
     return get_queue_status()
