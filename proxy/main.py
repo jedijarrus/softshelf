@@ -155,29 +155,44 @@ async def _rollout_auto_start_tick():
     """
     try:
         pkgs = await database.get_packages()
-        candidates = [
-            p for p in pkgs
-            if p.get("staged_rollout") and p.get("auto_advance")
-        ]
+        # staged_rollout=1 reicht: neue verfuegbare Versionen sollen einen
+        # neuen Rollout aus Phase 1 starten, auch wenn auto_advance=0.
+        # Das eigentliche Weiterschalten 1→2→3 bleibt manuell wenn
+        # auto_advance=0 — nur der INITIALE Start ist automatisch.
+        candidates = [p for p in pkgs if p.get("staged_rollout")]
         if not candidates:
             return
         active = await database.get_active_rollout_phases()
-        from routes.admin import _dispatch_rollout_phase
+        from routes.admin import _dispatch_rollout_phase, _stage_to_ring_filter
+        # Phase 1 trifft ring1 (Canary). Auto-Start nur sinnvoll wenn dort
+        # outdated Agents existieren — sonst spammen wir leere Rollouts.
+        ring1_agents = {a["agent_id"] for a in
+                        await database.get_agents_by_ring(_stage_to_ring_filter("ring1"))}
         for p in candidates:
             if p["name"] in active:
                 continue  # Rollout laeuft bereits
-            # Has updates? Check ob mindestens ein Agent outdated ist
+            if not ring1_agents:
+                continue
             ptype = p.get("type") or "choco"
             has_updates = False
             if ptype == "winget":
                 raw = await database.get_agents_with_winget_package(p["name"])
-                has_updates = any(r.get("available_version") for r in raw)
+                has_updates = any(
+                    r.get("available_version") and r["agent_id"] in ring1_agents
+                    for r in raw
+                )
             elif ptype == "choco":
                 raw = await database.get_agents_with_choco_package(p["name"])
-                has_updates = any(r.get("available_version") for r in raw)
+                has_updates = any(
+                    r.get("available_version") and r["agent_id"] in ring1_agents
+                    for r in raw
+                )
             else:
                 raw = await database.get_installations_for_package(p["name"])
-                has_updates = any(r.get("outdated") for r in raw)
+                has_updates = any(
+                    r.get("outdated") and r.get("agent_id") in ring1_agents
+                    for r in raw
+                )
             if not has_updates:
                 continue
             # Rollout anlegen + Phase 1 dispatchen
@@ -190,7 +205,7 @@ async def _rollout_auto_start_tick():
             try:
                 await _dispatch_rollout_phase(p, 1)
                 logger.info(
-                    "auto-started rollout %s for %s (staged + auto_advance)",
+                    "auto-started rollout %s for %s (staged, ring1 outdated)",
                     rollout_id, p["name"],
                 )
             except Exception as e:
@@ -241,10 +256,14 @@ async def _rollout_auto_advance_tick():
         # Fehler-Liste einmal laden, dann pro Rollout filtern
         all_fleet_errors = await database.get_fleet_errors(limit=500)
         for r in rollouts:
-            # Per-Paket opt-in: nur Pakete mit auto_advance=1 werden
-            # automatisch weitergeschaltet.
             pkg_row = await database.get_package(r["package_name"])
-            if not pkg_row or not pkg_row.get("auto_advance"):
+            if not pkg_row:
+                continue
+            # Per-Paket opt-in: auto_advance=1 schaltet Phase 1→2 und 2→3
+            # automatisch weiter. Phase 3 → done ist nur Status-Bookkeeping
+            # (kein neuer Dispatch) und laeuft IMMER, sonst blockt ein
+            # stuck Rollout fuer immer neue Versionen.
+            if r["current_phase"] != 3 and not pkg_row.get("auto_advance"):
                 continue
             la_raw = r.get("last_advanced_at")
             if not la_raw:
