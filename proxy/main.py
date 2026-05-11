@@ -164,6 +164,7 @@ async def _rollout_auto_start_tick():
             return
         active = await database.get_active_rollout_phases()
         from routes.admin import _dispatch_rollout_phase
+        import winget_catalog
         # Phase ist Zeit-Konzept, kein Agent-Konzept. Auto-Start triggert
         # wenn IRGENDWO outdated Agents im Fleet sind (egal welcher Ring).
         # Leere Phasen laufen no-op durch und werden vom Auto-Advance-Tick
@@ -174,12 +175,41 @@ async def _rollout_auto_start_tick():
                 continue  # Rollout laeuft bereits
             ptype = p.get("type") or "choco"
             has_updates = False
+            # Target-Version: version_pin > catalog-latest > Fleet-Max.
+            # Wichtig damit Auto-Start auch greift wenn per-agent winget-scan
+            # kein available_version meldet (per-user-Install, scope-Filter).
+            target_version = p.get("version_pin")
             if ptype == "winget":
                 raw = await database.get_agents_with_winget_package(p["name"])
-                has_updates = any(r.get("available_version") for r in raw)
+                if not target_version:
+                    try:
+                        details = await winget_catalog.get_details(p["name"])
+                        if details:
+                            target_version = details.get("latest_version")
+                    except Exception:
+                        pass
+                if not target_version:
+                    avs = [r.get("available_version") for r in raw if r.get("available_version")]
+                    if avs:
+                        target_version = max(avs)
+                has_updates = any(
+                    r.get("available_version")
+                    or (target_version and r.get("installed_version")
+                        and r["installed_version"] != target_version)
+                    for r in raw
+                )
             elif ptype == "choco":
                 raw = await database.get_agents_with_choco_package(p["name"])
-                has_updates = any(r.get("available_version") for r in raw)
+                if not target_version:
+                    avs = [r.get("available_version") for r in raw if r.get("available_version")]
+                    if avs:
+                        target_version = max(avs)
+                has_updates = any(
+                    r.get("available_version")
+                    or (target_version and r.get("installed_version")
+                        and r["installed_version"] != target_version)
+                    for r in raw
+                )
             else:
                 raw = await database.get_installations_for_package(p["name"])
                 has_updates = any(r.get("outdated") for r in raw)
