@@ -215,12 +215,15 @@ async def _rollout_auto_start_tick():
                 has_updates = any(r.get("outdated") for r in raw)
             if not has_updates:
                 continue
-            # Rollout anlegen + Phase 1 dispatchen
+            # Rollout anlegen + Phase 1 dispatchen.
+            # target_version eingefrieren, damit Historie spaeter zeigt
+            # was rolled out wurde (catalog-latest kann sich aendern).
             rollout_id = await database.create_rollout(
                 package_name=p["name"],
                 display_name=p.get("display_name") or p["name"],
                 action="push_update",
                 created_by=None,  # system-gestartet
+                target_version=target_version,
             )
             try:
                 await _dispatch_rollout_phase(p, 1)

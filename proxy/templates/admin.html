@@ -1444,6 +1444,15 @@ body.is-not-admin .icon-btn[onclick*="togglePackageStaged"] {
   font-size: 11px;
   color: var(--fg-5);
 }
+.sr-history-row .shr-ver {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-3);
+  padding: 1px 6px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
 .sr-history-row .shr-body {
   font-family: var(--mono);
   font-size: 11px;
@@ -9546,11 +9555,15 @@ async function _loadStagedDetail(pkgName, container) {
             ? phases.map(h => `Phase ${h.phase}${h.auto ? '·auto' : ''}`).join(' → ')
             : '—';
           const reached = r.current_phase > 3 ? 3 : (r.current_phase - (r.status === 'active' ? 0 : 1));
+          const verBadge = r.target_version
+            ? `<span class="shr-ver">→ ${esc(r.target_version)}</span>`
+            : '';
           return `
             <div class="sr-history-row">
               <div class="shr-head">
                 <span class="shr-id">#${r.id}</span>
                 <span class="shr-status shr-status-${esc(r.status)}">${esc(statusLbl[r.status] || r.status)}</span>
+                ${verBadge}
                 <span class="shr-when">${esc(relTime(r.created_at))}</span>
               </div>
               <div class="shr-body">
