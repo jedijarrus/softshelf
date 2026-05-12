@@ -5338,12 +5338,20 @@ async def clients_version_distribution():
 @router.post("/admin/api/agents/{agent_id}/update-client",
              dependencies=[Depends(_require_admin)])
 async def update_client_for_agent(agent_id: str):
-    """Pushed das aktuelle Setup.exe auf einen Agent via Tactical run_command.
+    """Pushed das aktuelle Setup.exe auf einen Agent via run_command.
 
-    Setup.exe ist im Container unter /app/downloads/<slug>-setup.exe.
-    Tactical laedt es ueber den Proxy-Public-Endpoint /download/<file>
-    und ruft es silent auf. Setup.exe killt vorher die laufende Tray-App
-    und ersetzt die Files in-place.
+    Eigener PS-Wrapper (NICHT das Tactical "Kiosk Install"-Script — das ist
+    fuer Neuinstallationen, funktioniert aber bei Updates nicht zuverlaessig
+    weil WebClient/Invoke-WebRequest auf manchen Hosts bei TLS-Renegotiation
+    nur den Error-Body schreiben statt der EXE). Hier curl.exe als Download
+    (Win 1803+), das ist robust. Setup.exe killt selbst die laufende
+    Tray-App, ueberschreibt die Files in-place und startet den neuen Tray.
+
+    Run_command-Result wird synchron geparsed (kein Callback noetig):
+      - exit 0 → action_log success sofort
+      - exit != 0 → action_log error mit stdout-Snippet
+    Telemetrie-Auto-Complete in update_agent_telemetry bleibt als
+    zusaetzlicher Sicherheitsnetz.
     """
     if not _AGENT_ID_RE.fullmatch(agent_id):
         raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
@@ -5358,21 +5366,18 @@ async def update_client_for_agent(agent_id: str):
             detail="Kein aktueller Build vorhanden — bitte zuerst EXEs bauen.",
         )
 
-    proxy_url = await runtime_value("proxy_public_url")
-    if not proxy_url:
+    proxy_url_raw = await runtime_value("proxy_public_url")
+    if not proxy_url_raw:
         raise HTTPException(
             status_code=400,
             detail="proxy_public_url nicht gesetzt — Setup-Download ginge nicht.",
         )
+    proxy_url = proxy_url_raw.rstrip("/")
+    reg_secret = await runtime_value("registration_secret") or ""
+    slug = await runtime_value("product_slug") or "Softshelf"
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,30}", slug):
+        raise HTTPException(status_code=500, detail="Ungueltiger product_slug in Settings")
 
-    # Tactical-Script-Pfad: triggert das vom Admin in Tactical gepflegte
-    # "Kiosk Install"-Script. Vorteile vs. eigener PS-Wrapper:
-    #  - Single Source of Truth fuer die Setup-Args + Tray-Kill-Logik
-    #  - Tactical kennt das Setup-Argument-Schema schon vom Initial-Deploy
-    #  - Keine Doppelpflege bei Setup-py-Aenderungen
-    # Nachteil: kein Result-Callback (output=forget). action_log bleibt
-    # auf "running" bis das Tray die neue Version per Telemetrie meldet
-    # (siehe update_agent_telemetry: matched-Version → status=success).
     target_version = current.get("version") or "?"
     job_id = _make_random_token()
     log_id = await database.create_action_log(
@@ -5384,37 +5389,77 @@ async def update_client_for_agent(agent_id: str):
         metadata=__import__("json").dumps({"target_version": target_version}),
     )
 
+    nonce = __import__("secrets").token_hex(4)
+    setup_url = f"{proxy_url}/download/{slug}-setup.exe"
+    ps = f"""$ErrorActionPreference = 'Stop'
+$slug   = '{slug}'
+$tmp    = "$env:TEMP\\$slug-setup-{nonce}.exe"
+$url    = '{setup_url}'
+$base   = '{proxy_url}'
+$secret = '{reg_secret}'
+$aid    = '{agent_id}'
+
+Get-Process $slug -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Seconds 2
+
+& curl.exe -sS -L --max-time 300 -o $tmp $url
+if ($LASTEXITCODE -ne 0) {{ throw "download failed (curl exit=$LASTEXITCODE)" }}
+$size = (Get-Item $tmp).Length
+if ($size -lt 1000000) {{ throw "downloaded file too small ($size bytes)" }}
+
+$args = @("--proxy-url",$base,"--reg-secret",$secret,"--agent-id",$aid)
+$p = Start-Process -FilePath $tmp -ArgumentList $args -Wait -PassThru -WindowStyle Hidden
+Write-Host "SETUP_EXIT=$($p.ExitCode)"
+exit $p.ExitCode
+"""
+
     try:
-        result = await get_rmm_client().run_script_by_name(
-            agent_id, "Kiosk Install", timeout=600,
-        )
+        out = await get_rmm_client().run_command(agent_id, ps, timeout=300)
     except Exception as e:
         await database.complete_action_log(
-            log_id, "error", error_summary=f"Tactical-Aufruf fehlgeschlagen: {e}",
+            log_id, "error", error_summary=f"RMM-Aufruf fehlgeschlagen: {e}",
         )
-        raise HTTPException(status_code=502, detail=f"Tactical-Aufruf fehlgeschlagen: {e}")
+        raise HTTPException(status_code=502, detail=f"RMM-Aufruf fehlgeschlagen: {e}")
 
-    if not result.get("ok"):
-        # Script in Tactical nicht gefunden oder HTTP-Error
-        msg = f"{result.get('status')}: {result.get('body','')[:200]}"
+    text = out if isinstance(out, str) else str(out)
+    # Tactical wrappt manchmal als JSON-string-of-string — innere Huelle abziehen
+    try:
+        if text.startswith('"') and text.endswith('"'):
+            text = __import__("json").loads(text)
+    except Exception:
+        pass
+
+    m = re.search(r"SETUP_EXIT=(-?\d+)", text or "")
+    exit_code = int(m.group(1)) if m else None
+    snippet = (text or "")[-500:]
+
+    if exit_code == 0:
+        await database.complete_action_log(log_id, "success", exit_code=0, stdout=snippet)
+        status = "success"
+    elif exit_code is None:
+        # Kein Marker im Output → Setup ist gar nicht bis zum Ende gekommen
         await database.complete_action_log(
-            log_id, "error", error_summary=msg,
+            log_id, "error",
+            error_summary="Setup ohne Exit-Marker beendet (download- oder start-Fehler)",
+            stdout=snippet,
         )
-        raise HTTPException(
-            status_code=400,
-            detail=f"Tactical Script-Trigger fehlgeschlagen: {msg}",
+        status = "error"
+    else:
+        await database.complete_action_log(
+            log_id, "error",
+            exit_code=exit_code,
+            error_summary=f"Setup exit {exit_code}",
+            stdout=snippet,
         )
-
-    # Status auf running setzen — wird auto-completed von der Telemetrie
-    # sobald das Tray die neue Version meldet (oder via timeout-Job).
-    await database.update_action_log_status(log_id, "running")
+        status = "error"
 
     return {
-        "ok": True,
+        "ok": status == "success",
         "agent_id": agent_id,
         "target_version": target_version,
         "job_id": job_id,
-        "tactical_script_id": result.get("script_id"),
+        "exit_code": exit_code,
+        "status": status,
     }
 
 
