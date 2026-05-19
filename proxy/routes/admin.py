@@ -5774,11 +5774,11 @@ async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentR
     agent = await _resolve_agent(agent_id)
 
     wid = body.winget_id
-    inner_cmd = _build_winget_command("uninstall", wid)
-    job_id = _generate_job_id()
-    cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
     pkg = await database.get_package(wid)
     display_name = pkg["display_name"] if pkg else wid
+    inner_cmd = _build_winget_command("uninstall", wid, display_name=display_name)
+    job_id = _generate_job_id()
+    cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
     log_id = await database.create_action_log(
         agent_id, agent["hostname"], wid,
         display_name, "winget", "uninstall", job_id=job_id,

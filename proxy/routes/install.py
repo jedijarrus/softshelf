@@ -1533,6 +1533,7 @@ async def dispatch_uninstall_for_agent(
         inner_cmd = _build_winget_command(
             "uninstall", package_name,
             extra_args=pkg.get("install_args") or "",
+            display_name=pkg.get("display_name") or "",
         )
         scope = pkg.get("winget_scope") or "auto"
         job_id = _generate_job_id()
