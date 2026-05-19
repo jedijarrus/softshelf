@@ -669,6 +669,7 @@ def _build_winget_command(
     include_scope_machine: bool = True,
     extra_args: str = "",
     process_check: str = "",
+    display_name: str = "",
 ) -> str:
     """
     Baut den PowerShell-Wrapper für winget install/upgrade/uninstall.
@@ -737,6 +738,71 @@ def _build_winget_command(
     if action in ("install", "upgrade") and process_check:
         process_check_block = _build_process_check_block(process_check)
 
+    # winget uninstall verlaesst sich bei NSIS-Uninstallern (z.B. Firefox-
+    # helper.exe) darauf dass der vendor-default Silent-Switch greift —
+    # tut er unter SYSTEM ohne Desktop oft nicht: helper.exe exitet 0 ohne
+    # was zu tun, winget meldet success, ARP-Eintrag bleibt. Fallback:
+    # nach winget-Lauf ARP nach display_name absuchen, UninstallString
+    # parsen, mit korrektem Silent-Switch direkt ausfuehren.
+    uninstall_fallback_block = ""
+    if action == "uninstall" and display_name:
+        # PS-Single-Quote-Escape: ' -> ''. Laenge clampen damit injizierter
+        # PS-Code nicht aus dem String ausbricht.
+        safe_dn = display_name.replace("'", "''")[:120]
+        uninstall_fallback_block = f"""
+# ARP-Fallback fuer NSIS/MSI-Uninstaller die winget unter SYSTEM nicht
+# silent durchbekommt.
+$dn = '{safe_dn}'
+$arpKeys = @(
+    'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+    'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+)
+$remaining = @()
+foreach ($k in $arpKeys) {{
+    Get-ItemProperty $k -ErrorAction SilentlyContinue |
+        Where-Object {{ $_.DisplayName -and $_.DisplayName.StartsWith($dn) }} |
+        ForEach-Object {{ $remaining += $_ }}
+}}
+if ($remaining.Count -gt 0) {{
+    _sfProgress "ARP-Fallback: $($remaining.Count) Eintrag(e) noch vorhanden, manueller Uninstall..."
+    foreach ($r in $remaining) {{
+        $cmd = if ($r.QuietUninstallString) {{ $r.QuietUninstallString }} else {{ $r.UninstallString }}
+        if (-not $cmd) {{ continue }}
+        $isMsi = $cmd -match 'MsiExec(\\.exe)?\\s+/[IX]'
+        $isInno = $cmd -match 'unins\\d+\\.exe'
+        if (-not $r.QuietUninstallString) {{
+            if ($isMsi) {{
+                $cmd = ($cmd -replace '/I\\{{', '/X{{') + ' /quiet /norestart'
+            }} elseif ($isInno) {{
+                $cmd = $cmd + ' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+            }} else {{
+                # NSIS-Default: /S (case-sensitive)
+                $cmd = $cmd + ' /S'
+            }}
+        }}
+        _sfProgress "ARP exec: $($r.DisplayName) -> $cmd"
+        try {{
+            if ($cmd -match '^"([^"]+)"\\s*(.*)$') {{
+                $exe = $Matches[1]; $argStr = $Matches[2].Trim()
+            }} elseif ($cmd -match '^(\\S+)\\s*(.*)$') {{
+                $exe = $Matches[1]; $argStr = $Matches[2].Trim()
+            }} else {{
+                $exe = $cmd; $argStr = ''
+            }}
+            if ($argStr) {{
+                $p = Start-Process -FilePath $exe -ArgumentList $argStr -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+            }} else {{
+                $p = Start-Process -FilePath $exe -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+            }}
+            _sfProgress "ARP exit: $($p.ExitCode)"
+        }} catch {{
+            _sfProgress "ARP Uninstaller-Fehler: $_"
+        }}
+    }}
+    Start-Sleep -Seconds 2
+}}
+"""
+
     return f"""$ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 {_PS_FIND_WINGET}
@@ -750,6 +816,7 @@ if ($wingetExe) {{
     _sfProgress "Starte winget {winget_args.split()[0]}..."
     $out = (& $wingetExe {winget_args} 2>&1) -join "`n"
     _sfProgress $out
+    {uninstall_fallback_block}
 }}
 """
 
@@ -1202,6 +1269,7 @@ async def uninstall_package(
         inner_cmd = _build_winget_command(
             "uninstall", body.package_name,
             extra_args=pkg.get("install_args") or "",
+            display_name=pkg.get("display_name") or "",
         )
         scope = pkg.get("winget_scope") or "auto"
         job_id = _generate_job_id()
