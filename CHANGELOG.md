@@ -7,6 +7,32 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.4.2] – 2026-05-20
+
+ARP-Fallback fuer winget-Uninstalls: behebt False-Success bei NSIS-Uninstallern
+unter SYSTEM (Firefox helper.exe), greift generisch fuer alle winget-uninstalls.
+
+### Fixed
+
+- **winget uninstall: ARP-Fallback fuer NSIS/MSI/Inno Uninstaller.** winget
+  meldet bei NSIS-Uninstallern (z.B. Mozilla Firefox `helper.exe`) unter
+  SYSTEM oft `success` ohne dass tatsaechlich deinstalliert wird — der
+  vendor-default Silent-Switch wird nicht durchgereicht, `helper.exe`
+  ohne Desktop-Session exitet mit 0 ohne Aktion. Nach dem winget-Lauf
+  durchsucht der Dispatcher jetzt Add/Remove-Programs nach `DisplayName`;
+  bleibt ein Eintrag uebrig, wird `UninstallString` (bzw.
+  `QuietUninstallString` wenn vorhanden) geparst, Installer-Typ erkannt
+  (`MsiExec /I|/X` â MSI, `unins\d+\.exe` â Inno,
+  sonst NSIS) und mit korrektem Silent-Switch (`/quiet /norestart`,
+  `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`, `/S`) direkt ausgefuehrt.
+  Greift fuer alle winget-uninstalls, no-op wenn winget sauber durchkommt.
+- **Admin-UI `winget-uninstall`-Endpoint** (`/admin/api/agents/{id}/winget-uninstall`)
+  reicht `display_name` jetzt an `_build_winget_command` weiter â
+  ohne diesen Fix lief der ARP-Fallback-Block nur beim Client-Uninstall,
+  nicht bei Admin-Uninstall + Profil-Unassign-Uninstall.
+
+---
+
 ## [2.4.1] – 2026-05-11
 
 Phased-Rollout-Harden: target_version Frozen-on-Start, semver-aware Compare,

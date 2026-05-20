@@ -3,7 +3,7 @@
 <div class="doc-hero">
   <div class="doc-hero-title">Softshelf · Admin-Handbuch</div>
   <div class="doc-hero-sub">Software-Verteilung für Windows-Flotten mit optionalem Self-Service. Integriert mit Tactical RMM.</div>
-  <div class="doc-hero-meta">Version 2.2.0 &middot; Stand 27. April 2026</div>
+  <div class="doc-hero-meta">Version 2.4.2 &middot; Stand 20. Mai 2026</div>
 </div>
 
 <div class="doc-toc">
@@ -187,7 +187,7 @@
       <td><span class="pkg-type-pill winget">winget</span></td>
       <td>Microsoft-winget-Catalog, lokal gemirrowt; plus MS-Store via Direct-ID</td>
       <td><code>winget install/upgrade/uninstall</code> via Tactical run_command</td>
-      <td><b>Scope</b> (auto/machine/user) pro Paket — Layer-2-Fallback für per-user-only-Installer wie LastPass, Bitwarden. <b>MS-Store-IDs</b> (z.B. <code>9NBLGGH6BZL3</code>) werden auto erkannt und mit <code>--source msstore</code> + <code>run_as_user</code> installiert.</td>
+      <td><b>Scope</b> (auto/machine/user) pro Paket — Layer-2-Fallback für per-user-only-Installer wie LastPass, Bitwarden. <b>MS-Store-IDs</b> (z.B. <code>9NBLGGH6BZL3</code>) werden auto erkannt und mit <code>--source msstore</code> + <code>run_as_user</code> installiert. <b>ARP-Fallback</b> beim Uninstall: wenn winget den Silent-Switch nicht durchreicht (z.B. Firefox NSIS-helper.exe unter SYSTEM), wird die UninstallString aus Add/Remove-Programs geparst, Installer-Typ (MSI/NSIS/Inno) erkannt und mit korrektem Silent-Switch direkt ausgeführt.</td>
     </tr>
     <tr>
       <td><span class="pkg-type-pill choco">choco</span></td>
