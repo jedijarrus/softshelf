@@ -92,7 +92,7 @@ Background-Jobs. Auf dem Host unter `/opt/softshelf/`.
 | `middleware/audit_logger.py` | HTTP-Request-Log. |
 | `routes/register.py` | `POST /api/v1/register`. |
 | `routes/packages.py` | `GET /api/v1/packages` — Kiosk-API mit **Phased-Rollout-Gate** (Updates nur sichtbar wenn Rollout-Phase den Agent-Ring erreicht hat) und **Hide-in-Kiosk-Filter**. |
-| `routes/install.py` | `/install` + `/uninstall` — Type-Dispatch mit Layer-2-Scope-Fallback (winget) und Ghost-Repair (choco). |
+| `routes/install.py` | `/install` + `/uninstall` — Type-Dispatch mit Layer-2-Scope-Fallback (winget install), Ghost-Repair (choco), und ARP-Fallback (winget uninstall: NSIS/MSI/Inno-Detection + direkter UninstallString-Aufruf falls winget silent nicht durchkommt). |
 | `workflow_engine.py` | Workflow-Orchestrierung: State-Machine, Step-Dispatch (install/script/reboot), Failure-Policies, Timeout-Check, Restart-Recovery. |
 | `routes/admin.py` | ~4300 Zeilen -- alle `/admin/api/*`, RBAC-Gate, Rollout-State-Machine, Scheduled-Jobs, Compliance, Stage-Picker, Agent-Assign-Picker, Workflow-CRUD + Run-Endpoints. |
 | `templates/admin.html` | Single-Page Admin-UI (~9500 Zeilen). Sidebar-Navigation, Dark-Mode, Cmd+K, 14 Tabs inkl. Workflows. |
