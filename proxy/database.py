@@ -3878,12 +3878,13 @@ async def get_action_log_by_job_id(job_id: str) -> dict | None:
 
 
 async def get_agent_error_counts(since_hours: int = 24) -> dict:
-    """Returns {agent_id: error_count} fuer Agents mit Fehlern."""
+    """Returns {agent_id: error_count} fuer Agents mit OFFENEN (un-acked) Fehlern."""
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT agent_id, COUNT(*) as cnt FROM action_log "
             "WHERE status = 'error' AND created_at > datetime('now', ? || ' hours') "
+            "AND error_acked_at IS NULL "
             "GROUP BY agent_id",
             (f"-{since_hours}",),
         ) as cur:
