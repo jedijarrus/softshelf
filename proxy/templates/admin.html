@@ -10770,9 +10770,12 @@ function renderPkgAgentsPanel(data) {
       : '<span class="pkg-agent-badge pkg-agent-ok">aktuell</span>';
 
     // Click auf die Row öffnet die Agent-Detail-Page (via Helper)
+    const userTag = a.logged_in_user
+      ? ` <span style="color:var(--fg-4);font-weight:400">· ${esc(a.logged_in_user)}</span>`
+      : '';
     return `<div class="pkg-agent-row" onclick="_openAgentFromPkgPanel(${jsStr(a.agent_id)},${jsStr(a.hostname)})">
       <div class="pkg-agent-info">
-        <div class="pkg-agent-host">${esc(a.hostname)}</div>
+        <div class="pkg-agent-host">${esc(a.hostname)}${userTag}</div>
         <div class="pkg-agent-meta">v${installedV} · zuletzt online ${esc(lastSeen)}</div>
       </div>
       ${badge}
@@ -10824,10 +10827,13 @@ function _renderPkgAssignCandidates() {
 
   el.innerHTML = candidates.slice(0, 100).map(a => {
     const ringLbl = _ringLabels[a.ring || 3] || `Ring ${a.ring || 3}`;
+    const userTag = a.logged_in_user
+      ? ` <span style="color:var(--fg-4);font-weight:400">(${esc(a.logged_in_user)})</span>`
+      : '';
     return `
       <div class="pkg-assign-row">
         <div class="pkg-assign-info">
-          <div class="pkg-assign-host">${esc(a.hostname || '—')}</div>
+          <div class="pkg-assign-host">${esc(a.hostname || '—')}${userTag}</div>
           <div class="pkg-assign-meta">
             <span class="ring-badge ring-${a.ring || 3}">${esc(ringLbl)}</span>
             zuletzt ${esc(relTime(a.last_seen || ''))}

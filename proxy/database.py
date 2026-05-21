@@ -1200,7 +1200,7 @@ async def get_installations_for_package(package_name: str) -> list[dict]:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT i.agent_id, i.version_id, i.installed_at, i.installed_sha, "
-            "a.hostname, a.last_seen, a.ring, "
+            "a.hostname, a.last_seen, a.ring, a.logged_in_user, "
             "v.version_label, "
             "p.current_version_id, p.sha256 AS pkg_sha256, p.type AS pkg_type, "
             "(CASE "
@@ -3436,7 +3436,7 @@ async def get_agents_with_winget_package(winget_id: str) -> list[dict]:
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT a.agent_id, a.hostname, a.last_seen, a.ring, "
+            "SELECT a.agent_id, a.hostname, a.last_seen, a.ring, a.logged_in_user, "
             "       s.installed_version, s.available_version, s.scanned_at "
             "FROM agent_winget_state s "
             "JOIN agents a ON a.agent_id = s.agent_id "
@@ -3453,7 +3453,7 @@ async def get_agents_with_choco_package(choco_name: str) -> list[dict]:
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT a.agent_id, a.hostname, a.last_seen, a.ring, "
+            "SELECT a.agent_id, a.hostname, a.last_seen, a.ring, a.logged_in_user, "
             "       s.installed_version, s.available_version, s.scanned_at "
             "FROM agent_choco_state s "
             "JOIN agents a ON a.agent_id = s.agent_id "
