@@ -337,8 +337,11 @@ def _invite_error_page(title: str, body: str, portal_title: str) -> str:
     with open(_INVITE_PATH, encoding="utf-8") as f:
         page = f.read()
     inner = (
-        f'<div class="error-page"><h2>{html.escape(title)}</h2>'
-        f'<p>{html.escape(body)}</p></div>'
+        f'<div class="geschlossen"><div class="schild-zu">'
+        f'<div class="badge">Heute leider</div>'
+        f'<h2>{html.escape(title)}</h2>'
+        f'<p>{html.escape(body)}</p>'
+        f'</div></div>'
     )
     page = page.replace("{{ADMIN_PORTAL_TITLE}}", portal_title)
     page = page.replace("{{BODY}}", inner)
@@ -351,34 +354,34 @@ async def invite_page(token: str, request: Request):
     portal_title = await _portal_title_html()
     if not _INVITE_TOKEN_RE.fullmatch(token):
         return HTMLResponse(_invite_error_page(
-            "Ungueltiger Link",
-            "Der Einladungs-Link sieht nicht echt aus. Bitte beim Absender nachfragen.",
+            "kennen wa nich",
+            "Der Zettel sieht nich aus wie einer von Gabi. Frag nochma nach bei dem, ders dir gegeben hat.",
             portal_title,
         ), status_code=400)
     inv = await database.get_invitation_by_token(token)
     if not inv:
         return HTMLResponse(_invite_error_page(
-            "Einladung nicht gefunden",
-            "Dieser Einladungs-Link existiert nicht. Eventuell wurde er entfernt.",
+            "haben wa nich",
+            "Diesen Bon gibts hier nich. Vielleicht is der schon im Mülleimer gelandet.",
             portal_title,
         ), status_code=404)
     status = _invitation_status(inv)
     if status == "revoked":
         return HTMLResponse(_invite_error_page(
-            "Einladung widerrufen",
-            "Diese Einladung wurde widerrufen. Bitte beim Absender eine neue anfordern.",
+            "ungültig",
+            "Gabi hat den Zettel zerrissen. Lass dir einen neuen geben.",
             portal_title,
         ), status_code=410)
     if status == "expired":
         return HTMLResponse(_invite_error_page(
-            "Einladung abgelaufen",
-            "Diese Einladung ist abgelaufen. Bitte beim Absender eine neue anfordern.",
+            "abgelaufen",
+            "Den Bon haste zu lange in der Hosentasche gehabt. Frag nach nem frischen.",
             portal_title,
         ), status_code=410)
     if status == "accepted":
         return HTMLResponse(_invite_error_page(
-            "Bereits angenommen",
-            "Diese Einladung wurde bereits angenommen. Bitte einloggen.",
+            "schon eingelöst",
+            "Den Bon hat schon jemand benutzt. Geh einfach durch die Tür wie immer.",
             portal_title,
         ), status_code=410)
 
@@ -388,48 +391,50 @@ async def invite_page(token: str, request: Request):
     hint = inv.get("email_hint") or ""
     role_label = {"admin": "Admin", "operator": "Operator", "viewer": "Viewer"}.get(role, role)
 
-    meta_rows = (
-        f'<div class="meta-row"><span class="k">Eingeladen von</span>'
+    zettel_rows = (
+        f'<div class="zettel-row"><span class="k">Schickt dich</span>'
         f'<span class="v">{html.escape(inviter)}</span></div>'
-        f'<div class="meta-row"><span class="k">Rolle</span>'
-        f'<span class="v"><span class="role-pill">{html.escape(role_label)}</span></span></div>'
+        f'<div class="zettel-row"><span class="k">Du bist</span>'
+        f'<span class="v"><span class="rolle-stempel role-{html.escape(role)}">{html.escape(role_label)}</span></span></div>'
     )
     if hint:
-        meta_rows += (
-            f'<div class="meta-row"><span class="k">Hinweis</span>'
+        zettel_rows += (
+            f'<div class="zettel-row"><span class="k">Notiz</span>'
             f'<span class="v">{html.escape(hint)}</span></div>'
         )
 
     body = f"""
-    <h1>Willkommen</h1>
-    <p class="intro">Bitte Benutzername und Passwort fuer dein neues {html.escape(role_label)}-Konto setzen.</p>
+    <div class="eyebrow">Bon fuer einen Account</div>
+    <h1>Hömma, komm rein!</h1>
+    <p class="intro">Du hast nen Bon fuer'n <b>{html.escape(role_label)}</b>-Account.
+    Sach mir nur kurz wie wa dich nennen sollen und welches Passwort du dir gibst &mdash; dann biste drin.</p>
 
-    <div class="meta">{meta_rows}</div>
+    <div class="zettel">{zettel_rows}</div>
 
-    <div class="error" id="error"></div>
+    <div class="error" id="error"><b>Moment!</b><span id="error-msg"></span></div>
 
     <form id="invite-form" autocomplete="off">
-      <div>
-        <label for="username">Benutzername *</label>
+      <div class="feld">
+        <label for="username">Wie sollnwa dich nennen? <span class="req">*</span></label>
         <input type="text" id="username" name="username" autocomplete="off" required autofocus
-               minlength="2" maxlength="80" placeholder="z.B. max.mustermann">
+               minlength="2" maxlength="80" placeholder="z.B. gabi, anna, max.mustermann">
         <div class="hint">2-80 Zeichen, nur a-z A-Z 0-9 . _ - @</div>
       </div>
-      <div>
-        <label for="display_name">Anzeigename</label>
+      <div class="feld">
+        <label for="display_name">Klarname <span class="note">wenn de magst</span></label>
         <input type="text" id="display_name" name="display_name" autocomplete="off"
-               maxlength="80" placeholder="optional">
+               maxlength="80" placeholder="z.B. Gabi Müller">
       </div>
-      <div>
-        <label for="password">Passwort *</label>
-        <input type="password" id="password" name="password" autocomplete="new-password" required minlength="8">
-        <div class="hint">Mindestens 8 Zeichen</div>
+      <div class="feld">
+        <label for="password">Dein Passwort <span class="req">*</span></label>
+        <input type="password" id="password" name="password" autocomplete="new-password" required minlength="8" placeholder="mind. 8 Zeichen">
+        <div class="hint">Nix einfaches. Geheim halten.</div>
       </div>
-      <div>
-        <label for="password2">Passwort wiederholen *</label>
-        <input type="password" id="password2" name="password2" autocomplete="new-password" required minlength="8">
+      <div class="feld">
+        <label for="password2">Nochma das Passwort <span class="req">*</span></label>
+        <input type="password" id="password2" name="password2" autocomplete="new-password" required minlength="8" placeholder="zur Sicherheit">
       </div>
-      <button type="submit" class="btn btn-primary" id="submit-btn">Konto erstellen</button>
+      <button type="submit" class="btn" id="submit-btn">Tür auf · Reinkommen</button>
     </form>
     """
 
@@ -438,9 +443,10 @@ async def invite_page(token: str, request: Request):
       const tokenStr = """ + json.dumps(token) + """;
       const form = document.getElementById('invite-form');
       const errEl = document.getElementById('error');
+      const errMsg = document.getElementById('error-msg');
       const btn = document.getElementById('submit-btn');
-      function showError(msg) { errEl.textContent = msg; errEl.classList.add('show'); }
-      function clearError() { errEl.classList.remove('show'); errEl.textContent = ''; }
+      function showError(msg) { errMsg.textContent = ' ' + msg; errEl.classList.add('show'); }
+      function clearError() { errEl.classList.remove('show'); errMsg.textContent = ''; }
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         clearError();
@@ -448,10 +454,10 @@ async def invite_page(token: str, request: Request):
         const dn = document.getElementById('display_name').value.trim();
         const p1 = document.getElementById('password').value;
         const p2 = document.getElementById('password2').value;
-        if (p1 !== p2) { showError('Passwoerter stimmen nicht ueberein.'); return; }
-        if (p1.length < 8) { showError('Passwort muss mind. 8 Zeichen haben.'); return; }
+        if (p1 !== p2) { showError('Die zwei Passwoerter sind nich gleich.'); return; }
+        if (p1.length < 8) { showError('Passwort muss mind. 8 Zeichen ham.'); return; }
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Konto wird erstellt …';
+        btn.innerHTML = '<span class="spinner"></span> einen Moment …';
         try {
           const r = await fetch('/invite/' + encodeURIComponent(tokenStr), {
             method: 'POST',
@@ -462,14 +468,14 @@ async def invite_page(token: str, request: Request):
           if (r.ok && data.ok) {
             window.location.href = data.redirect || '/admin';
           } else {
-            showError(data.error || ('Fehler (HTTP ' + r.status + ')'));
+            showError(data.error || data.detail || ('Klappt grad nich (HTTP ' + r.status + ')'));
             btn.disabled = false;
-            btn.textContent = 'Konto erstellen';
+            btn.textContent = 'Tür auf · Reinkommen';
           }
         } catch (err) {
-          showError('Netzwerkfehler: ' + err.message);
+          showError('Verbindung weg: ' + err.message);
           btn.disabled = false;
-          btn.textContent = 'Konto erstellen';
+          btn.textContent = 'Tür auf · Reinkommen';
         }
       });
     </script>

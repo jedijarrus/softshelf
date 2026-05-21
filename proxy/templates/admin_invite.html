@@ -3,102 +3,776 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Einladung &middot; {{ADMIN_PORTAL_TITLE}}</title>
+<title>Bei Gabi am Eck &middot; {{ADMIN_PORTAL_TITLE}}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Caveat:wght@500;700&family=Bungee+Shade&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
 :root {
-  --bg: #fafafa; --bg-card: #ffffff; --bg-soft: #f4f4f5;
-  --border: #e4e4e7; --border-strong: #d4d4d8;
-  --fg: #09090b; --fg-2: #27272a; --fg-3: #52525b; --fg-4: #71717a; --fg-5: #a1a1aa;
-  --red: #dc2626; --red-bg: #fef2f2; --red-bd: #fecaca;
-  --green: #16a34a; --green-bg: #f0fdf4; --green-bd: #bbf7d0;
-  --sans: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
-  --r: 6px; --r-lg: 10px;
+  /* Nacht-Strasse */
+  --street:        #0e1116;
+  --street-2:      #161a22;
+  --asphalt:       #1a1f28;
+  --lamp-glow:     rgba(255, 196, 100, 0.18);
+
+  /* Bude (Holzfassade) */
+  --bude-green:    #224733;
+  --bude-green-2:  #1a3927;
+  --bude-green-3:  #2d5942;
+  --bude-trim:     #c9994b;
+  --bude-trim-2:   #a07a35;
+  --bude-shadow:   #0e1c14;
+
+  /* Schaufenster — warmes Licht von innen */
+  --window-paper:  #f5e7c8;
+  --window-paper-2:#ead4a3;
+  --window-light:  #ffe39a;
+  --window-glow:   rgba(255, 224, 138, 0.5);
+  --window-frame:  #3a2916;
+  --window-frame-2:#5a4423;
+
+  /* Tinte / Filzstift */
+  --ink:           #1f1810;
+  --ink-2:         #4a3a26;
+  --ink-faded:     #6e5a40;
+  --pencil:        #8a7050;
+
+  /* Werbe-Klassiker */
+  --bild-red:      #d8211a;
+  --lotto-yellow:  #ffd60a;
+  --coca-red:      #d52b1e;
+  --krombi-green:  #00563f;
+  --eis-pink:      #ff4d8b;
+  --tabak-blue:    #1a4d8f;
+
+  /* Schlagwetter */
+  --alarm:         #d8211a;
+
+  --sans:    'Geist', -apple-system, sans-serif;
+  --mono:    'Geist Mono', ui-monospace, monospace;
+  --hand:    'Caveat', 'Permanent Marker', cursive;
+  --marker:  'Permanent Marker', cursive;
+  --sign:    'Bungee Shade', 'Geist', sans-serif;
 }
+
 html { -webkit-font-smoothing: antialiased; }
+
 body {
-  background: var(--bg); color: var(--fg); font-family: var(--sans);
-  font-size: 14px; line-height: 1.5; min-height: 100vh;
-  display: flex; align-items: center; justify-content: center; padding: 20px;
+  background:
+    radial-gradient(ellipse 60% 50% at 50% 100%, var(--lamp-glow), transparent 70%),
+    radial-gradient(ellipse 80% 40% at 20% 10%, rgba(255,255,255,.02), transparent 60%),
+    linear-gradient(180deg, var(--street) 0%, var(--street-2) 60%, var(--asphalt) 100%);
+  color: #e8e4dc;
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
 }
-.card {
-  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg);
-  padding: 36px 40px; width: 100%; max-width: 440px;
-  box-shadow: 0 1px 3px rgba(9,9,11,.04), 0 12px 36px rgba(9,9,11,.06);
+
+/* Kopfsteinpflaster-Andeutung unten */
+body::after {
+  content: '';
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: 60px;
+  background:
+    repeating-linear-gradient(90deg,
+      transparent 0 38px,
+      rgba(0,0,0,.25) 38px 40px),
+    repeating-linear-gradient(0deg,
+      transparent 0 18px,
+      rgba(0,0,0,.18) 18px 20px),
+    linear-gradient(180deg, transparent 0%, rgba(0,0,0,.3) 100%);
+  pointer-events: none;
+  z-index: 0;
 }
-.brand { display: flex; align-items: center; gap: 11px; margin-bottom: 28px; }
-.brand-mark { width: 28px; height: 28px; border-radius: var(--r); background: var(--fg); position: relative; flex-shrink: 0; }
-.brand-mark::after { content: ''; position: absolute; inset: 6px; border: 2px solid var(--bg-card); border-radius: 1px; }
-.brand-text { font-size: 15px; font-weight: 600; }
-.brand-text .sub { font-weight: 400; color: var(--fg-4); margin-left: 2px; }
-h1 { font-size: 22px; font-weight: 600; letter-spacing: -.02em; margin-bottom: 6px; }
-.intro { font-size: 13px; color: var(--fg-4); margin-bottom: 22px; }
-.meta {
-  background: var(--bg-soft); border: 1px solid var(--border); border-radius: var(--r);
-  padding: 12px 14px; margin-bottom: 22px; font-size: 13px;
+
+.scene {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 20px 80px;
+  position: relative;
+  z-index: 1;
 }
-.meta-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
-.meta-row .k { color: var(--fg-4); }
-.meta-row .v { color: var(--fg-2); font-weight: 500; }
-.role-pill {
-  display: inline-block; padding: 2px 8px; border-radius: 999px;
-  font-size: 11px; font-weight: 600; background: var(--fg); color: #fff;
+
+/* ── Die Bude ──────────────────────────────────────────────────────────────── */
+.bude {
+  width: 100%;
+  max-width: 540px;
+  position: relative;
+  margin-top: 30px;
+  filter: drop-shadow(0 30px 50px rgba(0,0,0,.6));
 }
+
+/* Dach */
+.dach {
+  height: 36px;
+  background:
+    linear-gradient(180deg, #2a1e10 0%, #1a1208 100%);
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
+  position: relative;
+  /* leichte Schraege */
+  clip-path: polygon(2% 100%, 0 30%, 6% 0, 94% 0, 100% 30%, 98% 100%);
+  margin: 0 -4px;
+}
+.dach::before {
+  /* Wellblech-Streifen */
+  content: '';
+  position: absolute;
+  inset: 6px 12px 6px 12px;
+  background: repeating-linear-gradient(90deg,
+    rgba(255,255,255,.04) 0 8px,
+    rgba(0,0,0,.15) 8px 10px);
+  border-radius: 2px;
+}
+
+/* Schild oben */
+.schild {
+  background:
+    linear-gradient(180deg, #f5e7c8 0%, #e6cfa0 100%);
+  border: 3px solid #2a1e10;
+  border-radius: 3px;
+  padding: 14px 24px 10px;
+  margin: -10px 30px 0;
+  position: relative;
+  text-align: center;
+  z-index: 2;
+  box-shadow:
+    0 6px 0 rgba(0,0,0,.4),
+    inset 0 -3px 0 rgba(160, 122, 53, .3);
+  transform: rotate(-0.6deg);
+}
+.schild::before, .schild::after {
+  /* Schrauben links/rechts */
+  content: '';
+  position: absolute;
+  top: 50%; transform: translateY(-50%);
+  width: 8px; height: 8px;
+  background: radial-gradient(circle, #444 30%, #1a1a1a 70%);
+  border-radius: 50%;
+  box-shadow: inset -1px -1px 0 rgba(0,0,0,.5);
+}
+.schild::before { left: 10px; }
+.schild::after  { right: 10px; }
+
+.schild-text {
+  font-family: var(--sign);
+  font-size: 30px;
+  letter-spacing: .04em;
+  color: var(--bild-red);
+  line-height: 1;
+  text-transform: uppercase;
+  text-shadow: 1px 1px 0 rgba(0,0,0,.1);
+}
+.schild-sub {
+  font-family: var(--hand);
+  font-size: 16px;
+  color: var(--ink-2);
+  letter-spacing: .02em;
+  margin-top: 2px;
+  transform: rotate(-1deg);
+}
+
+/* Fassade */
+.fassade {
+  background:
+    /* Holzplanken */
+    repeating-linear-gradient(180deg,
+      var(--bude-green) 0 22px,
+      var(--bude-green-2) 22px 23px,
+      var(--bude-green) 23px 44px,
+      var(--bude-green-3) 44px 45px),
+    var(--bude-green);
+  border-left: 4px solid var(--bude-shadow);
+  border-right: 4px solid var(--bude-shadow);
+  border-bottom: 5px solid var(--bude-shadow);
+  padding: 24px 22px 30px;
+  position: relative;
+  margin-top: -2px;
+}
+
+/* Wimpelkette */
+.wimpel {
+  position: absolute;
+  top: -2px; left: 0; right: 0;
+  height: 22px;
+  display: flex;
+  justify-content: space-around;
+  align-items: flex-start;
+  pointer-events: none;
+}
+.wimpel span {
+  width: 14px;
+  height: 18px;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  display: block;
+  transform: translateY(-2px);
+}
+.wimpel span:nth-child(1) { background: var(--bild-red); }
+.wimpel span:nth-child(2) { background: var(--lotto-yellow); }
+.wimpel span:nth-child(3) { background: #fff; }
+.wimpel span:nth-child(4) { background: var(--coca-red); }
+.wimpel span:nth-child(5) { background: var(--lotto-yellow); }
+.wimpel span:nth-child(6) { background: var(--krombi-green); }
+.wimpel span:nth-child(7) { background: var(--bild-red); }
+.wimpel span:nth-child(8) { background: #fff; }
+.wimpel span:nth-child(9) { background: var(--lotto-yellow); }
+
+/* ── Schaufenster ──────────────────────────────────────────────────────────── */
+.fenster-rahmen {
+  background: var(--window-frame);
+  padding: 14px;
+  border-radius: 4px;
+  margin-top: 10px;
+  box-shadow:
+    inset 0 2px 0 var(--window-frame-2),
+    inset 0 -2px 0 #2a1e10,
+    0 2px 0 rgba(0,0,0,.4);
+  position: relative;
+}
+
+/* Sims unter dem Fenster */
+.sims {
+  height: 10px;
+  background: linear-gradient(180deg, var(--bude-trim) 0%, var(--bude-trim-2) 100%);
+  margin: -2px -14px 8px;
+  border-radius: 2px 2px 0 0;
+  box-shadow: 0 2px 0 var(--bude-shadow);
+}
+
+.fenster {
+  background:
+    radial-gradient(ellipse at 50% 30%, var(--window-light) 0%, var(--window-paper) 50%, var(--window-paper-2) 100%);
+  border-radius: 3px;
+  padding: 26px 28px 32px;
+  position: relative;
+  box-shadow:
+    inset 0 0 60px var(--window-glow),
+    inset 0 0 0 1px rgba(255,255,255,.4);
+  overflow: hidden;
+}
+
+/* Glas-Reflex-Streifen */
+.fenster::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 10%;
+  width: 30%; height: 100%;
+  background: linear-gradient(125deg, transparent 40%, rgba(255,255,255,.18) 50%, transparent 60%);
+  pointer-events: none;
+}
+
+/* ── Sticker-Collage ─────────────────────────────────────────────────────── */
+.sticker {
+  position: absolute;
+  font-family: var(--marker);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  padding: 4px 10px;
+  border-radius: 3px;
+  white-space: nowrap;
+  box-shadow: 1px 2px 4px rgba(0,0,0,.18);
+  z-index: 3;
+  pointer-events: none;
+}
+.sticker.lotto {
+  top: 8px; right: 10px;
+  background: var(--lotto-yellow);
+  color: var(--ink);
+  transform: rotate(8deg);
+  border: 2px solid var(--ink);
+  font-size: 13px;
+}
+.sticker.bild {
+  top: 14px; left: -8px;
+  background: var(--bild-red);
+  color: #fff;
+  transform: rotate(-9deg);
+  font-size: 16px;
+  letter-spacing: .12em;
+  padding: 3px 12px;
+  font-weight: 400;
+}
+.sticker.cola {
+  bottom: 20px; left: -6px;
+  background: var(--coca-red);
+  color: #fff;
+  transform: rotate(-6deg);
+  font-family: var(--hand);
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: .02em;
+  padding: 2px 12px 4px;
+}
+.sticker.eis {
+  bottom: 14px; right: -6px;
+  background: #fff;
+  color: var(--eis-pink);
+  transform: rotate(7deg);
+  border: 2px dashed var(--eis-pink);
+  font-family: var(--marker);
+  font-size: 13px;
+}
+.sticker.tabak {
+  top: 70px; right: -12px;
+  background: var(--tabak-blue);
+  color: #fff;
+  transform: rotate(82deg);
+  font-size: 10px;
+  letter-spacing: .15em;
+}
+.sticker.krombi {
+  bottom: 80px; left: -10px;
+  background: var(--krombi-green);
+  color: #fff;
+  transform: rotate(-3deg);
+  font-size: 12px;
+}
+
+/* Preisschild handgeschrieben */
+.preis {
+  position: absolute;
+  background: #fffbe8;
+  border: 1px solid #d4b878;
+  font-family: var(--hand);
+  font-weight: 700;
+  font-size: 17px;
+  color: var(--ink);
+  padding: 2px 8px;
+  border-radius: 2px;
+  transform: rotate(-4deg);
+  box-shadow: 1px 1px 3px rgba(0,0,0,.12);
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* ── Inhalt im Fenster ───────────────────────────────────────────────────── */
+.fenster-inhalt {
+  position: relative;
+  z-index: 2;
+}
+
+.eyebrow {
+  font-family: var(--marker);
+  font-size: 11px;
+  letter-spacing: .12em;
+  color: var(--ink-faded);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+h1 {
+  font-family: var(--marker);
+  font-size: 32px;
+  font-weight: 400;
+  color: var(--ink);
+  line-height: 1.05;
+  margin-bottom: 10px;
+  transform: rotate(-0.5deg);
+  letter-spacing: -.01em;
+}
+
+.intro {
+  font-family: var(--hand);
+  font-size: 19px;
+  color: var(--ink-2);
+  line-height: 1.35;
+  margin-bottom: 20px;
+}
+.intro b { color: var(--ink); font-weight: 700; }
+
+/* Zettel an der Pinnwand = Schichtkarte */
+.zettel {
+  background: #fffaf0;
+  border: 1px solid #d4b878;
+  border-radius: 2px;
+  padding: 12px 14px 14px;
+  margin-bottom: 22px;
+  font-family: var(--hand);
+  font-size: 16px;
+  color: var(--ink);
+  position: relative;
+  transform: rotate(-0.8deg);
+  box-shadow:
+    1px 2px 3px rgba(0,0,0,.1),
+    inset 0 0 0 1px rgba(255,255,255,.4);
+}
+.zettel::before {
+  /* Reisszwecke */
+  content: '';
+  position: absolute;
+  top: -6px; left: 50%;
+  width: 12px; height: 12px;
+  background: radial-gradient(circle at 35% 35%, var(--bild-red) 0%, #8b1410 80%);
+  border-radius: 50%;
+  transform: translateX(-50%);
+  box-shadow: 1px 1px 2px rgba(0,0,0,.3);
+}
+.zettel-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 2px 0;
+  border-bottom: 1px dashed rgba(0,0,0,.15);
+}
+.zettel-row:last-child { border-bottom: none; }
+.zettel-row .k {
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--ink-faded);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-weight: 500;
+}
+.zettel-row .v {
+  color: var(--ink);
+  text-align: right;
+  font-weight: 700;
+}
+
+.rolle-stempel {
+  display: inline-block;
+  padding: 2px 10px;
+  border: 2px solid var(--bild-red);
+  color: var(--bild-red);
+  font-family: var(--marker);
+  font-size: 12px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  transform: rotate(-3deg);
+  background: rgba(216,33,26,.05);
+  border-radius: 2px;
+}
+.rolle-stempel.role-admin    { color: var(--bild-red); border-color: var(--bild-red); }
+.rolle-stempel.role-operator { color: var(--krombi-green); border-color: var(--krombi-green); }
+.rolle-stempel.role-viewer   { color: var(--tabak-blue); border-color: var(--tabak-blue); }
+
+/* Form */
 form { display: flex; flex-direction: column; gap: 14px; }
-label { font-size: 12px; font-weight: 600; color: var(--fg-2); margin-bottom: 5px; display: block; }
-input[type="text"], input[type="password"] {
-  width: 100%; background: var(--bg-card); border: 1px solid var(--border-strong);
-  border-radius: var(--r); padding: 10px 13px; font-size: 13px; color: var(--fg);
-  font-family: var(--sans); transition: border-color .14s, box-shadow .14s;
+
+.feld { position: relative; }
+label {
+  display: block;
+  font-family: var(--hand);
+  font-weight: 700;
+  font-size: 17px;
+  color: var(--ink);
+  margin-bottom: 4px;
+  letter-spacing: .01em;
 }
-input:focus { outline: none; border-color: var(--fg); box-shadow: 0 0 0 3px rgba(9,9,11,.07); }
-input::placeholder { color: var(--fg-5); }
-.hint { font-size: 11px; color: var(--fg-4); margin-top: 4px; }
+label .req { color: var(--bild-red); }
+label .note {
+  font-family: var(--sans);
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--ink-faded);
+  letter-spacing: 0;
+  margin-left: 6px;
+}
+
+input[type="text"],
+input[type="password"] {
+  width: 100%;
+  background: #fffbf0;
+  border: none;
+  border-bottom: 2px dotted var(--ink-faded);
+  border-radius: 0;
+  padding: 6px 4px;
+  font-size: 18px;
+  color: var(--ink);
+  font-family: var(--hand);
+  font-weight: 600;
+  transition: border-color .14s, background .14s;
+}
+input[type="text"]:focus,
+input[type="password"]:focus {
+  outline: none;
+  border-bottom: 2px solid var(--bild-red);
+  background: #fff8e0;
+}
+input::placeholder {
+  color: var(--pencil);
+  font-style: italic;
+  font-weight: 400;
+}
+
+.hint {
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--ink-faded);
+  margin-top: 4px;
+}
+
+/* TÜR-Button "REINKOMMEN" */
 .btn {
-  width: 100%; padding: 11px 18px; border: 1px solid; border-radius: var(--r);
-  font-size: 13px; font-weight: 600; cursor: pointer; transition: all .14s;
-  font-family: var(--sans); display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+  width: 100%;
+  padding: 16px 22px;
+  border: 3px solid var(--bude-shadow);
+  border-radius: 4px;
+  font-family: var(--marker);
+  font-size: 18px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all .14s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 10px;
+  position: relative;
+  background:
+    linear-gradient(180deg, var(--bude-green-3) 0%, var(--bude-green) 100%);
+  color: #fffbe8;
+  box-shadow:
+    0 6px 0 var(--bude-shadow),
+    inset 0 -3px 0 rgba(0,0,0,.2),
+    inset 0 1px 0 rgba(255,255,255,.05);
+  text-shadow: 1px 1px 0 rgba(0,0,0,.4);
 }
-.btn-primary { background: var(--fg); color: #fff; border-color: var(--fg); }
-.btn-primary:hover { background: var(--fg-2); }
-.btn-primary:disabled { background: var(--fg-5); border-color: var(--fg-5); cursor: wait; }
+.btn::before {
+  /* Tür-Klingel */
+  content: '';
+  position: absolute;
+  left: 16px; top: 50%;
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, var(--lotto-yellow) 0%, #c49a00 70%);
+  transform: translateY(-50%);
+  box-shadow: inset -1px -1px 0 rgba(0,0,0,.3), 0 0 6px rgba(255,213,0,.4);
+}
+.btn:hover {
+  background: linear-gradient(180deg, #3a6c50 0%, var(--bude-green-3) 100%);
+  transform: translateY(-2px);
+  box-shadow:
+    0 8px 0 var(--bude-shadow),
+    inset 0 -3px 0 rgba(0,0,0,.2);
+}
+.btn:active {
+  transform: translateY(5px);
+  box-shadow:
+    0 1px 0 var(--bude-shadow),
+    inset 0 -1px 0 rgba(0,0,0,.2);
+}
+.btn:disabled {
+  background: #4a5a4f;
+  cursor: wait;
+  transform: none;
+  box-shadow: 0 6px 0 var(--bude-shadow);
+}
+
+/* Fehler-Box: Schaubild „Heute leider zu" */
 .error {
-  display: none; background: var(--red-bg); border: 1px solid var(--red-bd);
-  border-left: 3px solid var(--red); border-radius: var(--r);
-  padding: 11px 14px; font-size: 13px; color: var(--fg-2); margin-bottom: 16px;
+  display: none;
+  background:
+    repeating-linear-gradient(45deg,
+      rgba(216,33,26,.05) 0 8px,
+      transparent 8px 16px),
+    #fffbe8;
+  border: 2px solid var(--alarm);
+  border-left: 5px solid var(--alarm);
+  padding: 12px 14px;
+  font-family: var(--hand);
+  font-size: 17px;
+  color: var(--ink);
+  margin-bottom: 16px;
+  transform: rotate(-0.4deg);
+  font-weight: 600;
 }
 .error.show { display: block; }
-.error b { color: var(--red); }
-.error-page {
-  background: var(--red-bg); border: 1px solid var(--red-bd); border-left: 3px solid var(--red);
-  border-radius: var(--r); padding: 16px 18px; font-size: 13px; color: var(--fg-2);
+.error b {
+  font-family: var(--marker);
+  font-size: 13px;
+  color: var(--alarm);
+  letter-spacing: .1em;
+  margin-right: 6px;
+  text-transform: uppercase;
 }
-.error-page h2 { font-size: 16px; margin-bottom: 6px; color: var(--red); }
-.footer { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border);
-  text-align: center; font-size: 11px; color: var(--fg-5); }
-.footer a { color: var(--fg-4); text-decoration: none; }
-.footer a:hover { color: var(--fg-2); }
-.spinner { display: inline-block; width: 14px; height: 14px; border: 1.5px solid currentColor;
-  border-top-color: transparent; border-radius: 50%; animation: spin .65s linear infinite; }
+
+/* Vollbild-Fehlerseite = „Heute geschlossen"-Schild */
+.geschlossen {
+  text-align: center;
+  padding: 10px 0 8px;
+}
+.geschlossen .schild-zu {
+  display: inline-block;
+  background: #fffbe8;
+  border: 4px solid var(--alarm);
+  padding: 18px 28px;
+  transform: rotate(-3deg);
+  box-shadow: 2px 4px 8px rgba(0,0,0,.15);
+}
+.geschlossen .schild-zu .badge {
+  font-family: var(--marker);
+  font-size: 11px;
+  letter-spacing: .2em;
+  color: var(--alarm);
+  margin-bottom: 6px;
+}
+.geschlossen .schild-zu h2 {
+  font-family: var(--marker);
+  font-size: 26px;
+  color: var(--ink);
+  line-height: 1.1;
+  margin-bottom: 8px;
+}
+.geschlossen .schild-zu p {
+  font-family: var(--hand);
+  font-size: 18px;
+  color: var(--ink-2);
+  max-width: 320px;
+}
+
+/* Klingel / Türknauf rechts unten an der Fassade */
+.klinke {
+  position: absolute;
+  right: 14px;
+  bottom: 30px;
+  width: 12px; height: 32px;
+  background: linear-gradient(180deg, var(--bude-trim) 0%, var(--bude-trim-2) 100%);
+  border-radius: 2px;
+  box-shadow: 1px 0 2px rgba(0,0,0,.4);
+  z-index: 4;
+}
+
+/* Footer: kleines handgemaltes Schildchen */
+.footer {
+  margin-top: 32px;
+  text-align: center;
+  font-family: var(--hand);
+  font-size: 15px;
+  color: #b0a890;
+  letter-spacing: .02em;
+}
+.footer a {
+  color: #d4c8a0;
+  text-decoration: none;
+  border-bottom: 1px dotted #6e5a40;
+  padding-bottom: 1px;
+}
+.footer a:hover { color: var(--lotto-yellow); border-color: var(--lotto-yellow); }
+
+/* Imbiss-Nachbar unten links — kleines „CURRYWURST"-Schild */
+.imbiss {
+  position: fixed;
+  bottom: 70px;
+  left: 24px;
+  font-family: var(--sign);
+  font-size: 14px;
+  color: var(--coca-red);
+  background: var(--lotto-yellow);
+  padding: 4px 10px;
+  transform: rotate(-6deg);
+  border: 2px solid var(--ink);
+  letter-spacing: .04em;
+  z-index: 2;
+  box-shadow: 2px 3px 0 rgba(0,0,0,.4);
+  pointer-events: none;
+}
+.imbiss small {
+  display: block;
+  font-family: var(--hand);
+  font-size: 12px;
+  letter-spacing: 0;
+  margin-top: -2px;
+}
+@media (max-width: 720px) { .imbiss { display: none; } }
+
+/* Strassenlaterne ganz oben */
+.laterne {
+  position: fixed;
+  top: 0; right: 40px;
+  width: 32px;
+  pointer-events: none;
+  z-index: 1;
+  opacity: .7;
+}
+.laterne .arm {
+  height: 100px;
+  width: 3px;
+  background: #2a2e36;
+  margin-left: 14px;
+}
+.laterne .lampe {
+  width: 32px;
+  height: 24px;
+  background: radial-gradient(ellipse at 50% 30%, #ffe8a8 0%, #c49a00 60%, #6a5400 100%);
+  border-radius: 4px 4px 18px 18px / 4px 4px 12px 12px;
+  margin-left: -1px;
+  box-shadow: 0 0 30px rgba(255,224,138,.5);
+}
+@media (max-width: 600px) { .laterne { display: none; } }
+
+/* Spinner */
+.spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin .65s linear infinite;
+}
 @keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 540px) {
+  .fenster { padding: 22px 18px 26px; }
+  h1 { font-size: 26px; }
+  .intro { font-size: 17px; }
+  .schild-text { font-size: 24px; }
+  .fassade { padding: 18px 14px 24px; }
+}
 </style>
 </head>
 <body>
-  <div class="card">
-    <div class="brand">
-      <div class="brand-mark"></div>
-      <div class="brand-text">
-        {{ADMIN_PORTAL_TITLE}}<span class="sub"> / Einladung</span>
+  <!-- Strassenlaterne -->
+  <div class="laterne"><div class="arm"></div><div class="lampe"></div></div>
+
+  <!-- Currywurst-Bude nebenan -->
+  <div class="imbiss">CURRYWURST<small>Taxiteller 4,50</small></div>
+
+  <div class="scene">
+    <div class="bude">
+      <div class="dach"></div>
+      <div class="schild">
+        <div class="schild-text">Trinkhalle</div>
+        <div class="schild-sub">Bei Gabi &middot; am Eck &middot; seit '67</div>
+      </div>
+
+      <div class="fassade">
+        <div class="wimpel"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+
+        <div class="fenster-rahmen">
+          <div class="fenster">
+            <!-- Sticker am Fensterglas -->
+            <span class="sticker bild">BILD</span>
+            <span class="sticker lotto">LOTTO 6 aus 49</span>
+            <span class="sticker tabak">TABAKWAREN</span>
+            <span class="sticker krombi">★ Krombacher ★</span>
+            <span class="sticker cola">Coca-Cola</span>
+            <span class="sticker eis">EIS · Langnese</span>
+
+            <div class="fenster-inhalt">
+              {{BODY}}
+            </div>
+          </div>
+          <div class="sims"></div>
+        </div>
+
+        <div class="klinke"></div>
       </div>
     </div>
 
-    {{BODY}}
-
     <div class="footer">
-      <a href="/admin/login">Zur Anmeldung</a>
+      schon Stammkunde? <a href="/admin/login">an der Theke vorbei →</a>
     </div>
   </div>
 
