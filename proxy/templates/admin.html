@@ -5628,7 +5628,7 @@ body.help-active [data-help]:not(.tab)::after {
       </div>
       <div class="filter-bar">
         <div class="input-search">
-          <input class="input" type="search" id="agents-filter" placeholder="Hostname oder Agent-ID filtern…" oninput="renderAgents()">
+          <input class="input" type="search" id="agents-filter" placeholder="Hostname, Benutzer oder Agent-ID filtern…" oninput="renderAgents()">
         </div>
         <span class="filter-stamp" id="agents-ts"></span>
       </div>
@@ -10817,7 +10817,7 @@ function _renderPkgAssignCandidates() {
   const installedIds = _pkgAgentsCurrent.installed_ids;
   const candidates = _pkgAssignAllAgents
     .filter(a => !installedIds.has(a.agent_id) && !a.banned)
-    .filter(a => !q || (a.hostname || '').toLowerCase().includes(q) || (a.agent_id || '').toLowerCase().includes(q))
+    .filter(a => !q || (a.hostname || '').toLowerCase().includes(q) || (a.agent_id || '').toLowerCase().includes(q) || (a.logged_in_user || '').toLowerCase().includes(q))
     .sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
 
   if (!candidates.length) {
@@ -11417,7 +11417,8 @@ function renderAgents() {
   if (filter) {
     agents = agents.filter(a =>
       (a.hostname||'').toLowerCase().includes(filter) ||
-      (a.agent_id||'').toLowerCase().includes(filter)
+      (a.agent_id||'').toLowerCase().includes(filter) ||
+      (a.logged_in_user||'').toLowerCase().includes(filter)
     );
   }
   if (_agentVersionFilter === 'outdated') {
