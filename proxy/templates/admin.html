@@ -14066,6 +14066,7 @@ async function renderDeploySnippet() {
 
   const proxyUrl = get('proxy_public_url') || 'http://PROXY-URL:8765';
   const slug = get('product_slug') || 'Softshelf';
+  const brand = get('admin_portal_title') || slug;
   const setupExe = slug + '-setup.exe';
   const setupUrl = proxyUrl.replace(/\/+$/, '') + '/download/' + setupExe;
 
@@ -14077,7 +14078,7 @@ async function renderDeploySnippet() {
   } catch (e) {}
 
   el.textContent =
-`# Softshelf Tactical-Deploy-Script
+`# ${brand} Tactical-Deploy-Script
 # In Tactical \u2192 Scripts \u2192 PowerShell einf\u00fcgen und auf Agents ausf\u00fchren.
 # Funktioniert sowohl als Initial-Deploy als auch als Re-Install
 # (laufende Tray wird vorher gekillt, eindeutige tmp-Datei pro Run).
@@ -14431,8 +14432,9 @@ async function loadBuildStatus() {
 
 function renderBuildStatus(data) {
   const el = document.getElementById('build-status');
-  const trayName  = data.tray_name  || 'softshelf.exe';
-  const setupName = data.setup_name || 'softshelf-setup.exe';
+  const slugFallback = ((_settingsMeta || []).find(m => m.key === 'product_slug') || {}).value || 'Softshelf';
+  const trayName  = data.tray_name  || (slugFallback + '.exe');
+  const setupName = data.setup_name || (slugFallback + '-setup.exe');
   const trayInfo  = data.artifacts[trayName];
   const setupInfo = data.artifacts[setupName];
 

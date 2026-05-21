@@ -1,9 +1,9 @@
 <div class="doc">
 
 <div class="doc-hero">
-  <div class="doc-hero-title">Softshelf · Admin-Handbuch</div>
+  <div class="doc-hero-title">{{SF_BRAND}} · Admin-Handbuch</div>
   <div class="doc-hero-sub">Software-Verteilung für Windows-Flotten mit optionalem Self-Service. Integriert mit Tactical RMM.</div>
-  <div class="doc-hero-meta">Version 2.4.2 &middot; Stand 20. Mai 2026</div>
+  <div class="doc-hero-meta">Version 2.2.0 &middot; Stand 27. April 2026</div>
 </div>
 
 <div class="doc-toc">
@@ -138,7 +138,7 @@
 <section id="rollen">
 <h1>Rollen & Rechte (RBAC)</h1>
 
-<p>Softshelf kennt drei Rollen. Eingestellt pro Admin-User unter <b>Benutzer</b>.</p>
+<p>{{SF_BRAND}} kennt drei Rollen. Eingestellt pro Admin-User unter <b>Benutzer</b>.</p>
 
 <table class="doc-table">
   <thead>
@@ -178,7 +178,7 @@
 <section id="paket-typen">
 <h1>Paket-Typen</h1>
 
-<p>Softshelf kennt vier Paket-Quellen. Type-Pills in der UI zeigen den Typ mit farbigem Dot:</p>
+<p>{{SF_BRAND}} kennt vier Paket-Quellen. Type-Pills in der UI zeigen den Typ mit farbigem Dot:</p>
 
 <table class="doc-table">
   <thead><tr><th>Typ</th><th>Quelle</th><th>Dispatch</th><th>Besonderheit</th></tr></thead>
@@ -187,7 +187,7 @@
       <td><span class="pkg-type-pill winget">winget</span></td>
       <td>Microsoft-winget-Catalog, lokal gemirrowt; plus MS-Store via Direct-ID</td>
       <td><code>winget install/upgrade/uninstall</code> via Tactical run_command</td>
-      <td><b>Scope</b> (auto/machine/user) pro Paket — Layer-2-Fallback für per-user-only-Installer wie LastPass, Bitwarden. <b>MS-Store-IDs</b> (z.B. <code>9NBLGGH6BZL3</code>) werden auto erkannt und mit <code>--source msstore</code> + <code>run_as_user</code> installiert. <b>ARP-Fallback</b> beim Uninstall: wenn winget den Silent-Switch nicht durchreicht (z.B. Firefox NSIS-helper.exe unter SYSTEM), wird die UninstallString aus Add/Remove-Programs geparst, Installer-Typ (MSI/NSIS/Inno) erkannt und mit korrektem Silent-Switch direkt ausgeführt.</td>
+      <td><b>Scope</b> (auto/machine/user) pro Paket — Layer-2-Fallback für per-user-only-Installer wie LastPass, Bitwarden. <b>MS-Store-IDs</b> (z.B. <code>9NBLGGH6BZL3</code>) werden auto erkannt und mit <code>--source msstore</code> + <code>run_as_user</code> installiert.</td>
     </tr>
     <tr>
       <td><span class="pkg-type-pill choco">choco</span></td>
@@ -318,7 +318,7 @@
 <section id="wf-msstore">
 <h2>MS-Store-App per ID hinzufügen</h2>
 
-<p>Manche Apps gibt es nur im Microsoft Store (z.B. GlobalProtect, Dell Command Update). Diese kann winget mit <code>--source msstore</code> installieren — Softshelf erkennt das automatisch am ID-Format.</p>
+<p>Manche Apps gibt es nur im Microsoft Store (z.B. GlobalProtect, Dell Command Update). Diese kann winget mit <code>--source msstore</code> installieren — {{SF_BRAND}} erkennt das automatisch am ID-Format.</p>
 
 <ol class="doc-steps">
   <li>Auf einem Test-Agent in PowerShell <code>winget search &lt;name&gt; --source msstore</code> ausführen. Die ID beginnt mit <code>9</code> und ist 12 Zeichen lang (z.B. <code>9NBLGGH6BZL3</code>).</li>
@@ -329,7 +329,7 @@
 </ol>
 
 <div class="doc-callout info">
-  <b>Was passiert beim Install:</b> Softshelf erkennt das ID-Format und setzt automatisch <code>--source msstore</code> und <code>run_as_user=True</code> (MS-Store-Apps sind Per-User-Appx). Der Agent muss einen eingeloggten User haben.
+  <b>Was passiert beim Install:</b> {{SF_BRAND}} erkennt das ID-Format und setzt automatisch <code>--source msstore</code> und <code>run_as_user=True</code> (MS-Store-Apps sind Per-User-Appx). Der Agent muss einen eingeloggten User haben.
 </div>
 </section>
 
@@ -555,7 +555,7 @@
   <tbody>
     <tr>
       <td><b>install</b></td>
-      <td>Installiert ein Softshelf-Paket auf dem Agent (gleicher Dispatch-Pfad wie manuell aus der Paket-Liste — mit Output-Capture und Soft-Error-Detection).</td>
+      <td>Installiert ein {{SF_BRAND}}-Paket auf dem Agent (gleicher Dispatch-Pfad wie manuell aus der Paket-Liste — mit Output-Capture und Soft-Error-Detection).</td>
       <td>Paket auswählen (Dropdown). Optional: version_pin für diesen Step überschreiben.</td>
     </tr>
     <tr>
@@ -839,7 +839,7 @@
 <p>Tab <b>Einstellungen</b> → Abschnitt „Tactical-Deploy" → Snippet ist vorausgefüllt mit aktuellem Registration-Secret. In Tactical → Scripts → „PowerShell" → ins Script-Feld einfügen → auf Agent ausführen.</p>
 
 <h3>2. Manuelle Installation</h3>
-<p><code>softshelf-setup.exe</code> vom Proxy herunterladen (<code>http://proxy:8765/download/softshelf-setup.exe</code>) und als Admin ausführen. Der Installer registriert den Agent mit dem im EXE einkompilierten <code>PROXY_URL</code> und verwendet das in der Setup-GUI eingegebene Registration-Secret.</p>
+<p><code>{{SF_SLUG}}-setup.exe</code> vom Proxy herunterladen (<code>{{SF_SETUP_EXE_URL}}</code>) und als Admin ausführen. Der Installer registriert den Agent mit dem im EXE einkompilierten <code>PROXY_URL</code> und verwendet das in der Setup-GUI eingegebene Registration-Secret.</p>
 
 <h3>3. Per GPO / SCCM</h3>
 <p>Gleiche EXE mit <code>/S /RegSecret="xxx"</code> Silent-Flags.</p>
@@ -996,7 +996,7 @@ rsync -av /opt/softshelf/data/uploads/ backup:/backups/</pre>
   <tbody>
     <tr>
       <td>Kiosk-Client erscheint nach Deploy nicht im Tray</td>
-      <td>Tactical läuft als SYSTEM (Session 0). Der Installer erzeugt einen Task-Scheduler-Task mit Principal=active user — check mit <code>schtasks /Query /TN Softshelf</code> im User-Context.</td>
+      <td>Tactical läuft als SYSTEM (Session 0). Der Installer erzeugt einen Task-Scheduler-Task mit Principal=active user — check mit <code>schtasks /Query /TN {{SF_SLUG}}</code> im User-Context.</td>
     </tr>
     <tr>
       <td>winget-Install scheitert mit „No applicable installer found"</td>
