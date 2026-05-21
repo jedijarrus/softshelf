@@ -475,6 +475,28 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE agent_installations ADD COLUMN installed_sha TEXT"
             )
+
+        # Admin-Einladungen (v2.5)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS admin_invitations (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                token             TEXT NOT NULL UNIQUE,
+                role              TEXT NOT NULL,
+                email_hint        TEXT,
+                created_by        INTEGER NOT NULL,
+                created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+                expires_at        TEXT NOT NULL,
+                accepted_at       TEXT,
+                accepted_user_id  INTEGER,
+                revoked_at        TEXT,
+                FOREIGN KEY (created_by)       REFERENCES admin_users(id),
+                FOREIGN KEY (accepted_user_id) REFERENCES admin_users(id) ON DELETE SET NULL
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_admin_invitations_token "
+            "ON admin_invitations(token)"
+        )
         await db.commit()
 
         # Migration: custom-package-Felder + winget-Felder
@@ -2225,6 +2247,112 @@ async def delete_admin_session(token: str):
     async with _db() as db:
         await db.execute("DELETE FROM admin_sessions WHERE token = ?", (token,))
         await db.commit()
+
+
+# ── Admin Invitations ─────────────────────────────────────────────────────────
+
+_INV_COLS = (
+    "i.id, i.token, i.role, i.email_hint, i.created_by, i.created_at, "
+    "i.expires_at, i.accepted_at, i.accepted_user_id, i.revoked_at, "
+    "c.username AS created_by_username, "
+    "c.display_name AS created_by_display_name, "
+    "a.username AS accepted_username, "
+    "a.display_name AS accepted_display_name"
+)
+
+
+async def create_invitation(
+    *,
+    token: str,
+    role: str,
+    email_hint: str | None,
+    created_by: int,
+    expires_at: str,
+) -> int:
+    if role not in ("admin", "operator", "viewer"):
+        raise ValueError(f"Invalid role: {role!r}")
+    async with _db() as db:
+        cur = await db.execute(
+            "INSERT INTO admin_invitations (token, role, email_hint, created_by, expires_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (token, role, email_hint, created_by, expires_at),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def list_invitations() -> list[dict]:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT {_INV_COLS} FROM admin_invitations i "
+            "LEFT JOIN admin_users c ON c.id = i.created_by "
+            "LEFT JOIN admin_users a ON a.id = i.accepted_user_id "
+            "ORDER BY i.created_at DESC, i.id DESC"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_invitation_by_id(inv_id: int) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT {_INV_COLS} FROM admin_invitations i "
+            "LEFT JOIN admin_users c ON c.id = i.created_by "
+            "LEFT JOIN admin_users a ON a.id = i.accepted_user_id "
+            "WHERE i.id = ?",
+            (inv_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def get_invitation_by_token(token: str) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT {_INV_COLS} FROM admin_invitations i "
+            "LEFT JOIN admin_users c ON c.id = i.created_by "
+            "LEFT JOIN admin_users a ON a.id = i.accepted_user_id "
+            "WHERE i.token = ?",
+            (token,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def revoke_invitation(inv_id: int) -> bool:
+    """Setzt revoked_at nur wenn die Einladung noch offen ist (nicht akzeptiert,
+    nicht widerrufen). Rueckgabe: True wenn was geaendert wurde."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE admin_invitations SET revoked_at = datetime('now') "
+            "WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL",
+            (inv_id,),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def delete_invitation(inv_id: int):
+    async with _db() as db:
+        await db.execute("DELETE FROM admin_invitations WHERE id = ?", (inv_id,))
+        await db.commit()
+
+
+async def accept_invitation(inv_id: int, user_id: int) -> bool:
+    """Atomarer Annahme-Vorgang: setzt accepted_at + accepted_user_id NUR wenn
+    Einladung noch offen ist und nicht abgelaufen. Rueckgabe: True bei Erfolg."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE admin_invitations SET accepted_at = datetime('now'), "
+            "accepted_user_id = ? "
+            "WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL "
+            "AND expires_at > datetime('now')",
+            (user_id, inv_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
 
 
 async def delete_user_sessions(user_id: int):

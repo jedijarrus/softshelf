@@ -5703,6 +5703,20 @@ body.help-active [data-help]:not(.tab)::after {
     <div id="main-users">
       <div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Benutzer werden geladen</span></div>
     </div>
+
+    <div class="section-head" style="margin-top:48px">
+      <div>
+        <h1 class="section-title" style="font-size:18px">Einladungen</h1>
+        <div class="section-sub">Lade neue Benutzer per Link ein. Empfänger wählt Benutzername + Passwort selbst.</div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="openInvitePanel()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        Einladung erstellen
+      </button>
+    </div>
+    <div id="main-invitations">
+      <div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Einladungen werden geladen</span></div>
+    </div>
   </section>
 
   <!-- HELP -->
@@ -6508,6 +6522,82 @@ body.help-active [data-help]:not(.tab)::after {
   </div>
 </div>
 
+<!-- INVITE CREATE MODAL -->
+<div class="modal" id="invite-create-modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="modal-tag">EINLADUNG</div>
+      <h3 class="modal-title">Einladung erstellen</h3>
+    </div>
+    <div class="modal-body" style="padding: 0 20px 16px">
+      <p style="font-size: 12.5px; color: var(--fg-3); margin: 0 0 14px; line-height: 1.55">
+        Erstellt einen einmal-gueltigen Einladungs-Link. Der Empfaenger waehlt
+        Benutzername und Passwort selbst. Verschicken via Mail/Teams &mdash;
+        der Link wird nach „Erstellen" angezeigt.
+      </p>
+      <div class="pw-field">
+        <label for="inv-role">Rolle</label>
+        <select class="input" id="inv-role">
+          <option value="admin">Admin — alles erlaubt</option>
+          <option value="operator">Operator — Dispatch + Fehler bestaetigen</option>
+          <option value="viewer" selected>Viewer — nur Lesezugriff</option>
+        </select>
+      </div>
+      <div class="pw-field">
+        <label for="inv-hint">Hinweis (optional)</label>
+        <input class="input" type="text" id="inv-hint" maxlength="120"
+               placeholder="z. B. Max Mustermann">
+        <div class="hint">Hilft beim Wiedererkennen in der Liste. Wird auf der Annahme-Seite angezeigt.</div>
+      </div>
+      <div class="pw-field">
+        <label for="inv-days">Gueltigkeit</label>
+        <select class="input" id="inv-days">
+          <option value="1">1 Tag</option>
+          <option value="7" selected>7 Tage</option>
+          <option value="14">14 Tage</option>
+          <option value="30">30 Tage</option>
+        </select>
+      </div>
+      <div class="pw-error" id="inv-create-error"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost btn-sm" type="button" onclick="closeInviteCreate()">Abbrechen</button>
+      <button class="btn btn-primary btn-sm" type="button" id="inv-create-submit" onclick="submitInviteCreate()">Erstellen</button>
+    </div>
+  </div>
+</div>
+
+<!-- INVITE LINK MODAL (nach Erstellen) -->
+<div class="modal" id="invite-link-modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="modal-tag">EINLADUNG</div>
+      <h3 class="modal-title">Einladung erstellt</h3>
+    </div>
+    <div class="modal-body" style="padding: 0 20px 16px">
+      <p style="font-size: 12.5px; color: var(--fg-3); margin: 0 0 14px; line-height: 1.55">
+        Diesen Link an den Empfaenger schicken. Der Link ist einmal-gueltig und
+        laeuft am angegebenen Datum ab.
+      </p>
+      <div class="pw-field">
+        <label>Link</label>
+        <div style="display:flex; gap:8px">
+          <input class="input" type="text" id="inv-link-url" readonly
+                 style="font-family: var(--mono); font-size: 11.5px; flex:1"
+                 onclick="this.select()">
+          <button class="btn btn-primary btn-sm" type="button"
+                  onclick="copyInviteLink()" id="inv-link-copy-btn"
+                  style="white-space:nowrap">Kopieren</button>
+        </div>
+      </div>
+      <div id="inv-link-meta" style="font-size: 12px; color: var(--fg-4); margin-top: 10px"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary btn-sm" type="button" onclick="closeInviteLinkModal()">Schliessen</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="ban-modal">
   <div class="modal-card">
     <div class="modal-head">
@@ -6940,7 +7030,7 @@ function switchTab(name, btn) {
   if (name === 'workflows')    loadWorkflows();
   if (name === 'audit')        loadAudit();
   if (name === 'actions')      loadActionLog(true);
-  if (name === 'users')        loadUsers();
+  if (name === 'users')        { loadUsers(); loadInvitations(); }
   if (name === 'settings')     loadSettings();
   if (name === 'help')         loadHelp();
 }
@@ -13759,6 +13849,180 @@ function confirmDeleteUser(id, username) {
         await api('DELETE', `/admin/api/users/${id}`);
         toast('Benutzer gelöscht');
         await loadUsers();
+      } catch (e) {}
+    },
+  );
+}
+
+// ── Invitations ──────────────────────────────────────────────────────────────
+let _invitations = [];
+
+async function loadInvitations() {
+  const el = document.getElementById('main-invitations');
+  if (!el) return;
+  el.innerHTML = '<div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Lade Einladungen</span></div>';
+  try {
+    _invitations = await api('GET', '/admin/api/invitations');
+    renderInvitations();
+  } catch (e) {}
+}
+
+function _inviteStatusPill(status) {
+  const map = {
+    'open':     ['Offen',       'status-online'],
+    'accepted': ['Angenommen',  'status-online'],
+    'expired':  ['Abgelaufen',  'status-offline'],
+    'revoked':  ['Widerrufen',  'status-offline'],
+  };
+  const [label, cls] = map[status] || [status, 'status-offline'];
+  return `<span class="status ${cls}">${label}</span>`;
+}
+
+function renderInvitations() {
+  const el = document.getElementById('main-invitations');
+  if (!_invitations.length) {
+    el.innerHTML = '<div class="empty"><h3>Keine Einladungen</h3><p>Klick auf „Einladung erstellen"</p></div>';
+    return;
+  }
+  el.innerHTML = `<div class="tbl-wrap"><table class="tbl">
+    <thead><tr>
+      <th>Status</th><th>Hinweis</th><th>Rolle</th>
+      <th>Erstellt</th><th>Lauft ab</th><th>Angenommen</th><th></th>
+    </tr></thead>
+    <tbody>
+    ${_invitations.map(inv => {
+      const role = inv.role || 'viewer';
+      const roleBadge = `<span class="role-badge role-${esc(role)}">${esc(role)}</span>`;
+      const creator = inv.created_by_display_name || inv.created_by_username || '—';
+      const accepted = inv.accepted_at
+        ? `${fmtDt(inv.accepted_at)}<br><span style="color:var(--fg-4);font-size:11px">${esc(inv.accepted_display_name || inv.accepted_username || '')}</span>`
+        : '—';
+      const actions = [];
+      if (inv.status === 'open') {
+        actions.push(`<button class="row-action" onclick="copyInviteLinkFromList(${inv.id})" title="Link kopieren">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>`);
+        actions.push(`<button class="row-action" onclick="confirmRevokeInvitation(${inv.id})" title="Widerrufen" style="margin-left:6px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M4.93 4.93l14.14 14.14"/></svg>
+        </button>`);
+      } else {
+        actions.push(`<button class="row-action" onclick="confirmDeleteInvitation(${inv.id})" title="Löschen">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+        </button>`);
+      }
+      return `<tr>
+        <td>${_inviteStatusPill(inv.status)}</td>
+        <td>${esc(inv.email_hint || '—')}</td>
+        <td>${roleBadge}</td>
+        <td><span class="cell-time">${fmtDt(inv.created_at)}</span><br><span style="color:var(--fg-4);font-size:11px">${esc(creator)}</span></td>
+        <td><span class="cell-time">${fmtDt(inv.expires_at)}</span></td>
+        <td>${accepted}</td>
+        <td style="text-align:right;white-space:nowrap">${actions.join('')}</td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table></div>`;
+}
+
+function openInvitePanel() {
+  document.getElementById('inv-role').value = 'viewer';
+  document.getElementById('inv-hint').value = '';
+  document.getElementById('inv-days').value = '7';
+  document.getElementById('inv-create-error').textContent = '';
+  document.getElementById('invite-create-modal').classList.add('open');
+  setTimeout(() => document.getElementById('inv-hint').focus(), 100);
+}
+
+function closeInviteCreate() {
+  document.getElementById('invite-create-modal').classList.remove('open');
+}
+
+async function submitInviteCreate() {
+  const btn = document.getElementById('inv-create-submit');
+  const errEl = document.getElementById('inv-create-error');
+  errEl.textContent = '';
+  const body = {
+    role: document.getElementById('inv-role').value,
+    email_hint: document.getElementById('inv-hint').value.trim(),
+    valid_days: parseInt(document.getElementById('inv-days').value, 10) || 7,
+  };
+  btn.disabled = true; btn.textContent = 'Erstelle…';
+  try {
+    const inv = await api('POST', '/admin/api/invitations', body);
+    closeInviteCreate();
+    showInviteLinkModal(inv);
+    await loadInvitations();
+  } catch (e) {
+    errEl.textContent = e.message || 'Fehler beim Erstellen';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Erstellen';
+  }
+}
+
+function showInviteLinkModal(inv) {
+  document.getElementById('inv-link-url').value = inv.url || '';
+  const role = inv.role || 'viewer';
+  const expires = inv.expires_at ? fmtDt(inv.expires_at) : '—';
+  const hint = inv.email_hint ? ` · ${esc(inv.email_hint)}` : '';
+  document.getElementById('inv-link-meta').innerHTML =
+    `Rolle: <b>${esc(role)}</b> · Läuft ab: <b>${expires}</b>${hint}`;
+  document.getElementById('inv-link-copy-btn').textContent = 'Kopieren';
+  document.getElementById('invite-link-modal').classList.add('open');
+}
+
+function closeInviteLinkModal() {
+  document.getElementById('invite-link-modal').classList.remove('open');
+}
+
+async function copyInviteLink() {
+  const url = document.getElementById('inv-link-url').value;
+  const btn = document.getElementById('inv-link-copy-btn');
+  try {
+    await navigator.clipboard.writeText(url);
+    btn.textContent = 'Kopiert ✓';
+    setTimeout(() => { btn.textContent = 'Kopieren'; }, 1800);
+  } catch (e) {
+    document.getElementById('inv-link-url').select();
+    document.execCommand('copy');
+    btn.textContent = 'Kopiert ✓';
+    setTimeout(() => { btn.textContent = 'Kopieren'; }, 1800);
+  }
+}
+
+async function copyInviteLinkFromList(id) {
+  const inv = _invitations.find(x => x.id === id);
+  if (!inv || !inv.url) return;
+  try {
+    await navigator.clipboard.writeText(inv.url);
+    toast('Link kopiert');
+  } catch (e) {
+    toast('Konnte nicht kopieren', true);
+  }
+}
+
+function confirmRevokeInvitation(id) {
+  showConfirm(
+    'Einladung widerrufen',
+    'Der Link wird sofort ungueltig. Bereits angelegte Konten bleiben erhalten.',
+    async () => {
+      try {
+        await api('POST', `/admin/api/invitations/${id}/revoke`);
+        toast('Einladung widerrufen');
+        await loadInvitations();
+      } catch (e) {}
+    },
+  );
+}
+
+function confirmDeleteInvitation(id) {
+  showConfirm(
+    'Einladung loeschen',
+    'Eintrag wird aus der Liste entfernt. Bereits angelegte Konten bleiben erhalten.',
+    async () => {
+      try {
+        await api('DELETE', `/admin/api/invitations/${id}`);
+        toast('Einladung geloescht');
+        await loadInvitations();
       } catch (e) {}
     },
   );

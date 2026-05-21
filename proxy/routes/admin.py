@@ -7,6 +7,7 @@ import asyncio
 import base64
 import html
 import io
+import json
 import logging
 import os
 import re
@@ -57,6 +58,7 @@ def _spawn_bg(coro) -> asyncio.Task:
 _TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "..", "templates", "admin.html")
 _HELP_PATH = os.path.join(os.path.dirname(__file__), "..", "templates", "admin_help.html")
 _LOGIN_PATH = os.path.join(os.path.dirname(__file__), "..", "templates", "admin_login.html")
+_INVITE_PATH = os.path.join(os.path.dirname(__file__), "..", "templates", "admin_invite.html")
 
 _PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,99}$")
 _AGENT_ID_RE = re.compile(r"^[a-zA-Z0-9\-]{8,64}$")
@@ -130,6 +132,7 @@ def _validate_uninstall_cmd(cmd: str) -> str:
 _ADMIN_ONLY_PATHS = (
     "/admin/api/settings",
     "/admin/api/users",
+    "/admin/api/invitations",
     "/admin/api/enable",            # Whitelist add/PATCH
     "/admin/api/disable",
     "/admin/api/upload",
@@ -324,6 +327,219 @@ async def do_login(
     token, expires = await admin_auth.create_session(user["id"], ip, ua)
     response = JSONResponse({"ok": True, "redirect": "/admin"})
     _set_session_cookie(response, token, expires, request)
+    return response
+
+
+_INVITE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_\-]{32,80}$")
+
+
+def _invite_error_page(title: str, body: str, portal_title: str) -> str:
+    with open(_INVITE_PATH, encoding="utf-8") as f:
+        page = f.read()
+    inner = (
+        f'<div class="error-page"><h2>{html.escape(title)}</h2>'
+        f'<p>{html.escape(body)}</p></div>'
+    )
+    page = page.replace("{{ADMIN_PORTAL_TITLE}}", portal_title)
+    page = page.replace("{{BODY}}", inner)
+    page = page.replace("{{SCRIPT}}", "")
+    return page
+
+
+@router.get("/invite/{token}", response_class=HTMLResponse)
+async def invite_page(token: str, request: Request):
+    portal_title = await _portal_title_html()
+    if not _INVITE_TOKEN_RE.fullmatch(token):
+        return HTMLResponse(_invite_error_page(
+            "Ungueltiger Link",
+            "Der Einladungs-Link sieht nicht echt aus. Bitte beim Absender nachfragen.",
+            portal_title,
+        ), status_code=400)
+    inv = await database.get_invitation_by_token(token)
+    if not inv:
+        return HTMLResponse(_invite_error_page(
+            "Einladung nicht gefunden",
+            "Dieser Einladungs-Link existiert nicht. Eventuell wurde er entfernt.",
+            portal_title,
+        ), status_code=404)
+    status = _invitation_status(inv)
+    if status == "revoked":
+        return HTMLResponse(_invite_error_page(
+            "Einladung widerrufen",
+            "Diese Einladung wurde widerrufen. Bitte beim Absender eine neue anfordern.",
+            portal_title,
+        ), status_code=410)
+    if status == "expired":
+        return HTMLResponse(_invite_error_page(
+            "Einladung abgelaufen",
+            "Diese Einladung ist abgelaufen. Bitte beim Absender eine neue anfordern.",
+            portal_title,
+        ), status_code=410)
+    if status == "accepted":
+        return HTMLResponse(_invite_error_page(
+            "Bereits angenommen",
+            "Diese Einladung wurde bereits angenommen. Bitte einloggen.",
+            portal_title,
+        ), status_code=410)
+
+    # Open — render form
+    role = inv["role"]
+    inviter = inv.get("created_by_display_name") or inv.get("created_by_username") or "Admin"
+    hint = inv.get("email_hint") or ""
+    role_label = {"admin": "Admin", "operator": "Operator", "viewer": "Viewer"}.get(role, role)
+
+    meta_rows = (
+        f'<div class="meta-row"><span class="k">Eingeladen von</span>'
+        f'<span class="v">{html.escape(inviter)}</span></div>'
+        f'<div class="meta-row"><span class="k">Rolle</span>'
+        f'<span class="v"><span class="role-pill">{html.escape(role_label)}</span></span></div>'
+    )
+    if hint:
+        meta_rows += (
+            f'<div class="meta-row"><span class="k">Hinweis</span>'
+            f'<span class="v">{html.escape(hint)}</span></div>'
+        )
+
+    body = f"""
+    <h1>Willkommen</h1>
+    <p class="intro">Bitte Benutzername und Passwort fuer dein neues {html.escape(role_label)}-Konto setzen.</p>
+
+    <div class="meta">{meta_rows}</div>
+
+    <div class="error" id="error"></div>
+
+    <form id="invite-form" autocomplete="off">
+      <div>
+        <label for="username">Benutzername *</label>
+        <input type="text" id="username" name="username" autocomplete="off" required autofocus
+               minlength="2" maxlength="80" placeholder="z.B. max.mustermann">
+        <div class="hint">2-80 Zeichen, nur a-z A-Z 0-9 . _ - @</div>
+      </div>
+      <div>
+        <label for="display_name">Anzeigename</label>
+        <input type="text" id="display_name" name="display_name" autocomplete="off"
+               maxlength="80" placeholder="optional">
+      </div>
+      <div>
+        <label for="password">Passwort *</label>
+        <input type="password" id="password" name="password" autocomplete="new-password" required minlength="8">
+        <div class="hint">Mindestens 8 Zeichen</div>
+      </div>
+      <div>
+        <label for="password2">Passwort wiederholen *</label>
+        <input type="password" id="password2" name="password2" autocomplete="new-password" required minlength="8">
+      </div>
+      <button type="submit" class="btn btn-primary" id="submit-btn">Konto erstellen</button>
+    </form>
+    """
+
+    script = """
+    <script>
+      const tokenStr = """ + json.dumps(token) + """;
+      const form = document.getElementById('invite-form');
+      const errEl = document.getElementById('error');
+      const btn = document.getElementById('submit-btn');
+      function showError(msg) { errEl.textContent = msg; errEl.classList.add('show'); }
+      function clearError() { errEl.classList.remove('show'); errEl.textContent = ''; }
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        clearError();
+        const u = document.getElementById('username').value.trim();
+        const dn = document.getElementById('display_name').value.trim();
+        const p1 = document.getElementById('password').value;
+        const p2 = document.getElementById('password2').value;
+        if (p1 !== p2) { showError('Passwoerter stimmen nicht ueberein.'); return; }
+        if (p1.length < 8) { showError('Passwort muss mind. 8 Zeichen haben.'); return; }
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Konto wird erstellt …';
+        try {
+          const r = await fetch('/invite/' + encodeURIComponent(tokenStr), {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username: u, display_name: dn, password: p1}),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok) {
+            window.location.href = data.redirect || '/admin';
+          } else {
+            showError(data.error || ('Fehler (HTTP ' + r.status + ')'));
+            btn.disabled = false;
+            btn.textContent = 'Konto erstellen';
+          }
+        } catch (err) {
+          showError('Netzwerkfehler: ' + err.message);
+          btn.disabled = false;
+          btn.textContent = 'Konto erstellen';
+        }
+      });
+    </script>
+    """
+
+    with open(_INVITE_PATH, encoding="utf-8") as f:
+        page = f.read()
+    page = page.replace("{{ADMIN_PORTAL_TITLE}}", portal_title)
+    page = page.replace("{{BODY}}", body)
+    page = page.replace("{{SCRIPT}}", script)
+    return HTMLResponse(page)
+
+
+class InviteAcceptBody(BaseModel):
+    username: str = Field(min_length=2, max_length=80)
+    display_name: str = Field(default="", max_length=80)
+    password: str = Field(min_length=8, max_length=200)
+
+    @field_validator("username")
+    @classmethod
+    def _check_username(cls, v: str) -> str:
+        if not _USERNAME_RE.fullmatch(v):
+            raise ValueError("Username darf nur a-zA-Z0-9._-@ enthalten (2-80 Zeichen)")
+        return v
+
+
+@router.post("/invite/{token}")
+async def accept_invite(token: str, body: InviteAcceptBody, request: Request):
+    if not _INVITE_TOKEN_RE.fullmatch(token):
+        raise HTTPException(status_code=400, detail="Ungueltiger Token")
+    inv = await database.get_invitation_by_token(token)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Einladung nicht gefunden")
+    status = _invitation_status(inv)
+    if status != "open":
+        msg = {
+            "revoked": "Diese Einladung wurde widerrufen.",
+            "expired": "Diese Einladung ist abgelaufen.",
+            "accepted": "Diese Einladung wurde bereits angenommen.",
+        }.get(status, "Einladung nicht mehr offen.")
+        raise HTTPException(status_code=410, detail=msg)
+
+    existing = await database.get_admin_user_by_username(body.username)
+    if existing:
+        raise HTTPException(status_code=409, detail="Benutzername bereits vergeben")
+
+    user_id = await database.create_admin_user(
+        username=body.username,
+        display_name=body.display_name or None,
+        email=None,
+        password_hash=admin_auth.hash_password(body.password),
+        is_active=True,
+        role=inv["role"],
+    )
+
+    ok = await database.accept_invitation(inv["id"], user_id)
+    if not ok:
+        # Race: jemand anders hat dieselbe Einladung gleichzeitig angenommen.
+        # Den eben angelegten User wieder loeschen damit kein Phantom-Account bleibt.
+        await database.delete_admin_user(user_id)
+        raise HTTPException(
+            status_code=409,
+            detail="Einladung wurde inzwischen anderweitig angenommen oder widerrufen.",
+        )
+
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent")
+    session_token, expires = await admin_auth.create_session(user_id, ip, ua)
+    response = JSONResponse({"ok": True, "redirect": "/admin"})
+    _set_session_cookie(response, session_token, expires, request)
     return response
 
 
@@ -593,6 +809,118 @@ async def change_own_password(
     response = JSONResponse({"ok": True})
     _set_session_cookie(response, new_token, expires, request)
     return response
+
+
+# ── Invitations ──────────────────────────────────────────────────────────────
+
+class InvitationCreateRequest(BaseModel):
+    role: str = "viewer"
+    email_hint: str = Field(default="", max_length=120)
+    valid_days: int = Field(default=7, ge=1, le=90)
+
+    @field_validator("role")
+    @classmethod
+    def _check_role(cls, v: str) -> str:
+        if v not in _VALID_ROLES:
+            raise ValueError(f"role muss eine von {sorted(_VALID_ROLES)} sein")
+        return v
+
+    @field_validator("email_hint")
+    @classmethod
+    def _check_hint(cls, v: str) -> str:
+        v = (v or "").strip()
+        if v and not _NO_CTRL_RE.fullmatch(v):
+            raise ValueError("email_hint enthaelt Steuerzeichen")
+        return v
+
+
+def _invitation_status(inv: dict) -> str:
+    if inv.get("revoked_at"):
+        return "revoked"
+    if inv.get("accepted_at"):
+        return "accepted"
+    expires = inv.get("expires_at") or ""
+    try:
+        exp_dt = datetime.fromisoformat(expires.replace(" ", "T"))
+        if exp_dt < datetime.utcnow():
+            return "expired"
+    except Exception:
+        pass
+    return "open"
+
+
+def _public_invitation(inv: dict, request: Request | None = None) -> dict:
+    status = _invitation_status(inv)
+    url = None
+    if status == "open" and request is not None:
+        scheme = "https" if _is_https_request(request) else request.url.scheme
+        host = request.headers.get("host") or request.url.netloc
+        url = f"{scheme}://{host}/invite/{inv['token']}"
+    return {
+        "id": inv["id"],
+        "role": inv["role"],
+        "email_hint": inv.get("email_hint") or "",
+        "created_at": inv.get("created_at"),
+        "created_by": inv.get("created_by"),
+        "created_by_username": inv.get("created_by_username"),
+        "created_by_display_name": inv.get("created_by_display_name"),
+        "expires_at": inv.get("expires_at"),
+        "accepted_at": inv.get("accepted_at"),
+        "accepted_username": inv.get("accepted_username"),
+        "accepted_display_name": inv.get("accepted_display_name"),
+        "revoked_at": inv.get("revoked_at"),
+        "status": status,
+        "url": url,
+    }
+
+
+@router.get("/admin/api/invitations", dependencies=[Depends(_require_admin)])
+async def list_invitations(request: Request):
+    rows = await database.list_invitations()
+    return [_public_invitation(r, request) for r in rows]
+
+
+@router.post("/admin/api/invitations", dependencies=[Depends(_require_admin)])
+async def create_invitation(
+    request: Request,
+    body: InvitationCreateRequest,
+    current: dict = Depends(_require_admin),
+):
+    from datetime import timedelta
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.utcnow() + timedelta(days=body.valid_days)).strftime("%Y-%m-%d %H:%M:%S")
+    inv_id = await database.create_invitation(
+        token=token,
+        role=body.role,
+        email_hint=body.email_hint or None,
+        created_by=current["user_id"],
+        expires_at=expires_at,
+    )
+    inv = await database.get_invitation_by_id(inv_id)
+    return _public_invitation(inv, request)
+
+
+@router.post("/admin/api/invitations/{inv_id}/revoke",
+             dependencies=[Depends(_require_admin)])
+async def revoke_invitation(inv_id: int, request: Request):
+    ok = await database.revoke_invitation(inv_id)
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail="Einladung nicht offen (bereits angenommen, abgelaufen oder widerrufen)",
+        )
+    inv = await database.get_invitation_by_id(inv_id)
+    return _public_invitation(inv, request)
+
+
+@router.delete("/admin/api/invitations/{inv_id}",
+               dependencies=[Depends(_require_admin)])
+async def delete_invitation(inv_id: int):
+    inv = await database.get_invitation_by_id(inv_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Einladung nicht gefunden")
+    await database.delete_invitation(inv_id)
+    return {"ok": True}
 
 
 # ── Packages (Whitelist) ──────────────────────────────────────────────────────

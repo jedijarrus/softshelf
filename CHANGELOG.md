@@ -7,6 +7,39 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.5.0] – 2026-05-21
+
+Admin-Einladungen per Link: Benutzer-Onboarding ohne manuelles Passwort-Setzen.
+
+### Added
+
+- **Admin-Einladungen** (`admin_invitations`-Tabelle + Endpoints
+  `GET/POST /admin/api/invitations`, `POST /admin/api/invitations/{id}/revoke`,
+  `DELETE /admin/api/invitations/{id}`). Admin erstellt Einladung mit Rolle
+  (admin/operator/viewer), optionalem Hinweis-Text und Gueltigkeit (1/7/14/30
+  Tage); Backend erzeugt einmal-gueltigen Token (`secrets.token_urlsafe(32)`)
+  und Link `https://.../invite/{token}`.
+- **Public-Annahme-Seite** (`templates/admin_invite.html`, Endpoint
+  `GET /invite/{token}`): zeigt Einlader + Rolle + Hinweis, Form fuer
+  Benutzername/Anzeigename/Passwort. `POST /invite/{token}` legt User mit
+  der eingeladenen Rolle an, markiert Einladung atomar als angenommen
+  (`UPDATE ... WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now`),
+  loggt direkt ein (Session-Cookie) und redirected nach `/admin`.
+- **Admin-UI: Sektion „Einladungen"** unter Benutzer-Tab. Liste mit
+  Status-Pill (offen/angenommen/abgelaufen/widerrufen), Hinweis, Rolle,
+  Erstellt-am+von, Laeuft-ab, Angenommen-am+von. Aktionen je Status:
+  Link kopieren / Widerrufen (bei offen), Loeschen (bei nicht-offen).
+  Erstellen-Modal + Link-Anzeige-Modal mit Copy-Button.
+
+### Security
+
+- **Rate-Limit** `/invite/*`: 10 Requests/min/IP gegen Token-Brute-Force.
+- **Atomares Accept** mit Race-Protection: bei gleichzeitiger Annahme wird
+  der zweite Accept abgewiesen und der eben erstellte Phantom-User wieder
+  geloescht.
+
+---
+
 ## [2.4.2] – 2026-05-20
 
 ARP-Fallback fuer winget-Uninstalls: behebt False-Success bei NSIS-Uninstallern
