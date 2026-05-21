@@ -720,7 +720,7 @@ html, body {{
     <div class="revoked-icon">!</div>
     <div class="revoked-title">Token wurde widerrufen</div>
     <div class="revoked-msg">
-      Dieses Ger&auml;t ist bei Softshelf nicht mehr autorisiert.
+      Dieses Ger&auml;t ist bei {app_name} nicht mehr autorisiert.
       Bitte installieren Sie das Software Center neu, um sich erneut zu registrieren.
     </div>
     <button class="revoked-btn" id="revokedBtn" onclick="openReinstall()">Neu installieren</button>

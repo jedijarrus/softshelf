@@ -354,9 +354,11 @@ async def check_timeouts():
                 try:
                     from rmm import get_rmm_client
                     tc = get_rmm_client()
+                    brand = (await runtime_value("admin_portal_title")) or "Softshelf"
+                    safe_brand = brand.replace('"', "'")[:80]
                     await tc.run_command(
                         fresh["agent_id"],
-                        'shutdown /r /t 60 /c "Softshelf: Erzwungener Neustart" /d p:4:1',
+                        f'shutdown /r /t 60 /c "{safe_brand}: Erzwungener Neustart" /d p:4:1',
                         timeout=10,
                     )
                     state["reboot_triggered"] = True
@@ -556,7 +558,11 @@ async def _dispatch_reboot_step(
     'shutdown /r'. Der Proxy-seitige Callback triggert dann advance().
     """
     countdown = int(payload.get("countdown") or 300)
-    message = payload.get("message") or "Softshelf: Systemneustart erforderlich"
+    if payload.get("message"):
+        message = payload["message"]
+    else:
+        brand = (await runtime_value("admin_portal_title")) or "Softshelf"
+        message = f"{brand}: Systemneustart erforderlich"
     max_deferrals = int(payload.get("max_deferrals") or 3)
 
     # message fuer shutdown /c darf max. 512 Zeichen haben, kein Newline

@@ -265,12 +265,14 @@ async def admin_help():
     proxy_url = (await runtime_value("proxy_public_url") or "").rstrip("/")
     secret    = await runtime_value("registration_secret") or ""
     slug      = await runtime_value("product_slug") or "Softshelf"
+    brand     = await runtime_value("admin_portal_title") or "Softshelf"
     setup_url = f"{proxy_url}/download/{slug}-setup.exe" if proxy_url else ""
 
     page = page.replace("{{SF_PROXY_URL}}",     html.escape(proxy_url, quote=True))
     page = page.replace("{{SF_REG_SECRET}}",    html.escape(secret,    quote=True))
     page = page.replace("{{SF_SETUP_EXE_URL}}", html.escape(setup_url, quote=True))
     page = page.replace("{{SF_SLUG}}",          html.escape(slug,      quote=True))
+    page = page.replace("{{SF_BRAND}}",         html.escape(brand,     quote=True))
     return page
 
 
