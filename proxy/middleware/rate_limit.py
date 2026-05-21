@@ -34,6 +34,8 @@ LIMITS: dict[str, tuple[int, int]] = {
     # pro Hostname im main.py).
     "landing_status":  (20, 60),
     "landing_trigger": (3,  60),
+    # Invitation-Accept: Brute-Force-Schutz gegen Token-Raten.
+    "invite":          (10, 60),
 }
 
 # Loopback-IPs immer vertrauenswuerdig.
@@ -149,6 +151,8 @@ def _bucket_for(path: str) -> str | None:
         return "landing_status"
     if path == "/api/v1/landing-trigger-install":
         return "landing_trigger"
+    if path.startswith("/invite/"):
+        return "invite"
     return None
 
 

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Einladung &middot; {{ADMIN_PORTAL_TITLE}}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #fafafa; --bg-card: #ffffff; --bg-soft: #f4f4f5;
+  --border: #e4e4e7; --border-strong: #d4d4d8;
+  --fg: #09090b; --fg-2: #27272a; --fg-3: #52525b; --fg-4: #71717a; --fg-5: #a1a1aa;
+  --red: #dc2626; --red-bg: #fef2f2; --red-bd: #fecaca;
+  --green: #16a34a; --green-bg: #f0fdf4; --green-bd: #bbf7d0;
+  --sans: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+  --r: 6px; --r-lg: 10px;
+}
+html { -webkit-font-smoothing: antialiased; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--sans);
+  font-size: 14px; line-height: 1.5; min-height: 100vh;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg);
+  padding: 36px 40px; width: 100%; max-width: 440px;
+  box-shadow: 0 1px 3px rgba(9,9,11,.04), 0 12px 36px rgba(9,9,11,.06);
+}
+.brand { display: flex; align-items: center; gap: 11px; margin-bottom: 28px; }
+.brand-mark { width: 28px; height: 28px; border-radius: var(--r); background: var(--fg); position: relative; flex-shrink: 0; }
+.brand-mark::after { content: ''; position: absolute; inset: 6px; border: 2px solid var(--bg-card); border-radius: 1px; }
+.brand-text { font-size: 15px; font-weight: 600; }
+.brand-text .sub { font-weight: 400; color: var(--fg-4); margin-left: 2px; }
+h1 { font-size: 22px; font-weight: 600; letter-spacing: -.02em; margin-bottom: 6px; }
+.intro { font-size: 13px; color: var(--fg-4); margin-bottom: 22px; }
+.meta {
+  background: var(--bg-soft); border: 1px solid var(--border); border-radius: var(--r);
+  padding: 12px 14px; margin-bottom: 22px; font-size: 13px;
+}
+.meta-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+.meta-row .k { color: var(--fg-4); }
+.meta-row .v { color: var(--fg-2); font-weight: 500; }
+.role-pill {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; background: var(--fg); color: #fff;
+}
+form { display: flex; flex-direction: column; gap: 14px; }
+label { font-size: 12px; font-weight: 600; color: var(--fg-2); margin-bottom: 5px; display: block; }
+input[type="text"], input[type="password"] {
+  width: 100%; background: var(--bg-card); border: 1px solid var(--border-strong);
+  border-radius: var(--r); padding: 10px 13px; font-size: 13px; color: var(--fg);
+  font-family: var(--sans); transition: border-color .14s, box-shadow .14s;
+}
+input:focus { outline: none; border-color: var(--fg); box-shadow: 0 0 0 3px rgba(9,9,11,.07); }
+input::placeholder { color: var(--fg-5); }
+.hint { font-size: 11px; color: var(--fg-4); margin-top: 4px; }
+.btn {
+  width: 100%; padding: 11px 18px; border: 1px solid; border-radius: var(--r);
+  font-size: 13px; font-weight: 600; cursor: pointer; transition: all .14s;
+  font-family: var(--sans); display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+}
+.btn-primary { background: var(--fg); color: #fff; border-color: var(--fg); }
+.btn-primary:hover { background: var(--fg-2); }
+.btn-primary:disabled { background: var(--fg-5); border-color: var(--fg-5); cursor: wait; }
+.error {
+  display: none; background: var(--red-bg); border: 1px solid var(--red-bd);
+  border-left: 3px solid var(--red); border-radius: var(--r);
+  padding: 11px 14px; font-size: 13px; color: var(--fg-2); margin-bottom: 16px;
+}
+.error.show { display: block; }
+.error b { color: var(--red); }
+.error-page {
+  background: var(--red-bg); border: 1px solid var(--red-bd); border-left: 3px solid var(--red);
+  border-radius: var(--r); padding: 16px 18px; font-size: 13px; color: var(--fg-2);
+}
+.error-page h2 { font-size: 16px; margin-bottom: 6px; color: var(--red); }
+.footer { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border);
+  text-align: center; font-size: 11px; color: var(--fg-5); }
+.footer a { color: var(--fg-4); text-decoration: none; }
+.footer a:hover { color: var(--fg-2); }
+.spinner { display: inline-block; width: 14px; height: 14px; border: 1.5px solid currentColor;
+  border-top-color: transparent; border-radius: 50%; animation: spin .65s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-text">
+        {{ADMIN_PORTAL_TITLE}}<span class="sub"> / Einladung</span>
+      </div>
+    </div>
+
+    {{BODY}}
+
+    <div class="footer">
+      <a href="/admin/login">Zur Anmeldung</a>
+    </div>
+  </div>
+
+  {{SCRIPT}}
+</body>
+</html>

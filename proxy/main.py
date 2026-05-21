@@ -36,7 +36,7 @@ from rmm import get_rmm_client
 
 logger = logging.getLogger("softshelf")
 
-VERSION = "2.4.2"
+VERSION = "2.5.0"
 
 # /app/downloads — shared volume mit dem builder-Container
 DOWNLOADS_DIR = "/app/downloads"
