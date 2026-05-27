@@ -35,6 +35,7 @@
         <li><a href="#wf-reboot">Reboot-Step im Detail</a></li>
         <li><a href="#wf-failure">Failure-Policies</a></li>
         <li><a href="#wf-run">Workflow starten &amp; beobachten</a></li>
+        <li><a href="#wf-run">Im Kiosk freigeben</a></li>
       </ol>
     </li>
     <li><a href="#compliance">Compliance</a></li>
@@ -642,6 +643,23 @@
 
 <h3>Run abbrechen</h3>
 <p>Im Abschnitt <b>Workflows</b> auf der Agent-Detail-Seite: <code>Abbrechen</code>-Button neben dem aktiven Run. Bereits laufende Steps auf dem Agent laufen zu Ende — nur das Weiterschalten zum nächsten Step wird verhindert.</p>
+
+<h3>Workflow im Kiosk freigeben (v2.6.0)</h3>
+<p>End-User können freigegebene Workflows direkt aus dem Tray-Kiosk starten — kein Admin-Eingriff nötig. Voraussetzungen:</p>
+<ol class="doc-steps">
+  <li>Tab <b>Workflows</b> → Workflow öffnen → Checkbox <b>Im Kiosk anbieten</b> aktivieren.</li>
+  <li>Optional: Textfeld <b>Beschreibung für Kiosk</b> ausfüllen — der Text erscheint im Confirm-Dialog beim End-User. Wenn leer, wird die normale Workflow-Beschreibung benutzt.</li>
+  <li><code>Speichern</code>. In der Workflow-Liste erscheint jetzt ein <span style="font-size:10px;font-weight:600;background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:4px">KIOSK</span>-Badge.</li>
+  <li>Workflow den betreffenden Agents <b>zuweisen</b> (Tab <b>Clients</b> → Agent → Workflows → Workflow auswählen + Zuweisen). Nur zugewiesene Agents sehen den Workflow im Kiosk.</li>
+</ol>
+
+<div class="doc-callout info">
+  Sichtbarkeit im Kiosk = <b>freigegeben UND zugewiesen</b>. Wer den Workflow ausführt wird mitgeloggt (<code>workflow_runs.created_by = "kiosk:&lt;windows-user&gt;"</code>).
+</div>
+
+<p>Im Kiosk taucht ein zusätzlicher Tab <b>Aktionen</b> auf (nur sichtbar wenn mindestens ein Workflow verfügbar ist). User klickt <code>Ausführen</code> → Confirm-Dialog mit Beschreibung + Step-Liste → <code>Starten</code>. Während der Run läuft zeigt die Karte Progress-Bar + aktuellen Schritt; Reboot-Steps öffnen weiterhin den bekannten Reboot-Dialog.</p>
+
+<p>Rate-Limit: 5 Starts pro 60 Sekunden pro Agent-IP. Pro Agent darf weiterhin nur <b>ein</b> Workflow gleichzeitig laufen.</p>
 </section>
 
 </section>

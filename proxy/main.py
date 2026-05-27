@@ -31,12 +31,12 @@ from middleware.audit_logger import audit_log_middleware
 from middleware.csrf import csrf_middleware
 from middleware.rate_limit import rate_limit_middleware
 from middleware.rate_limit import is_trusted_peer as _is_trusted_peer
-from routes import packages, install, admin, register
+from routes import packages, install, admin, register, workflows_kiosk
 from rmm import get_rmm_client
 
 logger = logging.getLogger("softshelf")
 
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 
 # /app/downloads — shared volume mit dem builder-Container
 DOWNLOADS_DIR = "/app/downloads"
@@ -569,6 +569,7 @@ app.add_middleware(BaseHTTPMiddleware, dispatch=audit_log_middleware)
 app.include_router(packages.router, prefix="/api/v1")
 app.include_router(install.router,  prefix="/api/v1")
 app.include_router(register.router, prefix="/api/v1")
+app.include_router(workflows_kiosk.router, prefix="/api/v1")
 app.include_router(admin.router)
 
 

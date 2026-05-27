@@ -36,6 +36,8 @@ LIMITS: dict[str, tuple[int, int]] = {
     "landing_trigger": (3,  60),
     # Invitation-Accept: Brute-Force-Schutz gegen Token-Raten.
     "invite":          (10, 60),
+    # Kiosk-Workflow-Start: User soll nicht aus dem Tray spammen koennen.
+    "workflow_kiosk_start": (5, 60),
 }
 
 # Loopback-IPs immer vertrauenswuerdig.
@@ -153,6 +155,9 @@ def _bucket_for(path: str) -> str | None:
         return "landing_trigger"
     if path.startswith("/invite/"):
         return "invite"
+    # Kiosk-Workflow-Start (POST /api/v1/workflows/{id}/start) → eigenes Limit.
+    if path.startswith("/api/v1/workflows/") and path.endswith("/start"):
+        return "workflow_kiosk_start"
     return None
 
 

@@ -234,6 +234,52 @@ class KioskApiClient:
         except Exception:
             return False
 
+    def list_workflows(self) -> list[dict]:
+        """Kiosk-freigegebene Workflows fuer diesen Agent. Bei Fehler: leere Liste."""
+        try:
+            with self._client() as c:
+                r = _get_with_retry(c, f"{self._base}/api/v1/workflows", timeout=8)
+                if r.status_code == 200:
+                    data = r.json()
+                    return data if isinstance(data, list) else []
+        except Exception:
+            pass
+        return []
+
+    def start_workflow(self, workflow_id: int) -> tuple[bool, str, int | None]:
+        """Startet einen Workflow. Returns (ok, message, run_id)."""
+        try:
+            with self._client() as c:
+                r = c.post(
+                    f"{self._base}/api/v1/workflows/{workflow_id}/start",
+                    timeout=10,
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    return True, "Workflow gestartet.", data.get("run_id")
+                # Server-Fehlertext durchreichen
+                try:
+                    msg = r.json().get("detail") or f"Fehler {r.status_code}"
+                except Exception:
+                    msg = f"Fehler {r.status_code}"
+                return False, str(msg), None
+        except Exception as e:
+            return False, str(e), None
+
+    def get_active_workflow_run(self) -> dict | None:
+        """Aktiver Workflow-Run fuer diesen Agent (null wenn keiner)."""
+        try:
+            with self._client() as c:
+                r = _get_with_retry(
+                    c, f"{self._base}/api/v1/workflows/active-run", timeout=5,
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    return data if isinstance(data, dict) else None
+        except Exception:
+            pass
+        return None
+
     def get_icon(self) -> bytes | None:
         """Branding-Icon vom Server laden (ICO). None wenn nicht vorhanden."""
         try:

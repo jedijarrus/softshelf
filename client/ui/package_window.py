@@ -708,6 +708,189 @@ html, body {{
   border-color: var(--fg);
 }}
 .proc-btn-retry:hover {{ background: var(--fg-2); }}
+
+/* ─── Workflow Cards (Tab Aktionen) ─── */
+.wf-card {{
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  background: var(--bg);
+}}
+.wf-card.running {{
+  border-color: var(--fg-3);
+  background: var(--bg-soft);
+}}
+.wf-card-head {{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}}
+.wf-card-name {{
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 4px;
+}}
+.wf-card-desc {{
+  font-size: 12px;
+  color: var(--fg-3);
+  line-height: 1.5;
+}}
+.wf-card-steps {{
+  font-size: 11px;
+  color: var(--fg-4);
+  margin-top: 8px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}}
+.wf-btn {{
+  flex-shrink: 0;
+  background: var(--fg);
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}}
+.wf-btn:hover {{ background: var(--fg-2); }}
+.wf-btn:disabled {{ background: var(--fg-5); cursor: not-allowed; }}
+.wf-progress {{
+  margin-top: 10px;
+  background: var(--border);
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}}
+.wf-progress-fill {{
+  background: var(--fg);
+  height: 100%;
+  transition: width 300ms ease;
+}}
+.wf-running-line {{
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--fg-2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}}
+.wf-spinner {{
+  width: 12px; height: 12px;
+  border: 2px solid var(--border-s);
+  border-top-color: var(--fg);
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+  flex-shrink: 0;
+}}
+@keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+
+/* ─── Confirm Modal ─── */
+.wf-modal-backdrop {{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}}
+.wf-modal-backdrop.visible {{ display: flex; }}
+.wf-modal {{
+  background: var(--bg);
+  border-radius: var(--radius);
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+}}
+.wf-modal-head {{
+  padding: 18px 20px 8px;
+}}
+.wf-modal-tag {{
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--fg-4);
+}}
+.wf-modal-title {{
+  font-size: 16px;
+  font-weight: 600;
+  margin-top: 4px;
+  color: var(--fg);
+}}
+.wf-modal-body {{
+  padding: 4px 20px 16px;
+  overflow-y: auto;
+}}
+.wf-modal-desc {{
+  font-size: 13px;
+  color: var(--fg-2);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  margin-bottom: 14px;
+}}
+.wf-modal-steplist {{
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}}
+.wf-modal-step {{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 12.5px;
+  color: var(--fg-2);
+}}
+.wf-modal-step-num {{
+  width: 22px; height: 22px;
+  border: 1px solid var(--border-s);
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}}
+.wf-modal-step-type {{
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-soft);
+  color: var(--fg-3);
+}}
+.wf-modal-step-type.reboot {{ background: var(--amber-bg); color: var(--amber); }}
+.wf-modal-actions {{
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 18px;
+  border-top: 1px solid var(--border);
+}}
+.wf-modal-btn-ghost {{
+  background: transparent;
+  color: var(--fg-2);
+  border: 1px solid var(--border);
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}}
+.wf-modal-btn-ghost:hover {{ background: var(--bg-hover); }}
 </style>
 </head>
 <body>
@@ -733,6 +916,7 @@ html, body {{
         <div class="tab active" data-tab="all">Alle</div>
         <div class="tab" data-tab="updates">Updates <span class="tab-badge" id="updateBadge" style="display:none">0</span></div>
         <div class="tab" data-tab="installed">Installiert</div>
+        <div class="tab" data-tab="actions" id="tabActions" style="display:none">Aktionen <span class="tab-badge" id="actionsBadge" style="display:none">0</span></div>
       </div>
       <div class="header-status">
         <div class="status-dot" id="statusDot"></div>
@@ -763,13 +947,35 @@ html, body {{
 
 <div class="toast" id="toast"></div>
 
+<div class="wf-modal-backdrop" id="wfConfirmBackdrop">
+  <div class="wf-modal" role="dialog" aria-modal="true">
+    <div class="wf-modal-head">
+      <div class="wf-modal-tag">Aktion bestaetigen</div>
+      <div class="wf-modal-title" id="wfConfirmTitle">&mdash;</div>
+    </div>
+    <div class="wf-modal-body">
+      <div class="wf-modal-desc" id="wfConfirmDesc"></div>
+      <div class="wf-modal-steplist" id="wfConfirmSteps"></div>
+    </div>
+    <div class="wf-modal-actions">
+      <button class="wf-modal-btn-ghost" id="wfConfirmCancel" onclick="closeWfConfirm()">Abbrechen</button>
+      <button class="wf-btn" id="wfConfirmStart">Starten</button>
+    </div>
+  </div>
+</div>
+
 <script>
 'use strict';
 
 let packages = [];
+let workflows = [];
+let activeRun = null;
 let activeTab = 'all';
 let searchQuery = '';
 let busyPkg = null;
+let busyWf = null;
+let _wfPollTimer = null;
+let _wfPendingId = null;
 
 // ─── Init ───
 function _initApp() {{
@@ -778,15 +984,23 @@ function _initApp() {{
       activeTab = tab.dataset.tab;
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
-      renderPackages();
+      if (activeTab === 'actions') {{
+        renderActions();
+        loadWorkflows();
+      }} else {{
+        renderPackages();
+      }}
     }});
   }});
   const searchInput = document.getElementById('searchInput');
   searchInput.addEventListener('input', (e) => {{
     searchQuery = e.target.value.toLowerCase();
-    renderPackages();
+    if (activeTab === 'actions') renderActions();
+    else renderPackages();
   }});
   loadPackages();
+  loadWorkflows();
+  pollActiveRun();
 }}
 // pywebview Bridge ist erst nach 'pywebviewready' verfuegbar
 if (window.pywebview) {{ _initApp(); }}
@@ -1164,6 +1378,155 @@ function escAttr(s) {{
   if (!s) return '';
   return s.replace(/\\\\/g,'\\\\\\\\').replace(/'/g,"\\\\'").replace(/"/g,'&quot;');
 }}
+
+// ─── Workflows (Tab Aktionen) ───
+async function loadWorkflows() {{
+  try {{
+    const result = await pywebview.api.list_workflows();
+    workflows = Array.isArray(result) ? result : [];
+  }} catch (e) {{
+    workflows = [];
+  }}
+  updateActionsTabVisibility();
+  if (activeTab === 'actions') renderActions();
+}}
+
+function updateActionsTabVisibility() {{
+  const tab = document.getElementById('tabActions');
+  if (!tab) return;
+  const show = workflows.length > 0 || !!activeRun;
+  tab.style.display = show ? '' : 'none';
+  const badge = document.getElementById('actionsBadge');
+  if (workflows.length > 0) {{
+    badge.textContent = workflows.length;
+    badge.style.display = 'inline-block';
+  }} else {{
+    badge.style.display = 'none';
+  }}
+}}
+
+function renderActions() {{
+  const content = document.getElementById('content');
+  if (!workflows.length && !activeRun) {{
+    content.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">!</div>
+        <div class="empty-title">Keine Aktionen verf\\u00FCgbar</div>
+        <div class="empty-detail">Der Administrator hat noch keine Workflows freigegeben.</div>
+      </div>`;
+    return;
+  }}
+  const filtered = searchQuery
+    ? workflows.filter(w => (w.name||'').toLowerCase().includes(searchQuery) || (w.description||'').toLowerCase().includes(searchQuery))
+    : workflows.slice();
+  let html = '';
+  filtered.forEach(w => {{ html += renderWfCard(w); }});
+  content.innerHTML = html;
+}}
+
+function renderWfCard(wf) {{
+  const running = !!activeRun && activeRun.workflow_id === wf.id;
+  const someoneRunning = !!activeRun;
+  const totalSteps = (wf.steps || []).length;
+  const stepInfo = totalSteps + ' Schritt' + (totalSteps !== 1 ? 'e' : '');
+  let body = '';
+  if (running) {{
+    const cur = activeRun.current_step || 0;
+    const total = activeRun.total_steps || totalSteps || 1;
+    const pct = Math.min(100, Math.round((cur / total) * 100));
+    body = `
+      <div class="wf-running-line">
+        <div class="wf-spinner"></div>
+        <div>Schritt ${{cur + 1}}/${{total}} &middot; ${{escHtml(activeRun.current_step_label || '')}}</div>
+      </div>
+      <div class="wf-progress"><div class="wf-progress-fill" style="width:${{pct}}%"></div></div>
+    `;
+  }}
+  const btnDisabled = someoneRunning || busyWf === wf.id;
+  const btnLabel = running ? 'L\\u00E4uft\\u2026' : (someoneRunning ? 'Warten\\u2026' : 'Ausf\\u00FChren');
+  return `
+    <div class="wf-card ${{running ? 'running' : ''}}">
+      <div class="wf-card-head">
+        <div style="min-width:0;flex:1">
+          <div class="wf-card-name">${{escHtml(wf.name)}}</div>
+          ${{wf.description ? `<div class="wf-card-desc">${{escHtml(wf.description)}}</div>` : ''}}
+          <div class="wf-card-steps">${{escHtml(stepInfo)}}</div>
+        </div>
+        <button class="wf-btn" ${{btnDisabled ? 'disabled' : ''}} onclick="openWfConfirm(${{wf.id}})">${{btnLabel}}</button>
+      </div>
+      ${{body}}
+    </div>
+  `;
+}}
+
+function openWfConfirm(workflowId) {{
+  const wf = workflows.find(w => w.id === workflowId);
+  if (!wf) return;
+  _wfPendingId = workflowId;
+  document.getElementById('wfConfirmTitle').textContent = wf.name;
+  document.getElementById('wfConfirmDesc').textContent = wf.description || 'Keine Beschreibung vorhanden.';
+  const stepsHtml = (wf.steps || []).map((s, i) => {{
+    const typeCls = (s.type || '').toLowerCase();
+    return `<div class="wf-modal-step">
+      <div class="wf-modal-step-num">${{i + 1}}</div>
+      <span class="wf-modal-step-type ${{escHtml(typeCls)}}">${{escHtml(s.type || '')}}</span>
+      <span>${{escHtml(s.label || '')}}</span>
+    </div>`;
+  }}).join('');
+  document.getElementById('wfConfirmSteps').innerHTML = stepsHtml ||
+    '<div style="font-size:12px;color:var(--fg-4)">Keine Schritte definiert.</div>';
+  const startBtn = document.getElementById('wfConfirmStart');
+  startBtn.disabled = false;
+  startBtn.textContent = 'Starten';
+  startBtn.onclick = () => doStartWorkflow(workflowId);
+  document.getElementById('wfConfirmBackdrop').classList.add('visible');
+}}
+
+function closeWfConfirm() {{
+  _wfPendingId = null;
+  document.getElementById('wfConfirmBackdrop').classList.remove('visible');
+}}
+
+async function doStartWorkflow(workflowId) {{
+  const startBtn = document.getElementById('wfConfirmStart');
+  startBtn.disabled = true;
+  startBtn.textContent = 'Starte\\u2026';
+  busyWf = workflowId;
+  try {{
+    const res = await pywebview.api.start_workflow(workflowId);
+    if (res && res.ok) {{
+      showToast('Workflow gestartet');
+      closeWfConfirm();
+      await pollActiveRun();
+      if (activeTab === 'actions') renderActions();
+    }} else {{
+      const msg = (res && res.message) || 'Fehler beim Starten';
+      startBtn.disabled = false;
+      startBtn.textContent = 'Starten';
+      showToast(msg);
+    }}
+  }} catch (e) {{
+    startBtn.disabled = false;
+    startBtn.textContent = 'Starten';
+    showToast((e && e.message) || 'Fehler beim Starten');
+  }} finally {{
+    busyWf = null;
+  }}
+}}
+
+async function pollActiveRun() {{
+  try {{
+    const res = await pywebview.api.get_active_workflow_run();
+    activeRun = (res && res.id) ? res : null;
+  }} catch (e) {{
+    activeRun = null;
+  }}
+  updateActionsTabVisibility();
+  if (activeTab === 'actions') renderActions();
+  // Poll alle 5s solange ein Run aktiv ist; sonst alle 30s zum Update-Check
+  if (_wfPollTimer) clearTimeout(_wfPollTimer);
+  _wfPollTimer = setTimeout(pollActiveRun, activeRun ? 5000 : 30000);
+}}
 </script>
 </body>
 </html>"""
@@ -1284,6 +1647,28 @@ class PackageApi:
             return cfg.get("reinstall_url", "") or ""
         except Exception:
             return ""
+
+    def list_workflows(self) -> list[dict]:
+        """Kiosk-freigegebene Workflows fuer diesen Agent."""
+        try:
+            return self._api.list_workflows()
+        except Exception:
+            return []
+
+    def start_workflow(self, workflow_id: int) -> dict:
+        """Startet einen Workflow. Returns {ok, message, run_id}."""
+        try:
+            ok, msg, run_id = self._api.start_workflow(int(workflow_id))
+            return {"ok": ok, "message": msg, "run_id": run_id}
+        except Exception as e:
+            return {"ok": False, "message": str(e), "run_id": None}
+
+    def get_active_workflow_run(self) -> dict | None:
+        """Aktiver Workflow-Run fuer diesen Agent."""
+        try:
+            return self._api.get_active_workflow_run()
+        except Exception:
+            return None
 
 
 # ────────────────────────────────────────────────────── Window Management ─────
