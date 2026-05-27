@@ -7,6 +7,31 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.6.0] – 2026-05-27
+
+Kiosk-Workflows: End-User koennen freigegebene Workflows aus dem Tray-Kiosk
+starten — kein Admin-Eingriff noetig. Admin behaelt explizite Kontrolle ueber
+Freigabe (Toggle pro Workflow) und Sichtbarkeit (Workflow muss dem Agent
+zugewiesen sein).
+
+### Added
+
+- **Kiosk-Workflow-Freigabe** (`workflows.kiosk_enabled` + `kiosk_description`).
+  Admin-UI: Checkbox "Im Kiosk anbieten" + optionale Textarea fuer Kiosk-
+  spezifische Beschreibung. Badge "Kiosk" in der Workflow-Liste.
+- **Public-API fuer Kiosk-Workflows** (`proxy/routes/workflows_kiosk.py`):
+  `GET /api/v1/workflows` (Schnittmenge zugewiesen + freigegeben),
+  `POST /api/v1/workflows/{id}/start` (Validate + Audit `kiosk:<user>`),
+  `GET /api/v1/workflows/active-run` (Progress fuer Live-Polling).
+  Rate-Limit-Bucket `workflow_kiosk_start` = 5/60s.
+- **Tray-Tab "Aktionen"** (`client/ui/package_window.py`): Workflows als
+  Cards mit Description-Preview + Step-Anzahl. Confirm-Modal zeigt
+  Beschreibung + Step-Liste. Aktiver Run zeigt Progress-Bar + Step-Label
+  via 5s-Polling. Reboot-Steps oeffnen weiterhin `reboot_dialog.py`.
+- **Audit-Trail** (`workflow_runs.created_by`): NULL = system, `admin:<user>`
+  = Admin-UI, `kiosk:<user>` = Tray.
+
+
 ## [2.5.0] – 2026-05-21
 
 Admin-Einladungen per Link: Benutzer-Onboarding ohne manuelles Passwort-Setzen.

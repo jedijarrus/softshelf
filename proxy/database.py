@@ -340,12 +340,14 @@ async def init_db():
         # Workflow-Tabellen (Schritt-basierte Agent-Automatisierung)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS workflows (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                description TEXT NOT NULL DEFAULT '',
-                steps       TEXT NOT NULL DEFAULT '[]',
-                created_at  TEXT DEFAULT (datetime('now')),
-                updated_at  TEXT DEFAULT (datetime('now'))
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                name              TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                description       TEXT NOT NULL DEFAULT '',
+                steps             TEXT NOT NULL DEFAULT '[]',
+                kiosk_enabled     INTEGER NOT NULL DEFAULT 0,
+                kiosk_description TEXT NOT NULL DEFAULT '',
+                created_at        TEXT DEFAULT (datetime('now')),
+                updated_at        TEXT DEFAULT (datetime('now'))
             )
         """)
         await db.execute("""
@@ -361,6 +363,7 @@ async def init_db():
                 step_state       TEXT DEFAULT '{}',
                 step_deadline_at TEXT,
                 started_at       TEXT,
+                created_by       TEXT,
                 updated_at       TEXT DEFAULT (datetime('now'))
             )
         """)
@@ -391,6 +394,24 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_agent_workflows_wf "
             "ON agent_workflows(workflow_id)"
         )
+
+        # Migration: Kiosk-Workflows (v2.6) — User-Initiierte Workflows aus dem Tray
+        async with db.execute("PRAGMA table_info(workflows)") as cur:
+            wf_cols = {row[1] for row in await cur.fetchall()}
+        if "kiosk_enabled" not in wf_cols:
+            await db.execute(
+                "ALTER TABLE workflows ADD COLUMN kiosk_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+        if "kiosk_description" not in wf_cols:
+            await db.execute(
+                "ALTER TABLE workflows ADD COLUMN kiosk_description TEXT NOT NULL DEFAULT ''"
+            )
+        async with db.execute("PRAGMA table_info(workflow_runs)") as cur:
+            wfr_cols = {row[1] for row in await cur.fetchall()}
+        if "created_by" not in wfr_cols:
+            await db.execute(
+                "ALTER TABLE workflow_runs ADD COLUMN created_by TEXT"
+            )
 
         # Migration: job_id Spalte fuer Callback-Pattern
         async with db.execute("PRAGMA table_info(action_log)") as cur:
@@ -4051,7 +4072,8 @@ async def get_workflows() -> list[dict]:
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, name, description, steps, created_at, updated_at "
+            "SELECT id, name, description, steps, kiosk_enabled, kiosk_description, "
+            "       created_at, updated_at "
             "FROM workflows ORDER BY name COLLATE NOCASE"
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
@@ -4062,7 +4084,8 @@ async def get_workflow(workflow_id: int) -> dict | None:
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, name, description, steps, created_at, updated_at "
+            "SELECT id, name, description, steps, kiosk_enabled, kiosk_description, "
+            "       created_at, updated_at "
             "FROM workflows WHERE id = ?",
             (workflow_id,),
         ) as cur:
@@ -4070,30 +4093,70 @@ async def get_workflow(workflow_id: int) -> dict | None:
             return dict(row) if row else None
 
 
-async def create_workflow(name: str, description: str, steps: str) -> int:
+async def create_workflow(
+    name: str, description: str, steps: str,
+    kiosk_enabled: int = 0, kiosk_description: str = "",
+) -> int:
     """Neuen Workflow anlegen. `steps` ist ein JSON-String (Liste von Step-Objekten).
     Wirft IntegrityError bei doppeltem Name. Gibt die neue ID zurueck."""
     async with _db() as db:
         cur = await db.execute(
-            "INSERT INTO workflows (name, description, steps) VALUES (?, ?, ?)",
-            (name, description or "", steps or "[]"),
+            "INSERT INTO workflows "
+            "(name, description, steps, kiosk_enabled, kiosk_description) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (name, description or "", steps or "[]",
+             1 if kiosk_enabled else 0, kiosk_description or ""),
         )
         await db.commit()
         return cur.lastrowid
 
 
 async def update_workflow(
-    workflow_id: int, name: str, description: str, steps: str
+    workflow_id: int, name: str, description: str, steps: str,
+    kiosk_enabled: int = 0, kiosk_description: str = "",
 ):
     """Workflow-Metadaten + Steps aktualisieren. updated_at wird gesetzt."""
     async with _db() as db:
         await db.execute(
             "UPDATE workflows "
-            "SET name = ?, description = ?, steps = ?, updated_at = datetime('now') "
+            "SET name = ?, description = ?, steps = ?, "
+            "    kiosk_enabled = ?, kiosk_description = ?, "
+            "    updated_at = datetime('now') "
             "WHERE id = ?",
-            (name, description or "", steps or "[]", workflow_id),
+            (name, description or "", steps or "[]",
+             1 if kiosk_enabled else 0, kiosk_description or "",
+             workflow_id),
         )
         await db.commit()
+
+
+async def list_kiosk_workflows_for_agent(agent_id: str) -> list[dict]:
+    """Kiosk-freigegebene Workflows die dem Agent zugewiesen sind."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT w.id, w.name, w.description, w.steps, "
+            "       w.kiosk_description "
+            "FROM agent_workflows aw "
+            "JOIN workflows w ON w.id = aw.workflow_id "
+            "WHERE aw.agent_id = ? AND w.kiosk_enabled = 1 "
+            "ORDER BY w.name COLLATE NOCASE",
+            (agent_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def is_workflow_kiosk_visible_for_agent(agent_id: str, workflow_id: int) -> bool:
+    """Prueft ob ein Workflow fuer diesen Agent im Kiosk verfuegbar ist
+    (zugewiesen UND kiosk_enabled)."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT 1 FROM agent_workflows aw "
+            "JOIN workflows w ON w.id = aw.workflow_id "
+            "WHERE aw.agent_id = ? AND aw.workflow_id = ? AND w.kiosk_enabled = 1",
+            (agent_id, workflow_id),
+        ) as cur:
+            return (await cur.fetchone()) is not None
 
 
 async def delete_workflow(workflow_id: int):
@@ -4197,18 +4260,20 @@ async def get_agents_for_workflow(workflow_id: int) -> list[dict]:
 
 
 async def create_workflow_run(
-    workflow_id: int, agent_id: str, hostname: str, step_snapshot: str
+    workflow_id: int, agent_id: str, hostname: str, step_snapshot: str,
+    created_by: str | None = None,
 ) -> int:
     """Neuen Workflow-Run anlegen. Status=running, started_at=now.
     `step_snapshot` ist ein JSON-String (Kopie der Steps zum Zeitpunkt des Starts).
+    `created_by`: NULL = system, 'admin:<user>' = Admin-UI, 'kiosk:<user>' = Tray.
     Gibt die neue Run-ID zurueck."""
     async with _db() as db:
         cur = await db.execute(
             "INSERT INTO workflow_runs "
             "(workflow_id, agent_id, hostname, step_snapshot, "
-            " current_step, status, started_at) "
-            "VALUES (?, ?, ?, ?, 0, 'running', datetime('now'))",
-            (workflow_id, agent_id, hostname, step_snapshot),
+            " current_step, status, started_at, created_by) "
+            "VALUES (?, ?, ?, ?, 0, 'running', datetime('now'), ?)",
+            (workflow_id, agent_id, hostname, step_snapshot, created_by),
         )
         await db.commit()
         return cur.lastrowid
@@ -4221,7 +4286,7 @@ async def get_workflow_run(run_id: int) -> dict | None:
         async with db.execute(
             "SELECT id, workflow_id, agent_id, hostname, step_snapshot, "
             "       current_step, status, step_state, step_deadline_at, "
-            "       started_at, updated_at "
+            "       started_at, created_by, updated_at "
             "FROM workflow_runs WHERE id = ?",
             (run_id,),
         ) as cur:
@@ -4237,7 +4302,7 @@ async def get_active_run_for_agent(agent_id: str) -> dict | None:
         async with db.execute(
             "SELECT id, workflow_id, agent_id, hostname, step_snapshot, "
             "       current_step, status, step_state, step_deadline_at, "
-            "       started_at, updated_at "
+            "       started_at, created_by, updated_at "
             "FROM workflow_runs "
             "WHERE agent_id = ? AND status IN ('pending', 'running', 'paused')",
             (agent_id,),
@@ -4287,7 +4352,7 @@ async def get_workflow_runs_for_agent(
         async with db.execute(
             "SELECT r.id, r.workflow_id, r.agent_id, r.hostname, "
             "       r.current_step, r.status, r.step_state, r.step_snapshot, "
-            "       r.step_deadline_at, r.started_at, r.updated_at, "
+            "       r.step_deadline_at, r.started_at, r.created_by, r.updated_at, "
             "       w.name AS workflow_name "
             "FROM workflow_runs r "
             "JOIN workflows w ON w.id = r.workflow_id "

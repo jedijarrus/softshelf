@@ -212,10 +212,12 @@ action_log                -- Aktions-Log (install/uninstall/upgrade/run)
 
 ```
 workflows
-  id          PK
-  name        TEXT UNIQUE
-  description TEXT
-  steps       JSON   -- [{type, payload, on_failure, timeout}, ...]
+  id                PK
+  name              TEXT UNIQUE
+  description       TEXT
+  steps             JSON   -- [{type, payload, on_failure, timeout}, ...]
+  kiosk_enabled     INT    -- 1 = im Kiosk-Tray-Tab "Aktionen" anbieten (v2.6.0)
+  kiosk_description TEXT   -- Klartext fuer Kiosk-Confirm-Dialog (Fallback: description)
 
 workflow_runs
   id             PK
@@ -226,6 +228,7 @@ workflow_runs
   step_snapshot  JSON  -- einmalig eingefroren beim Start (unveraenderlich)
   step_state     JSON  -- ephemerer State des aktuellen Steps (z.B. retry_count, reboot_pending)
   step_deadline_at TEXT -- ISO-Timestamp Deadline aktueller Step
+  created_by     TEXT  -- NULL=system, admin:<user>, kiosk:<user>  (v2.6.0)
   started_at, updated_at
 
 -- Unique-Constraint: max. 1 aktiver Run pro Agent (pending/running)
@@ -666,6 +669,40 @@ start_workflow(workflow_id, agent_id)
 Pro Agent darf maximal **ein** aktiver Run gleichzeitig laufen
 (UNIQUE INDEX auf `workflow_runs(agent_id) WHERE status IN ('pending','running')`).
 Start-Versuch bei bereits laufendem Run → HTTP 409.
+
+### Kiosk-Workflows (v2.6.0)
+
+End-User koennen freigegebene Workflows direkt aus dem Tray-Kiosk starten.
+Voraussetzungen pro Workflow:
+1. `workflows.kiosk_enabled = 1` (Admin-UI: Checkbox "Im Kiosk anbieten").
+2. Workflow ist dem Agent zugewiesen (`agent_workflows`).
+
+Public-Endpoints (machine-token auth, `proxy/routes/workflows_kiosk.py`):
+
+| Endpoint | Zweck |
+|---|---|
+| `GET /api/v1/workflows` | Liste freigegebener + zugewiesener Workflows mit Step-Summary. |
+| `POST /api/v1/workflows/{id}/start` | Run starten. Validate + Audit. |
+| `GET /api/v1/workflows/active-run` | Progress des aktuellen Runs (Polling alle 5s). |
+
+Optionales Feld `workflows.kiosk_description` ueberschreibt die normale
+Beschreibung im Kiosk-Confirm-Dialog (Fallback: `description`).
+
+**Audit-Trail** (`workflow_runs.created_by`):
+
+| Wert | Bedeutung |
+|---|---|
+| `NULL` | System-getrieben (Auto-Start, Recovery) |
+| `admin:<username>` | Admin-UI Start |
+| `kiosk:<logged_in_user>` | Kiosk-Tray Start |
+
+**Client-UI** (`client/ui/package_window.py`): neuer Tab "Aktionen" (nur
+sichtbar wenn Workflows verfuegbar). Workflow-Cards mit Description-Preview +
+"Ausfuehren"-Button. Confirm-Modal zeigt Beschreibung + Step-Liste. Aktiver
+Run rendert Progress-Bar + Step-Label via 5s-Polling. Reboot-Steps oeffnen
+weiterhin den existierenden `reboot_dialog.py`.
+
+Rate-Limit: Bucket `workflow_kiosk_start` = 5 Requests/60s pro IP.
 
 ### Workflow + Auto-Retry-Interaktion (v2.3)
 

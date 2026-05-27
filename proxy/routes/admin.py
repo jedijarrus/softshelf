@@ -6164,6 +6164,8 @@ class WorkflowBody(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(default="", max_length=500)
     steps: list[WorkflowStep] = []
+    kiosk_enabled: bool = False
+    kiosk_description: str = Field(default="", max_length=2000)
 
 
 class StartWorkflowBody(BaseModel):
@@ -6187,7 +6189,11 @@ async def create_workflow(body: WorkflowBody):
     """Neuen Workflow anlegen."""
     steps_json = _json.dumps([s.model_dump() for s in body.steps])
     try:
-        wid = await database.create_workflow(body.name, body.description, steps_json)
+        wid = await database.create_workflow(
+            body.name, body.description, steps_json,
+            kiosk_enabled=1 if body.kiosk_enabled else 0,
+            kiosk_description=body.kiosk_description or "",
+        )
     except Exception as e:
         if "UNIQUE" in str(e):
             raise HTTPException(status_code=409, detail="Ein Workflow mit diesem Namen existiert bereits.")
@@ -6209,7 +6215,11 @@ async def update_workflow(wid: int, body: WorkflowBody):
         raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
     steps_json = _json.dumps([s.model_dump() for s in body.steps])
     try:
-        await database.update_workflow(wid, body.name, body.description, steps_json)
+        await database.update_workflow(
+            wid, body.name, body.description, steps_json,
+            kiosk_enabled=1 if body.kiosk_enabled else 0,
+            kiosk_description=body.kiosk_description or "",
+        )
     except Exception as e:
         if "UNIQUE" in str(e):
             raise HTTPException(status_code=409, detail="Ein Workflow mit diesem Namen existiert bereits.")
@@ -6247,7 +6257,7 @@ async def get_workflow_runs(wid: int, limit: int = Query(default=50, ge=1, le=50
         async with db.execute(
             "SELECT r.id, r.workflow_id, r.agent_id, r.hostname, "
             "       r.current_step, r.status, r.step_state, "
-            "       r.step_deadline_at, r.started_at, r.updated_at "
+            "       r.step_deadline_at, r.started_at, r.created_by, r.updated_at "
             "FROM workflow_runs r "
             "WHERE r.workflow_id = ? "
             "ORDER BY r.id DESC LIMIT ?",
@@ -6257,11 +6267,10 @@ async def get_workflow_runs(wid: int, limit: int = Query(default=50, ge=1, le=50
     return rows
 
 
-@router.post(
-    "/admin/api/agents/{agent_id}/start-workflow",
-    dependencies=[Depends(_require_admin)],
-)
-async def start_workflow_on_agent(agent_id: str, body: StartWorkflowBody):
+@router.post("/admin/api/agents/{agent_id}/start-workflow")
+async def start_workflow_on_agent(
+    agent_id: str, body: StartWorkflowBody, admin: dict = Depends(_require_admin)
+):
     """Startet einen Workflow auf einem Agent. 409 wenn bereits ein Run laeuft."""
     if not _AGENT_ID_RE.fullmatch(agent_id):
         raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
@@ -6269,8 +6278,10 @@ async def start_workflow_on_agent(agent_id: str, body: StartWorkflowBody):
     wf = await database.get_workflow(body.workflow_id)
     if not wf:
         raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
+    admin_user = (admin or {}).get("username") or "admin"
     run_id = await workflow_engine.start_workflow(
-        body.workflow_id, agent_id, agent["hostname"]
+        body.workflow_id, agent_id, agent["hostname"],
+        created_by=f"admin:{admin_user}",
     )
     return {"ok": True, "run_id": run_id}
 

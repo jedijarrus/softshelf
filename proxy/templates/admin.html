@@ -6430,6 +6430,22 @@ body.help-active [data-help]:not(.tab)::after {
         <label>Beschreibung</label>
         <input class="input" type="text" id="wf-desc" maxlength="500" placeholder="optional">
       </div>
+      <div class="section-divider" style="margin-top:8px"><span class="label">Kiosk</span></div>
+      <div class="field">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="wf-kiosk-enabled" style="margin:0">
+          <span>Im Kiosk anbieten</span>
+        </label>
+        <div style="font-size:11px;color:var(--fg-3);margin-top:4px">
+          End-User koennen diesen Workflow vom Tray aus starten (nur Agents die ihn zugewiesen haben).
+        </div>
+      </div>
+      <div class="field">
+        <label>Beschreibung fuer Kiosk (optional)</label>
+        <textarea class="input" id="wf-kiosk-desc" rows="3" maxlength="2000"
+                  placeholder="Was passiert wenn der User auf Ausfuehren klickt? Fallback: obige Beschreibung."
+                  style="resize:vertical;font-family:inherit"></textarea>
+      </div>
       <div class="section-divider" style="margin-top:8px"><span class="label">Steps</span></div>
       <div id="wf-steps-list"></div>
       <div style="display:flex;gap:6px">
@@ -14836,7 +14852,10 @@ function renderWorkflows() {
     return '<div class="pkg-card" style="cursor:pointer" onclick="openWorkflowEditor(' + wf.id + ')">' +
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">' +
         '<div style="flex:1;min-width:0">' +
-          '<div class="pkg-name">' + esc(wf.name) + '</div>' +
+          '<div class="pkg-name" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+            '<span>' + esc(wf.name) + '</span>' +
+            (wf.kiosk_enabled ? '<span style="font-size:10px;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;background:var(--blue-soft,#dbeafe);color:var(--blue,#2563eb);padding:2px 6px;border-radius:4px">Kiosk</span>' : '') +
+          '</div>' +
           (wf.description ? '<div style="font-size:12px;color:var(--fg-3);margin-top:2px">' + esc(wf.description) + '</div>' : '') +
           '<div style="font-size:11px;color:var(--fg-4);margin-top:6px;letter-spacing:0.3px;text-transform:uppercase">' + esc(counterStr) + '</div>' +
         '</div>' +
@@ -14856,6 +14875,8 @@ function openWorkflowEditor(id) {
     _wfEditing = id;
     document.getElementById('wf-name').value = wf.name;
     document.getElementById('wf-desc').value = wf.description || '';
+    document.getElementById('wf-kiosk-enabled').checked = !!wf.kiosk_enabled;
+    document.getElementById('wf-kiosk-desc').value = wf.kiosk_description || '';
     _wfSteps = (typeof wf.steps === 'string' ? JSON.parse(wf.steps) : wf.steps || []).map(s => ({...s}));
     document.getElementById('wf-editor-title').textContent = 'Workflow bearbeiten';
     document.getElementById('wf-editor-sub').textContent = 'ID ' + id;
@@ -14863,6 +14884,8 @@ function openWorkflowEditor(id) {
     _wfEditing = null;
     document.getElementById('wf-name').value = '';
     document.getElementById('wf-desc').value = '';
+    document.getElementById('wf-kiosk-enabled').checked = false;
+    document.getElementById('wf-kiosk-desc').value = '';
     _wfSteps = [];
     document.getElementById('wf-editor-title').textContent = 'Workflow erstellen';
     document.getElementById('wf-editor-sub').textContent = '\u2014';
@@ -14984,7 +15007,13 @@ async function saveWorkflow() {
   const name = document.getElementById('wf-name').value.trim();
   if (!name) { toast('Name ist Pflichtfeld'); return; }
   if (!_wfSteps.length) { toast('Mindestens ein Step erforderlich'); return; }
-  const body = { name: name, description: document.getElementById('wf-desc').value.trim(), steps: _wfSteps };
+  const body = {
+    name: name,
+    description: document.getElementById('wf-desc').value.trim(),
+    steps: _wfSteps,
+    kiosk_enabled: document.getElementById('wf-kiosk-enabled').checked,
+    kiosk_description: document.getElementById('wf-kiosk-desc').value.trim(),
+  };
   const btn = document.getElementById('wf-save-btn');
   btn.disabled = true;
   try {

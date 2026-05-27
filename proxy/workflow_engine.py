@@ -64,7 +64,10 @@ def _parse_json(s: str | None, default):
 # ── Oeffentliche API ──────────────────────────────────────────────────────────
 
 
-async def start_workflow(workflow_id: int, agent_id: str, hostname: str) -> int:
+async def start_workflow(
+    workflow_id: int, agent_id: str, hostname: str,
+    created_by: str | None = None,
+) -> int:
     """Startet einen neuen Workflow-Run fuer einen Agent.
 
     Prueft ob der Agent bereits einen aktiven Run hat (409 wenn ja),
@@ -108,7 +111,9 @@ async def start_workflow(workflow_id: int, agent_id: str, hostname: str) -> int:
 
     # Snapshot einfrieren — Aenderungen am Workflow beeinflussen laufende Runs nicht
     step_snapshot = json.dumps(steps, ensure_ascii=False)
-    run_id = await database.create_workflow_run(workflow_id, agent_id, hostname, step_snapshot)
+    run_id = await database.create_workflow_run(
+        workflow_id, agent_id, hostname, step_snapshot, created_by=created_by,
+    )
 
     logger.info(
         "workflow run %d gestartet: workflow=%s agent=%s (%s), %d steps",
