@@ -916,7 +916,7 @@ html, body {{
         <div class="tab active" data-tab="all">Alle</div>
         <div class="tab" data-tab="updates">Updates <span class="tab-badge" id="updateBadge" style="display:none">0</span></div>
         <div class="tab" data-tab="installed">Installiert</div>
-        <div class="tab" data-tab="actions" id="tabActions" style="display:none">Aktionen <span class="tab-badge" id="actionsBadge" style="display:none">0</span></div>
+        <div class="tab" data-tab="actions" id="tabActions" style="display:none">Aktionen</div>
       </div>
       <div class="header-status">
         <div class="status-dot" id="statusDot"></div>
@@ -1396,13 +1396,6 @@ function updateActionsTabVisibility() {{
   if (!tab) return;
   const show = workflows.length > 0 || !!activeRun;
   tab.style.display = show ? '' : 'none';
-  const badge = document.getElementById('actionsBadge');
-  if (workflows.length > 0) {{
-    badge.textContent = workflows.length;
-    badge.style.display = 'inline-block';
-  }} else {{
-    badge.style.display = 'none';
-  }}
 }}
 
 function renderActions() {{
