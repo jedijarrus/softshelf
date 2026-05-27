@@ -673,9 +673,11 @@ Start-Versuch bei bereits laufendem Run → HTTP 409.
 ### Kiosk-Workflows (v2.6.0)
 
 End-User koennen freigegebene Workflows direkt aus dem Tray-Kiosk starten.
-Voraussetzungen pro Workflow:
-1. `workflows.kiosk_enabled = 1` (Admin-UI: Checkbox "Im Kiosk anbieten").
-2. Workflow ist dem Agent zugewiesen (`agent_workflows`).
+Einzige Voraussetzung pro Workflow: `workflows.kiosk_enabled = 1`
+(Admin-UI: Checkbox "Im Kiosk anbieten"). Sobald gesetzt, ist der Workflow
+auf JEDEM Kiosk sichtbar — `agent_workflows`-Zuweisung ist NICHT noetig.
+(Die Zuweisung bleibt fuer admin-initiierte Workflow-Starts ueber das
+Admin-UI relevant.)
 
 Public-Endpoints (machine-token auth, `proxy/routes/workflows_kiosk.py`):
 

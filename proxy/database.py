@@ -4131,30 +4131,24 @@ async def update_workflow(
 
 
 async def list_kiosk_workflows_for_agent(agent_id: str) -> list[dict]:
-    """Kiosk-freigegebene Workflows die dem Agent zugewiesen sind."""
+    """Kiosk-freigegebene Workflows (global, ohne agent_workflows-Filter).
+    `agent_id` bleibt im Signature fuer kuenftige per-Agent-Filterung."""
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT w.id, w.name, w.description, w.steps, "
-            "       w.kiosk_description "
-            "FROM agent_workflows aw "
-            "JOIN workflows w ON w.id = aw.workflow_id "
-            "WHERE aw.agent_id = ? AND w.kiosk_enabled = 1 "
-            "ORDER BY w.name COLLATE NOCASE",
-            (agent_id,),
+            "SELECT id, name, description, steps, kiosk_description "
+            "FROM workflows WHERE kiosk_enabled = 1 "
+            "ORDER BY name COLLATE NOCASE"
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
 
 async def is_workflow_kiosk_visible_for_agent(agent_id: str, workflow_id: int) -> bool:
-    """Prueft ob ein Workflow fuer diesen Agent im Kiosk verfuegbar ist
-    (zugewiesen UND kiosk_enabled)."""
+    """Prueft ob ein Workflow im Kiosk verfuegbar ist (global, nur kiosk_enabled)."""
     async with _db() as db:
         async with db.execute(
-            "SELECT 1 FROM agent_workflows aw "
-            "JOIN workflows w ON w.id = aw.workflow_id "
-            "WHERE aw.agent_id = ? AND aw.workflow_id = ? AND w.kiosk_enabled = 1",
-            (agent_id, workflow_id),
+            "SELECT 1 FROM workflows WHERE id = ? AND kiosk_enabled = 1",
+            (workflow_id,),
         ) as cur:
             return (await cur.fetchone()) is not None
 
