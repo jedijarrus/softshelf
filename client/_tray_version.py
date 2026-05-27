@@ -8,4 +8,4 @@ und ueber den Tray-Heartbeat als telemetrie reportet.
 
 Versions-Schema: Semver, optional pre-release-Suffix (z.B. 2.4.0-rc1).
 """
-TRAY_VERSION = "2.4.0"
+TRAY_VERSION = "2.6.0"
