@@ -5765,30 +5765,11 @@ async def clients_version_distribution():
     return await database.get_client_version_distribution()
 
 
-@router.post("/admin/api/agents/{agent_id}/update-client",
-             dependencies=[Depends(_require_admin)])
-async def update_client_for_agent(agent_id: str):
-    """Pushed das aktuelle Setup.exe auf einen Agent via run_command.
-
-    Eigener PS-Wrapper (NICHT das Tactical "Kiosk Install"-Script — das ist
-    fuer Neuinstallationen, funktioniert aber bei Updates nicht zuverlaessig
-    weil WebClient/Invoke-WebRequest auf manchen Hosts bei TLS-Renegotiation
-    nur den Error-Body schreiben statt der EXE). Hier curl.exe als Download
-    (Win 1803+), das ist robust. Setup.exe killt selbst die laufende
-    Tray-App, ueberschreibt die Files in-place und startet den neuen Tray.
-
-    Run_command-Result wird synchron geparsed (kein Callback noetig):
-      - exit 0 → action_log success sofort
-      - exit != 0 → action_log error mit stdout-Snippet
-    Telemetrie-Auto-Complete in update_agent_telemetry bleibt als
-    zusaetzlicher Sicherheitsnetz.
+async def _do_client_update(agent_id: str, agent: dict, existing_log_id: int | None = None) -> dict:
+    """Eigentliches Client-Update: laed Setup.exe und fuehrt es als SYSTEM aus.
+    Synchroner run_command — daher Pre-Flight beim Endpoint vorher noetig
+    (siehe update_client_for_agent / Queue-Tick).
     """
-    if not _AGENT_ID_RE.fullmatch(agent_id):
-        raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
-    agent = await database.get_agent(agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent nicht gefunden")
-
     current = await database.get_current_build()
     if not current or current.get("status") != "success":
         raise HTTPException(
@@ -5810,14 +5791,20 @@ async def update_client_for_agent(agent_id: str):
 
     target_version = current.get("version") or "?"
     job_id = _make_random_token()
-    log_id = await database.create_action_log(
-        agent_id, agent.get("hostname") or "",
-        f"client-update:{target_version}",
-        f"Tray-Update auf {target_version}",
-        "client_update", "install",
-        job_id=job_id,
-        metadata=__import__("json").dumps({"target_version": target_version}),
-    )
+    meta = __import__("json").dumps({"target_version": target_version})
+    if existing_log_id:
+        await database.repurpose_queued_action_log(
+            existing_log_id, job_id=job_id, metadata=meta,
+        )
+        log_id = existing_log_id
+    else:
+        log_id = await database.create_action_log(
+            agent_id, agent.get("hostname") or "",
+            f"client-update:{target_version}",
+            f"Tray-Update auf {target_version}",
+            "client_update", "install",
+            job_id=job_id, metadata=meta,
+        )
 
     nonce = __import__("secrets").token_hex(4)
     setup_url = f"{proxy_url}/download/{slug}-setup.exe"
@@ -5842,7 +5829,6 @@ $p = Start-Process -FilePath $tmp -ArgumentList $args -Wait -PassThru -WindowSty
 Write-Host "SETUP_EXIT=$($p.ExitCode)"
 exit $p.ExitCode
 """
-
     try:
         out = await get_rmm_client().run_command(agent_id, ps, timeout=300)
     except Exception as e:
@@ -5852,7 +5838,6 @@ exit $p.ExitCode
         raise HTTPException(status_code=502, detail=f"RMM-Aufruf fehlgeschlagen: {e}")
 
     text = out if isinstance(out, str) else str(out)
-    # Tactical wrappt manchmal als JSON-string-of-string — innere Huelle abziehen
     try:
         if text.startswith('"') and text.endswith('"'):
             text = __import__("json").loads(text)
@@ -5867,7 +5852,6 @@ exit $p.ExitCode
         await database.complete_action_log(log_id, "success", exit_code=0, stdout=snippet)
         status = "success"
     elif exit_code is None:
-        # Kein Marker im Output → Setup ist gar nicht bis zum Ende gekommen
         await database.complete_action_log(
             log_id, "error",
             error_summary="Setup ohne Exit-Marker beendet (download- oder start-Fehler)",
@@ -5876,10 +5860,8 @@ exit $p.ExitCode
         status = "error"
     else:
         await database.complete_action_log(
-            log_id, "error",
-            exit_code=exit_code,
-            error_summary=f"Setup exit {exit_code}",
-            stdout=snippet,
+            log_id, "error", exit_code=exit_code,
+            error_summary=f"Setup exit {exit_code}", stdout=snippet,
         )
         status = "error"
 
@@ -5891,6 +5873,56 @@ exit $p.ExitCode
         "exit_code": exit_code,
         "status": status,
     }
+
+
+@router.post("/admin/api/agents/{agent_id}/update-client",
+             dependencies=[Depends(_require_admin)])
+async def update_client_for_agent(agent_id: str):
+    """Pushed das aktuelle Setup.exe auf einen Agent via run_command.
+
+    Eigener PS-Wrapper (NICHT das Tactical "Kiosk Install"-Script — das ist
+    fuer Neuinstallationen, funktioniert aber bei Updates nicht zuverlaessig
+    weil WebClient/Invoke-WebRequest auf manchen Hosts bei TLS-Renegotiation
+    nur den Error-Body schreiben statt der EXE). Hier curl.exe als Download
+    (Win 1803+), das ist robust. Setup.exe killt selbst die laufende
+    Tray-App, ueberschreibt die Files in-place und startet den neuen Tray.
+
+    Run_command-Result wird synchron geparsed (kein Callback noetig):
+      - exit 0 → action_log success sofort
+      - exit != 0 → action_log error mit stdout-Snippet
+    Telemetrie-Auto-Complete in update_agent_telemetry bleibt als
+    zusaetzlicher Sicherheitsnetz.
+    """
+    if not _AGENT_ID_RE.fullmatch(agent_id):
+        raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
+    agent = await database.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent nicht gefunden")
+
+    online, reason = await _agent_online_check(agent_id)
+    if not online:
+        current = await database.get_current_build()
+        target_version = (current or {}).get("version") or "?"
+        log_id = await database.create_queued_action_log(
+            agent_id=agent_id,
+            hostname=agent.get("hostname") or "",
+            package_name=f"client-update:{target_version}",
+            display_name=f"Tray-Update auf {target_version}",
+            pkg_type="client_update",
+            action="install",
+            metadata=__import__("json").dumps({"target_version": target_version}),
+        )
+        return {
+            "ok": False, "queueable": True,
+            "agent_id": agent_id, "hostname": agent.get("hostname") or "",
+            "display_name": f"Tray-Update auf {target_version}",
+            "package_name": f"client-update:{target_version}",
+            "pkg_type": "client_update", "action": "install",
+            "reason": reason, "queued_log_id": log_id,
+            "message": f"Agent nicht erreichbar (Status: {reason}). Tray-Update bereits vorgemerkt.",
+        }
+
+    return await _do_client_update(agent_id, agent)
 
 
 def _make_random_token() -> str:

@@ -11408,8 +11408,12 @@ async function bulkUpdateClients(force) {
 async function updateSingleClient(agentId, hostname) {
   if (!confirm('Setup.exe auf "' + hostname + '" pushen?')) return;
   try {
-    await api('POST', '/admin/api/agents/' + encodeURIComponent(agentId) + '/update-client');
-    toast('Update fuer "' + hostname + '" dispatched');
+    const r = await api('POST', '/admin/api/agents/' + encodeURIComponent(agentId) + '/update-client');
+    if (r && r.queueable) {
+      toast('Update fuer "' + hostname + '" vorgemerkt — wird ausgefuehrt sobald online.');
+    } else {
+      toast('Update fuer "' + hostname + '" dispatched');
+    }
     setTimeout(loadAgents, 4000);
   } catch (e) {}
 }
