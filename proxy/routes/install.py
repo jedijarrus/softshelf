@@ -1114,10 +1114,9 @@ async def install_package(
 ):
     agent_id = token["agent_id"]
     hostname = token["hostname"]
+    _ag_row = await database.get_agent(agent_id)
+    triggered_by = f"kiosk:{(_ag_row or {}).get('logged_in_user') or '?'}"
 
-    # winget-IDs enthalten Punkte und können länger sein als das choco-Schema
-    # erlaubt. Wir prüfen den richtigen Regex je nachdem ob das DB-Paket
-    # ein winget-Paket ist.
     pkg = await database.get_package(body.package_name)
     if not pkg:
         raise HTTPException(status_code=404, detail="Paket nicht freigegeben")
@@ -1161,7 +1160,7 @@ async def install_package(
         meta = _json.dumps({"winget_scope": scope, "winget_id": body.package_name, "version": ver})
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
-            pkg["display_name"], "winget", action, job_id=job_id, metadata=meta,
+            pkg["display_name"], "winget", action, job_id=job_id, metadata=meta, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
@@ -1186,7 +1185,7 @@ async def install_package(
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
-            pkg["display_name"], "plugin", "install", job_id=job_id,
+            pkg["display_name"], "plugin", "install", job_id=job_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
@@ -1205,7 +1204,7 @@ async def install_package(
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
-            pkg["display_name"], "custom", "install", job_id=job_id,
+            pkg["display_name"], "custom", "install", job_id=job_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
@@ -1221,7 +1220,7 @@ async def install_package(
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
-            pkg["display_name"], "choco", "install", job_id=job_id,
+            pkg["display_name"], "choco", "install", job_id=job_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
@@ -1245,6 +1244,8 @@ async def uninstall_package(
 ):
     agent_id = token["agent_id"]
     hostname = token["hostname"]
+    _ag_row = await database.get_agent(agent_id)
+    triggered_by = f"kiosk:{(_ag_row or {}).get('logged_in_user') or '?'}"
 
     pkg = await database.get_package(body.package_name)
     if not pkg:
@@ -1276,7 +1277,7 @@ async def uninstall_package(
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
-            pkg["display_name"], "winget", "uninstall", job_id=job_id,
+            pkg["display_name"], "winget", "uninstall", job_id=job_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
@@ -1298,7 +1299,7 @@ async def uninstall_package(
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
-            pkg["display_name"], "plugin", "uninstall", job_id=job_id,
+            pkg["display_name"], "plugin", "uninstall", job_id=job_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
@@ -1325,7 +1326,7 @@ async def uninstall_package(
         ps_cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
-            pkg["display_name"], "custom", "uninstall", job_id=job_id,
+            pkg["display_name"], "custom", "uninstall", job_id=job_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
@@ -1341,7 +1342,7 @@ async def uninstall_package(
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await database.create_action_log(
             agent_id, hostname, body.package_name,
-            pkg["display_name"], "choco", "uninstall", job_id=job_id,
+            pkg["display_name"], "choco", "uninstall", job_id=job_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
@@ -1365,6 +1366,7 @@ async def _register_or_reuse_log(
     *, agent_id: str, hostname: str, package_name: str, display_name: str,
     pkg_type: str, action: str, job_id: str, metadata: str | None = None,
     workflow_run_id: int | None = None,
+    triggered_by: str | None = None,
 ) -> int:
     """Erzeugt neuen action_log-Eintrag ODER nutzt den vorhandenen (queued)
     Eintrag wieder (Queue-Tick). Returns log_id."""
@@ -1376,12 +1378,14 @@ async def _register_or_reuse_log(
             return existing_log_id
     return await database.create_action_log(
         agent_id, hostname, package_name, display_name, pkg_type, action,
-        job_id=job_id, metadata=metadata, workflow_run_id=workflow_run_id,
+        job_id=job_id, metadata=metadata, workflow_run_id=workflow_run_id, triggered_by=triggered_by,
+        triggered_by=triggered_by,
     )
 
 
 async def _try_queue_if_offline(
     agent_id: str, hostname: str, pkg: dict, action: str,
+    triggered_by: str | None = None,
 ) -> dict | None:
     """Pre-Flight + Auto-Queue Helper. Wenn Agent offline:
     legt action_log mit status='queued' an und gibt
@@ -1411,6 +1415,7 @@ async def _try_queue_if_offline(
         display_name=pkg.get("display_name") or pkg["name"],
         pkg_type=pkg.get("type") or "custom",
         action=action,
+        triggered_by=triggered_by,
     )
     return {"queued": True, "log_id": log_id, "reason": status}
 
@@ -1424,6 +1429,7 @@ async def dispatch_install_for_agent(
     allow_duplicate: bool = False,
     existing_log_id: int | None = None,
     queue_if_offline: bool = False,
+    triggered_by: str | None = None,
 ) -> dict:
     """Spawned einen install (oder upgrade fuer winget) für genau ein
     (Agent, Paket)-Pair und logged in install_log.
@@ -1456,10 +1462,16 @@ async def dispatch_install_for_agent(
     # Auto-Queue wenn Agent offline (bulk/profile-Pfade). Single-Admin-Clicks
     # nutzen das nicht — die machen Pre-Flight am Endpoint-Level und fragen den User.
     if queue_if_offline and not existing_log_id:
-        qres = await _try_queue_if_offline(agent_id, hostname, pkg, "install")
+        qres = await _try_queue_if_offline(
+            agent_id, hostname, pkg, "install", triggered_by=triggered_by,
+        )
         if qres is not None:
             return {"action": "install", "package_name": package_name,
                     "type": ptype, **qres}
+
+    # workflow_run_id setzt auch triggered_by, wenn nicht explizit gesetzt
+    if not triggered_by and workflow_run_id:
+        triggered_by = f"workflow:{workflow_run_id}"
 
     if ptype == "winget":
         _check_winget_id(package_name)
@@ -1487,7 +1499,7 @@ async def dispatch_install_for_agent(
             existing_log_id, agent_id=agent_id, hostname=hostname,
             package_name=package_name, display_name=pkg["display_name"],
             pkg_type="winget", action=action, job_id=job_id, metadata=meta,
-            workflow_run_id=workflow_run_id,
+            workflow_run_id=workflow_run_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1507,7 +1519,7 @@ async def dispatch_install_for_agent(
             existing_log_id, agent_id=agent_id, hostname=hostname,
             package_name=package_name, display_name=pkg["display_name"],
             pkg_type="plugin", action="install", job_id=job_id,
-            workflow_run_id=workflow_run_id,
+            workflow_run_id=workflow_run_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1527,7 +1539,7 @@ async def dispatch_install_for_agent(
             existing_log_id, agent_id=agent_id, hostname=hostname,
             package_name=package_name, display_name=pkg["display_name"],
             pkg_type="custom", action="install", job_id=job_id,
-            workflow_run_id=workflow_run_id,
+            workflow_run_id=workflow_run_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1545,7 +1557,7 @@ async def dispatch_install_for_agent(
             existing_log_id, agent_id=agent_id, hostname=hostname,
             package_name=package_name, display_name=pkg["display_name"],
             pkg_type="choco", action="install", job_id=job_id,
-            workflow_run_id=workflow_run_id,
+            workflow_run_id=workflow_run_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1575,6 +1587,7 @@ async def dispatch_uninstall_for_agent(
     allow_duplicate: bool = False,
     existing_log_id: int | None = None,
     queue_if_offline: bool = False,
+    triggered_by: str | None = None,
 ) -> dict:
     """Spawned uninstall-Aktion fuer ein (Agent, Paket)-Pair.
 
@@ -1600,7 +1613,9 @@ async def dispatch_uninstall_for_agent(
             )
 
     if queue_if_offline and not existing_log_id:
-        qres = await _try_queue_if_offline(agent_id, hostname, pkg, "uninstall")
+        qres = await _try_queue_if_offline(
+            agent_id, hostname, pkg, "uninstall", triggered_by=triggered_by,
+        )
         if qres is not None:
             return {"action": "uninstall", "package_name": package_name,
                     "type": ptype, **qres}
@@ -1618,7 +1633,7 @@ async def dispatch_uninstall_for_agent(
         log_id = await _register_or_reuse_log(
             existing_log_id, agent_id=agent_id, hostname=hostname,
             package_name=package_name, display_name=pkg["display_name"],
-            pkg_type="winget", action="uninstall", job_id=job_id,
+            pkg_type="winget", action="uninstall", job_id=job_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1635,7 +1650,7 @@ async def dispatch_uninstall_for_agent(
         log_id = await _register_or_reuse_log(
             existing_log_id, agent_id=agent_id, hostname=hostname,
             package_name=package_name, display_name=pkg["display_name"],
-            pkg_type="plugin", action="uninstall", job_id=job_id,
+            pkg_type="plugin", action="uninstall", job_id=job_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1661,7 +1676,7 @@ async def dispatch_uninstall_for_agent(
         log_id = await _register_or_reuse_log(
             existing_log_id, agent_id=agent_id, hostname=hostname,
             package_name=package_name, display_name=pkg["display_name"],
-            pkg_type="custom", action="uninstall", job_id=job_id,
+            pkg_type="custom", action="uninstall", job_id=job_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1677,7 +1692,7 @@ async def dispatch_uninstall_for_agent(
         log_id = await _register_or_reuse_log(
             existing_log_id, agent_id=agent_id, hostname=hostname,
             package_name=package_name, display_name=pkg["display_name"],
-            pkg_type="choco", action="uninstall", job_id=job_id,
+            pkg_type="choco", action="uninstall", job_id=job_id, triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],

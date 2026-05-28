@@ -437,6 +437,14 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE action_log ADD COLUMN error_acked_at TEXT"
             )
+        if "triggered_by" not in al_cols_now:
+            # v2.6.x: wer/was hat die Action ausgeloest. Format:
+            # 'admin:<user>', 'kiosk:<user>', 'workflow:<run_id>',
+            # 'bulk:<user>', 'profile:<id>', 'rollout:<id>',
+            # 'system:autoupdate', 'queue'. NULL = legacy.
+            await db.execute(
+                "ALTER TABLE action_log ADD COLUMN triggered_by TEXT"
+            )
 
         # Migration: role-Spalte auf admin_users fuer RBAC
         async with db.execute("PRAGMA table_info(admin_users)") as cur:
@@ -3798,16 +3806,17 @@ async def create_action_log(
     display_name: str, pkg_type: str, action: str,
     job_id: str | None = None, metadata: str | None = None,
     workflow_run_id: int | None = None,
+    triggered_by: str | None = None,
 ) -> int:
     """INSERT pending action, returns id. Dual-write in install_log."""
     async with _db() as db:
         cur = await db.execute(
             "INSERT INTO action_log "
             "(agent_id, hostname, package_name, display_name, pkg_type, action, "
-            " job_id, metadata, workflow_run_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            " job_id, metadata, workflow_run_id, triggered_by) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (agent_id, hostname, package_name, display_name, pkg_type, action,
-             job_id, metadata, workflow_run_id),
+             job_id, metadata, workflow_run_id, triggered_by),
         )
         log_id = cur.lastrowid
         await db.execute(
@@ -3861,15 +3870,17 @@ async def create_queued_action_log(
     agent_id: str, hostname: str, package_name: str,
     display_name: str, pkg_type: str, action: str,
     metadata: str | None = None,
+    triggered_by: str | None = None,
 ) -> int:
     """INSERT action_log mit status='queued'. Wartet auf Agent-Online via Queue-Tick."""
     async with _db() as db:
         cur = await db.execute(
             "INSERT INTO action_log "
             "(agent_id, hostname, package_name, display_name, pkg_type, action, "
-            " status, metadata) "
-            "VALUES (?,?,?,?,?,?, 'queued', ?)",
-            (agent_id, hostname, package_name, display_name, pkg_type, action, metadata),
+            " status, metadata, triggered_by) "
+            "VALUES (?,?,?,?,?,?, 'queued', ?, ?)",
+            (agent_id, hostname, package_name, display_name, pkg_type, action,
+             metadata, triggered_by),
         )
         await db.commit()
         return cur.lastrowid
@@ -3966,7 +3977,8 @@ async def get_action_log(
         async with db.execute(
             f"SELECT id, agent_id, hostname, package_name, display_name, "
             f"pkg_type, action, status, exit_code, error_summary, "
-            f"created_at, completed_at, error_acked_at "
+            f"created_at, completed_at, error_acked_at, triggered_by, "
+            f"workflow_run_id "
             f"FROM action_log {where} ORDER BY id DESC LIMIT ? OFFSET ?",
             params,
         ) as cur:

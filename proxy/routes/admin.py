@@ -2950,8 +2950,8 @@ class QueueCommandBody(BaseModel):
     action: str = Field(pattern=r"^(install|uninstall)$")
 
 
-@router.post("/admin/api/queue-command", dependencies=[Depends(_require_admin)])
-async def queue_command(body: QueueCommandBody):
+@router.post("/admin/api/queue-command")
+async def queue_command(body: QueueCommandBody, admin: dict = Depends(_require_admin)):
     """Legt einen Befehl als action_log mit status='queued' an. Der Queue-Tick
     dispatched, sobald der Agent ueber Tactical online ist."""
     if not _AGENT_ID_RE.fullmatch(body.agent_id):
@@ -2978,6 +2978,7 @@ async def queue_command(body: QueueCommandBody):
         display_name=pkg.get("display_name") or pkg["name"],
         pkg_type=pkg.get("type") or "custom",
         action=body.action,
+        triggered_by=f"admin:{(admin or {}).get('username') or 'admin'}",
     )
     return {"ok": True, "log_id": log_id, "message": "Befehl vorgemerkt."}
 
@@ -3511,11 +3512,10 @@ def _queueable_payload(
     }
 
 
-@router.post(
-    "/admin/api/agents/{agent_id}/install/{package_name}",
-    dependencies=[Depends(_require_admin)],
-)
-async def admin_install_on_agent(agent_id: str, package_name: str):
+@router.post("/admin/api/agents/{agent_id}/install/{package_name}")
+async def admin_install_on_agent(
+    agent_id: str, package_name: str, admin: dict = Depends(_require_admin),
+):
     """Admin-getriggerter Install (oder Upgrade bei winget) eines whitelisted
     Pakets auf einem einzelnen Agent. Dispatch nach packages.type — die ganze
     Logik sitzt im shared `dispatch_install_for_agent` Helper damit Profile-
@@ -3529,18 +3529,20 @@ async def admin_install_on_agent(agent_id: str, package_name: str):
         raise HTTPException(status_code=404, detail="Paket nicht gefunden")
 
     agent = await _resolve_agent(agent_id)
+    trig = f"admin:{(admin or {}).get('username') or 'admin'}"
     online, reason = await _agent_online_check(agent_id)
     if not online:
         return _queueable_payload(agent_id, agent["hostname"], pkg, "install", reason)
-    result = await dispatch_install_for_agent(agent_id, agent["hostname"], pkg)
+    result = await dispatch_install_for_agent(
+        agent_id, agent["hostname"], pkg, triggered_by=trig,
+    )
     return {"ok": True, "agent": agent["hostname"], **result}
 
 
-@router.post(
-    "/admin/api/agents/{agent_id}/uninstall/{package_name}",
-    dependencies=[Depends(_require_admin)],
-)
-async def admin_uninstall_on_agent(agent_id: str, package_name: str):
+@router.post("/admin/api/agents/{agent_id}/uninstall/{package_name}")
+async def admin_uninstall_on_agent(
+    agent_id: str, package_name: str, admin: dict = Depends(_require_admin),
+):
     """Admin-getriggerter Uninstall eines whitelisted Pakets auf einem
     einzelnen Agent. Dispatch nach packages.type — nutzt den shared
     dispatch_uninstall_for_agent Helper (inkl. action_log Tracking)."""
@@ -3553,10 +3555,13 @@ async def admin_uninstall_on_agent(agent_id: str, package_name: str):
         raise HTTPException(status_code=404, detail="Paket nicht gefunden")
 
     agent = await _resolve_agent(agent_id)
+    trig = f"admin:{(admin or {}).get('username') or 'admin'}"
     online, reason = await _agent_online_check(agent_id)
     if not online:
         return _queueable_payload(agent_id, agent["hostname"], pkg, "uninstall", reason)
-    result = await dispatch_uninstall_for_agent(agent_id, agent["hostname"], pkg)
+    result = await dispatch_uninstall_for_agent(
+        agent_id, agent["hostname"], pkg, triggered_by=trig,
+    )
     return {"ok": True, "agent": agent["hostname"], **result}
 
 
@@ -5812,7 +5817,10 @@ async def _check_client_update_prereqs() -> tuple[dict, str, str, str, str]:
     return (current, proxy_url, reg_secret, slug, target_version)
 
 
-async def _do_client_update(agent_id: str, agent: dict, existing_log_id: int | None = None) -> dict:
+async def _do_client_update(
+    agent_id: str, agent: dict, existing_log_id: int | None = None,
+    triggered_by: str | None = None,
+) -> dict:
     """Eigentliches Client-Update: laed Setup.exe und fuehrt es als SYSTEM aus.
     Synchroner run_command — daher Pre-Flight beim Endpoint vorher noetig
     (siehe update_client_for_agent / Queue-Tick).
@@ -5836,6 +5844,7 @@ async def _do_client_update(agent_id: str, agent: dict, existing_log_id: int | N
             f"Tray-Update auf {target_version}",
             "client_update", "install",
             job_id=job_id, metadata=meta,
+            triggered_by=triggered_by,
         )
 
     nonce = __import__("secrets").token_hex(4)
@@ -5907,9 +5916,10 @@ exit $p.ExitCode
     }
 
 
-@router.post("/admin/api/agents/{agent_id}/update-client",
-             dependencies=[Depends(_require_admin)])
-async def update_client_for_agent(agent_id: str):
+@router.post("/admin/api/agents/{agent_id}/update-client")
+async def update_client_for_agent(
+    agent_id: str, admin: dict = Depends(_require_admin),
+):
     """Pushed das aktuelle Setup.exe auf einen Agent via run_command.
 
     Eigener PS-Wrapper (NICHT das Tactical "Kiosk Install"-Script — das ist
@@ -5931,6 +5941,7 @@ async def update_client_for_agent(agent_id: str):
     if not agent:
         raise HTTPException(status_code=404, detail="Agent nicht gefunden")
 
+    trig = f"admin:{(admin or {}).get('username') or 'admin'}"
     online, reason = await _agent_online_check(agent_id)
     if not online:
         current = await database.get_current_build()
@@ -5943,6 +5954,7 @@ async def update_client_for_agent(agent_id: str):
             pkg_type="client_update",
             action="install",
             metadata=__import__("json").dumps({"target_version": target_version}),
+            triggered_by=trig,
         )
         return {
             "ok": False, "queueable": True,
@@ -5954,7 +5966,7 @@ async def update_client_for_agent(agent_id: str):
             "message": f"Agent nicht erreichbar (Status: {reason}). Tray-Update bereits vorgemerkt.",
         }
 
-    return await _do_client_update(agent_id, agent)
+    return await _do_client_update(agent_id, agent, triggered_by=trig)
 
 
 def _make_random_token() -> str:
