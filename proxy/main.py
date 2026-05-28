@@ -356,6 +356,10 @@ async def _rollout_auto_advance_tick():
         logger.exception("rollout auto-advance tick crashed: %s", e)
 
 
+_queue_tactical_fail_streak = 0
+_QUEUE_TACTICAL_WARN_AFTER = 3  # nach 3 Ticks (~6 min) lautes Warning
+
+
 async def _queued_actions_tick():
     """Alle 2 Min: pruefe queued action_log-Eintraege. Wenn der Ziel-Agent
     laut Tactical online ist → promote auf 'pending' und dispatch ueber den
@@ -363,13 +367,28 @@ async def _queued_actions_tick():
     Agent offline → skippen, naechster Tick versucht es erneut.
 
     Bei Tactical-API-Fehler im check skippen wir konservativ — wir wollen
-    keinen Dispatch ohne Online-Beweis.
+    keinen Dispatch ohne Online-Beweis. Wenn N Ticks in Folge nur API-Errors
+    sehen, lautes Warning damit Tactical-Down nicht stiller Queue-Inflater wird.
     """
+    global _queue_tactical_fail_streak
     try:
+        # Aufraeumen: agent geloescht oder Eintrag aelter als 7 Tage.
+        try:
+            gone = await database.cancel_queued_for_missing_agents()
+            if gone:
+                logger.info("queue-tick: %d queued entries cancelled (agent gone)", gone)
+            expired = await database.expire_old_queued_actions(7)
+            if expired:
+                logger.info("queue-tick: %d queued entries cancelled (TTL)", expired)
+        except Exception as e:
+            logger.warning("queue-tick: cleanup failed: %s", e)
+
         queued = await database.list_queued_actions()
         if not queued:
+            _queue_tactical_fail_streak = 0
             return
         tc = get_rmm_client()
+        all_failed = True
         from routes.install import (
             dispatch_install_for_agent, dispatch_uninstall_for_agent,
         )
@@ -377,6 +396,8 @@ async def _queued_actions_tick():
             agent_id = entry["agent_id"]
             try:
                 info = await tc.check_agent_status(agent_id)
+                if (info or {}).get("status") not in ("check_failed",):
+                    all_failed = False
             except Exception as e:
                 logger.warning("queue-tick: check_agent_status %s: %s", agent_id[:12], e)
                 continue
@@ -384,18 +405,30 @@ async def _queued_actions_tick():
                 continue
             # client_update braucht keinen Paket-Lookup — re-call der Endpoint-Logik.
             if entry.get("pkg_type") == "client_update":
+                from routes.admin import _do_client_update, _check_client_update_prereqs
+                # Prereqs VOR promote checken — bei transient failure (z.B.
+                # Build kurzzeitig weg) bleibt der Eintrag queued und der
+                # naechste Tick versucht es erneut.
+                try:
+                    await _check_client_update_prereqs()
+                except Exception as e:
+                    logger.warning(
+                        "queue-tick: client-update prereqs failed for %s: %s",
+                        entry["id"], e,
+                    )
+                    continue
+                ag = await database.get_agent(agent_id)
+                if not ag:
+                    await database.cancel_queued_action(entry["id"])
+                    logger.info(
+                        "queue-tick: cancel queued %s — agent %s nicht mehr in DB",
+                        entry["id"], agent_id[:12],
+                    )
+                    continue
                 promoted = await database.promote_queued_to_pending(entry["id"])
                 if not promoted:
                     continue
                 try:
-                    from routes.admin import _do_client_update
-                    ag = await database.get_agent(agent_id)
-                    if not ag:
-                        await database.complete_action_log(
-                            entry["id"], "error",
-                            error_summary="Agent nicht mehr in DB",
-                        )
-                        continue
                     await _do_client_update(agent_id, ag, existing_log_id=entry["id"])
                     logger.info(
                         "queue-tick: client-update dispatched action_log %s agent=%s",
@@ -438,6 +471,16 @@ async def _queued_actions_tick():
                 await database.complete_action_log(
                     entry["id"], "error", error_summary=str(e)[:300],
                 )
+        if all_failed and queued:
+            _queue_tactical_fail_streak += 1
+            if _queue_tactical_fail_streak >= _QUEUE_TACTICAL_WARN_AFTER:
+                logger.error(
+                    "queue-tick: Tactical-API liefert seit %d Ticks nur check_failed — "
+                    "Queue waechst evtl. ohne Dispatch. Tactical-Verbindung pruefen.",
+                    _queue_tactical_fail_streak,
+                )
+        else:
+            _queue_tactical_fail_streak = 0
     except Exception as e:
         logger.exception("queue tick crashed: %s", e)
 

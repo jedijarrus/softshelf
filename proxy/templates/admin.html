@@ -11387,48 +11387,78 @@ function clearAgentSelection() {
   _renderBulkBar();
 }
 
-async function bulkUpdateClients(force) {
+function bulkUpdateClients(force) {
   if (_selectedAgentIds.size === 0) return;
   const list = Array.from(_selectedAgentIds);
+  const noun = list.length + ' Client' + (list.length !== 1 ? 's' : '');
   const msg = force
-    ? 'Setup.exe auf ' + list.length + ' Client' + (list.length !== 1 ? 's' : '') + ' force-installieren?\n\nAuch Clients die schon auf der aktuellen Version sind werden re-installiert (Tray wird gekillt + ersetzt).'
-    : 'Setup.exe auf ' + list.length + ' Client' + (list.length !== 1 ? 's' : '') + ' pushen?\n\nUebersprungen werden Clients die schon auf der aktuellen Version sind.';
-  if (!confirm(msg)) return;
-  try {
-    const r = await api('POST', '/admin/api/agents/bulk-update-client', {
-      agent_ids: list,
-      only_outdated: !force,
-    });
-    toast((r.dispatched || 0) + ' Update' + (r.dispatched !== 1 ? 's' : '') + ' dispatched');
-    clearAgentSelection();
-    setTimeout(loadAgents, 4000);
-  } catch (e) {}
+    ? 'Setup.exe auf ' + noun + ' force-installieren? Auch Clients die schon auf der aktuellen Version sind werden re-installiert (Tray wird gekillt + ersetzt).'
+    : 'Setup.exe auf ' + noun + ' pushen? Uebersprungen werden Clients die schon auf der aktuellen Version sind. Offline-Agents werden vorgemerkt.';
+  showConfirm(
+    force ? 'Force-Reinstall' : 'Tray-Update',
+    msg,
+    async () => {
+      try {
+        const r = await api('POST', '/admin/api/agents/bulk-update-client', {
+          agent_ids: list, only_outdated: !force,
+        });
+        toast(_formatBulkUpdateToast(r));
+        clearAgentSelection();
+        setTimeout(loadAgents, 4000);
+      } catch (e) {}
+    },
+    force ? 'Force-Reinstall' : 'Pushen',
+    'btn-primary',
+  );
 }
 
-async function updateSingleClient(agentId, hostname) {
-  if (!confirm('Setup.exe auf "' + hostname + '" pushen?')) return;
-  try {
-    const r = await api('POST', '/admin/api/agents/' + encodeURIComponent(agentId) + '/update-client');
-    if (r && r.queueable) {
-      toast('Update fuer "' + hostname + '" vorgemerkt — wird ausgefuehrt sobald online.');
-    } else {
-      toast('Update fuer "' + hostname + '" dispatched');
-    }
-    setTimeout(loadAgents, 4000);
-  } catch (e) {}
+function updateSingleClient(agentId, hostname) {
+  showConfirm(
+    'Tray-Update pushen',
+    'Setup.exe auf "' + hostname + '" pushen? Tray wird kurz gekillt und mit neuer Version neu gestartet.',
+    async () => {
+      try {
+        const r = await api('POST', '/admin/api/agents/' + encodeURIComponent(agentId) + '/update-client');
+        if (r && r.queueable) {
+          toast('Update fuer "' + hostname + '" vorgemerkt — wird ausgefuehrt sobald online.');
+        } else {
+          toast('Update fuer "' + hostname + '" dispatched');
+        }
+        setTimeout(loadAgents, 4000);
+      } catch (e) {}
+    },
+    'Pushen',
+    'btn-primary',
+  );
 }
 
-async function bulkUpdateAllOutdated() {
+function bulkUpdateAllOutdated() {
   if (!_agentVersionDist || !_agentVersionDist.outdated) return;
-  if (!confirm('Setup.exe auf alle ' + _agentVersionDist.outdated + ' veralteten Clients pushen?')) return;
-  try {
-    const r = await api('POST', '/admin/api/agents/bulk-update-client', {
-      agent_ids: [],
-      only_outdated: true,
-    });
-    toast((r.dispatched || 0) + ' Update' + (r.dispatched !== 1 ? 's' : '') + ' dispatched (' + (r.skipped || 0) + ' uebersprungen)');
-    setTimeout(loadAgents, 4000);
-  } catch (e) {}
+  const n = _agentVersionDist.outdated;
+  showConfirm(
+    'Massen-Tray-Update',
+    'Setup.exe auf alle ' + n + ' veralteten Client' + (n !== 1 ? 's' : '') + ' pushen? Offline-Agents werden vorgemerkt.',
+    async () => {
+      try {
+        const r = await api('POST', '/admin/api/agents/bulk-update-client', {
+          agent_ids: [], only_outdated: true,
+        });
+        toast(_formatBulkUpdateToast(r));
+        setTimeout(loadAgents, 4000);
+      } catch (e) {}
+    },
+    'Pushen',
+    'btn-primary',
+  );
+}
+
+function _formatBulkUpdateToast(r) {
+  const parts = [];
+  if (r.dispatched) parts.push(r.dispatched + ' dispatched');
+  if (r.queued)     parts.push(r.queued + ' vorgemerkt');
+  if (r.skipped)    parts.push(r.skipped + ' uebersprungen');
+  if (r.failed && r.failed.length) parts.push(r.failed.length + ' fehlgeschlagen');
+  return parts.length ? 'Update-Sweep: ' + parts.join(', ') : 'Keine Updates noetig';
 }
 
 function toggleSelectAllAgents(checked) {
@@ -13444,37 +13474,33 @@ async function handleDispatchResponse(resp, onDispatched) {
         },
         'Vormerken',
         'btn-primary',
+        () => resolve('cancelled'),
       );
-      // Cancel-Button hijack: das bestehende Modal hat einen close-Button —
-      // wenn der User schliesst, resolve('cancelled'). showConfirm setzt onclick
-      // nur fuer OK; Cancel macht closeConfirm() ohne Callback. Wir setzen einen
-      // Watcher der nach Modal-Schliessen prueft.
-      const modalEl = document.getElementById('confirm-modal');
-      const mo = new MutationObserver(() => {
-        if (!modalEl.classList.contains('open')) {
-          mo.disconnect();
-          // Falls schon resolved (OK-Pfad), no-op
-          setTimeout(() => resolve('cancelled'), 50);
-        }
-      });
-      mo.observe(modalEl, { attributes: true, attributeFilter: ['class'] });
     });
   }
   if (typeof onDispatched === 'function') onDispatched();
   return 'dispatched';
 }
 
-function showConfirm(title, text, onOk, okLabel, okClass) {
+// onCancel: optionaler Callback wenn der User abbricht (Cancel-Button,
+// Escape, Backdrop-Click). Wird genau einmal pro showConfirm-Aufruf
+// ausgefuehrt (entweder onOk ODER onCancel).
+let _confirmCancelHandler = null;
+function showConfirm(title, text, onOk, okLabel, okClass, onCancel) {
   document.getElementById('confirm-title').textContent = title;
   document.getElementById('confirm-text').textContent = text;
   const btn = document.getElementById('confirm-ok-btn');
   btn.textContent = okLabel || 'Löschen';
   btn.className = 'btn btn-sm ' + (okClass || 'btn-danger');
-  btn.onclick = () => { closeConfirm(); onOk(); };
+  btn.onclick = () => { _confirmCancelHandler = null; closeConfirm(); onOk(); };
+  _confirmCancelHandler = (typeof onCancel === 'function') ? onCancel : null;
   document.getElementById('confirm-modal').classList.add('open');
 }
 function closeConfirm() {
   document.getElementById('confirm-modal').classList.remove('open');
+  const h = _confirmCancelHandler;
+  _confirmCancelHandler = null;
+  if (h) { try { h(); } catch (_) {} }
 }
 
 // ── Common ───────────────────────────────────────────────────────────────────

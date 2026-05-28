@@ -1380,6 +1380,41 @@ async def _register_or_reuse_log(
     )
 
 
+async def _try_queue_if_offline(
+    agent_id: str, hostname: str, pkg: dict, action: str,
+) -> dict | None:
+    """Pre-Flight + Auto-Queue Helper. Wenn Agent offline:
+    legt action_log mit status='queued' an und gibt
+    `{"queued": True, "log_id": ..., "reason": ...}` zurueck.
+    Wenn online oder check unklar: gibt None zurueck (Caller dispatched normal).
+
+    Wird von dispatch_install_for_agent/dispatch_uninstall_for_agent mit
+    `queue_if_offline=True` aufgerufen — typisch fuer bulk/profile-apply
+    Pfade ohne UI-Confirm-Dialog.
+    """
+    try:
+        info = await get_rmm_client().check_agent_status(agent_id)
+    except Exception:
+        # Wenn Check selbst nicht geht — kein Auto-Queue, normaler Dispatch
+        # (knallt dann ggf. spaeter mit Tactical-Fehler, sichtbar in action_log).
+        return None
+    status = (info or {}).get("status") or "unknown"
+    if status == "online":
+        return None
+    # Dedup: schon ein queued/pending/running fuer dieses (agent, package)?
+    existing = await database.has_pending_action(agent_id, pkg["name"], action=action)
+    if existing:
+        return {"queued": False, "skipped": True, "existing_id": existing["id"]}
+    log_id = await database.create_queued_action_log(
+        agent_id=agent_id, hostname=hostname,
+        package_name=pkg["name"],
+        display_name=pkg.get("display_name") or pkg["name"],
+        pkg_type=pkg.get("type") or "custom",
+        action=action,
+    )
+    return {"queued": True, "log_id": log_id, "reason": status}
+
+
 async def dispatch_install_for_agent(
     agent_id: str,
     hostname: str,
@@ -1388,6 +1423,7 @@ async def dispatch_install_for_agent(
     workflow_run_id: int | None = None,
     allow_duplicate: bool = False,
     existing_log_id: int | None = None,
+    queue_if_offline: bool = False,
 ) -> dict:
     """Spawned einen install (oder upgrade fuer winget) für genau ein
     (Agent, Paket)-Pair und logged in install_log.
@@ -1416,6 +1452,14 @@ async def dispatch_install_for_agent(
                     f"action={existing['action']}). Warte bis sie abgeschlossen ist."
                 ),
             )
+
+    # Auto-Queue wenn Agent offline (bulk/profile-Pfade). Single-Admin-Clicks
+    # nutzen das nicht — die machen Pre-Flight am Endpoint-Level und fragen den User.
+    if queue_if_offline and not existing_log_id:
+        qres = await _try_queue_if_offline(agent_id, hostname, pkg, "install")
+        if qres is not None:
+            return {"action": "install", "package_name": package_name,
+                    "type": ptype, **qres}
 
     if ptype == "winget":
         _check_winget_id(package_name)
@@ -1530,6 +1574,7 @@ async def dispatch_uninstall_for_agent(
     pkg: dict,
     allow_duplicate: bool = False,
     existing_log_id: int | None = None,
+    queue_if_offline: bool = False,
 ) -> dict:
     """Spawned uninstall-Aktion fuer ein (Agent, Paket)-Pair.
 
@@ -1553,6 +1598,12 @@ async def dispatch_uninstall_for_agent(
                     f"action={existing['action']})."
                 ),
             )
+
+    if queue_if_offline and not existing_log_id:
+        qres = await _try_queue_if_offline(agent_id, hostname, pkg, "uninstall")
+        if qres is not None:
+            return {"action": "uninstall", "package_name": package_name,
+                    "type": ptype, **qres}
 
     if ptype == "winget":
         _check_winget_id(package_name)

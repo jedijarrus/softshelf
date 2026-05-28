@@ -1257,12 +1257,15 @@ async def has_pending_action(
     """
     async with _db() as db:
         db.row_factory = aiosqlite.Row
+        # Pending/Running: nur juenger als 30 min dedup-relevant (alte stuck-Entries
+        # ignorieren). Queued: ohne Zeitlimit — solange der Eintrag wartet, neuer
+        # Klick = 409, sonst entstehen Duplicate-Queues.
         if action:
             sql = (
                 "SELECT id, status, action, created_at FROM action_log "
                 "WHERE agent_id = ? AND package_name = ? AND action = ? "
-                "AND status IN ('pending', 'running') "
-                "AND created_at > datetime('now', '-30 minutes') "
+                "AND (status = 'queued' OR "
+                "     (status IN ('pending','running') AND created_at > datetime('now', '-30 minutes'))) "
                 "ORDER BY id DESC LIMIT 1"
             )
             params = (agent_id, package_name, action)
@@ -1270,8 +1273,8 @@ async def has_pending_action(
             sql = (
                 "SELECT id, status, action, created_at FROM action_log "
                 "WHERE agent_id = ? AND package_name = ? "
-                "AND status IN ('pending', 'running') "
-                "AND created_at > datetime('now', '-30 minutes') "
+                "AND (status = 'queued' OR "
+                "     (status IN ('pending','running') AND created_at > datetime('now', '-30 minutes'))) "
                 "ORDER BY id DESC LIMIT 1"
             )
             params = (agent_id, package_name)
@@ -1972,7 +1975,7 @@ async def update_agent_telemetry(
                 async with db.execute(
                     "SELECT id, metadata FROM action_log "
                     "WHERE agent_id = ? AND pkg_type = 'client_update' "
-                    "AND status IN ('pending', 'running') "
+                    "AND status IN ('queued', 'pending', 'running')"
                     "ORDER BY id DESC LIMIT 1",
                     (agent_id,),
                 ) as cur:
@@ -3895,6 +3898,36 @@ async def cancel_queued_action(log_id: int) -> bool:
         )
         await db.commit()
         return cur.rowcount > 0
+
+
+async def expire_old_queued_actions(max_age_days: int = 7) -> int:
+    """Markiert queued action_log-Eintraege aelter als N Tage als 'cancelled'.
+    Returns Anzahl der betroffenen Zeilen."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET status = 'cancelled', "
+            "completed_at = datetime('now'), "
+            "error_summary = COALESCE(error_summary, 'queue TTL ueberschritten') "
+            "WHERE status = 'queued' "
+            "AND created_at < datetime('now', ? || ' days')",
+            (f"-{int(max_age_days)}",),
+        )
+        await db.commit()
+        return cur.rowcount
+
+
+async def cancel_queued_for_missing_agents() -> int:
+    """Markiert queued Eintraege als 'cancelled' wenn der Agent nicht mehr
+    in der agents-Tabelle existiert (geloescht oder vergessen)."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET status = 'cancelled', "
+            "completed_at = datetime('now'), "
+            "error_summary = COALESCE(error_summary, 'Agent existiert nicht mehr') "
+            "WHERE status = 'queued' AND agent_id NOT IN (SELECT agent_id FROM agents)"
+        )
+        await db.commit()
+        return cur.rowcount
 
 
 async def promote_queued_to_pending(log_id: int) -> bool:
