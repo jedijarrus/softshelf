@@ -5068,13 +5068,14 @@ button.outdated-badge.clickable:disabled {
 /* ── Action Log ──────────────────────────────────────────── */
 .al-row {
   display: grid;
-  grid-template-columns: 90px 1fr 1fr 70px 72px 110px 60px 36px;
+  grid-template-columns: 90px 1fr 1fr 70px 110px 110px 60px 36px;
   align-items: center; gap: 0 8px;
   padding: 7px var(--row-pad-x);
   border-bottom: 1px solid var(--border);
   font-size: 13px; cursor: pointer;
   transition: background .12s;
 }
+.al-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .al-row:hover { background: var(--bg-hover); }
 .al-row.al-error { border-left: 3px solid var(--red); }
 .al-head { font-weight: 600; font-size: 11px; color: var(--fg-4); text-transform: uppercase; letter-spacing: .04em; cursor: default; border-bottom: 2px solid var(--border); }
@@ -14573,6 +14574,14 @@ async function triggerBuild() {
 
 init();
 
+// Action-Log State — MUSS vor dem Tab-Restore-IIFE deklariert sein, sonst
+// laeuft loadActionLog beim ersten Aufruf in einen TDZ-ReferenceError und
+// der Aktionen-Tab erscheint nach Reload leer (Workaround Aktualisieren-Klick).
+var alPage = 0;
+const AL_PAGE_SIZE = 50;
+var _alFilterTimer = null;
+const _alStatusLabel = { pending: 'Ausstehend', running: 'Laeuft', success: 'Erfolg', error: 'Fehler', skipped: 'Uebersprungen' };
+
 // Tab aus URL-Hash wiederherstellen. Default ist home — wenn Hash fehlt
 // oder home ist, Home-Daten laden und nichts zu switchen.
 (function _restoreTabFromHash() {
@@ -14627,16 +14636,12 @@ window.addEventListener('hashchange', () => {
    Action Log
    ═══════════════════════════════════════════════════════════ */
 
-let alPage = 0;
-const AL_PAGE_SIZE = 50;
-let _alFilterTimer = null;
+// (alPage, AL_PAGE_SIZE, _alFilterTimer, _alStatusLabel sind oben deklariert)
 
 function alFilterDebounce() {
   clearTimeout(_alFilterTimer);
   _alFilterTimer = setTimeout(() => loadActionLog(true), 300);
 }
-
-const _alStatusLabel = { pending: 'Ausstehend', running: 'Laeuft', success: 'Erfolg', error: 'Fehler', skipped: 'Uebersprungen' };
 
 function _alDuration(start, end) {
   if (!start || !end) return '';
@@ -14689,7 +14694,7 @@ function renderActionLog(entries) {
       <span class="truncate">${esc(e.hostname)}</span>
       <span class="truncate">${esc(e.display_name)}</span>
       <span><span class="pkg-type-pill ${esc(e.pkg_type)}">${esc(e.pkg_type)}</span></span>
-      <span>${esc(e.action)}</span>
+      <span title="${esc(e.action)}">${esc(e.action)}</span>
       <span title="${esc(fmtDt(e.created_at))}">${esc(relTime(e.created_at))}</span>
       <span>${esc(dur)}</span>
       <span>${retryBtn}</span>
