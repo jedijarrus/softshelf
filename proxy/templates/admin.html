@@ -5068,9 +5068,9 @@ button.outdated-badge.clickable:disabled {
 /* ── Action Log ──────────────────────────────────────────── */
 .al-row {
   display: grid;
-  grid-template-columns: 90px 1fr 1fr 70px 110px 110px 60px 36px;
-  align-items: center; gap: 0 8px;
-  padding: 7px var(--row-pad-x);
+  grid-template-columns: 100px 200px minmax(0, 1fr) 80px 100px 120px 70px 36px;
+  align-items: center; gap: 0 10px;
+  padding: 9px var(--row-pad-x);
   border-bottom: 1px solid var(--border);
   font-size: 13px; cursor: pointer;
   transition: background .12s;
@@ -5843,7 +5843,7 @@ body.help-active [data-help]:not(.tab)::after {
         <h1 class="section-title">Aktionen</h1>
         <div class="section-sub">Install-, Uninstall- und Upgrade-Aktionen mit Ergebnis und Output.</div>
       </div>
-      <button class="btn btn-ghost btn-sm" onclick="alDeleteAllErrors()" style="color:var(--red)">Alle Fehler loeschen</button>
+      <button class="btn btn-ghost btn-sm" onclick="alDeleteAllErrors()" style="color:var(--red)">Alle Fehler löschen</button>
       <button class="btn btn-ghost btn-sm" onclick="loadActionLog(true)">Aktualisieren</button>
     </div>
     <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
@@ -5851,10 +5851,10 @@ body.help-active [data-help]:not(.tab)::after {
         <option value="">Alle Status</option>
         <option value="queued">Vorgemerkt</option>
         <option value="pending">Ausstehend</option>
-        <option value="running">Laeuft</option>
+        <option value="running">Läuft</option>
         <option value="success">Erfolg</option>
         <option value="error">Fehler</option>
-        <option value="skipped">Uebersprungen</option>
+        <option value="skipped">Übersprungen</option>
         <option value="cancelled">Abgebrochen</option>
       </select>
       <select id="al-filter-type" class="input input-sm" onchange="loadActionLog(true)" style="width:140px">
@@ -14674,7 +14674,7 @@ init();
 var alPage = 0;
 const AL_PAGE_SIZE = 50;
 var _alFilterTimer = null;
-const _alStatusLabel = { queued: 'Vorgemerkt', pending: 'Ausstehend', running: 'Laeuft', success: 'Erfolg', error: 'Fehler', skipped: 'Uebersprungen', cancelled: 'Abgebrochen' };
+const _alStatusLabel = { queued: 'Vorgemerkt', pending: 'Ausstehend', running: 'Läuft', success: 'Erfolg', error: 'Fehler', skipped: 'Übersprungen', cancelled: 'Abgebrochen' };
 
 // Tab aus URL-Hash wiederherstellen. Default ist home — wenn Hash fehlt
 // oder home ist, Home-Daten laden und nichts zu switchen.
@@ -14833,9 +14833,9 @@ async function alShowDetail(logId) {
     ${entry.error_summary ? `<div class="al-error-banner"><strong>Fehler:</strong> ${esc(entry.error_summary)}</div>` : ''}
     ${entry.stdout ? `<details><summary style="cursor:pointer;margin-bottom:8px;font-size:13px;color:var(--fg-3)">Vollstaendiger Output</summary><div class="al-stdout">${esc(entry.stdout)}</div></details>` : ''}
     ${entry.status === 'error' ? `<div style="margin-top:16px;text-align:right;display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn btn-sm btn-ghost" onclick="alDelete(${entry.id});closeActionDetailModal()">Eintrag loeschen</button>
+      <button class="btn btn-sm btn-ghost" onclick="alDelete(${entry.id});closeActionDetailModal()">Eintrag löschen</button>
       <button class="btn btn-sm" style="background:var(--red);color:#fff" onclick="alRetry(${entry.id});closeActionDetailModal()">Nochmal versuchen</button>
-    </div>` : `<div style="margin-top:16px;text-align:right"><button class="btn btn-sm btn-ghost" onclick="alDelete(${entry.id});closeActionDetailModal()">Eintrag loeschen</button></div>`}
+    </div>` : `<div style="margin-top:16px;text-align:right"><button class="btn btn-sm btn-ghost" onclick="alDelete(${entry.id});closeActionDetailModal()">Eintrag löschen</button></div>`}
   `;
   document.getElementById('action-detail-modal').classList.add('open');
 }

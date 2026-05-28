@@ -585,13 +585,14 @@ async def _dispatch_reboot_step(
     task_name = f"SoftshelReboot_{run_id}"
     ps_task_name = _ps_quote(task_name)
 
-    # AtStartup Scheduled Task: sendet Callback nach Neustart und loescht sich selbst.
-    # Nutzt Net.WebClient (kein Invoke-WebRequest) und leeren Proxy — wie alle anderen
-    # PS-Scripts im Projekt.
+    # Reboot-Callback-Task: feuert AtStartup + bei JEDEM User-Logon. Zwei Trigger
+    # weil bei Zscaler/VPN-Clients der Tunnel oft erst nach User-Login hochkommt
+    # und ein reiner AtStartup-Versuch ins Leere geht. Bei Erfolg loescht sich
+    # der Task selbst — bei Misserfolg bleibt er registriert und versucht es
+    # beim naechsten Logon erneut.
     reboot_script = f"""$ErrorActionPreference = 'Continue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# AtStartup Task registrieren — laeuft einmal nach Neustart
 $taskName = '{ps_task_name}'
 $callbackUrl = '{ps_callback_url}'
 
@@ -599,7 +600,9 @@ $postScript = @'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $url = '{ps_callback_url}'
 $body = '{{"exit_code":0,"output":"Neustart abgeschlossen","success":true,"final":true}}'
-$delays = @(0, 5, 15, 30, 60)
+# Lange Retry-Strecke: Zscaler/VPN-Tunnel braucht oft 1-3 min nach Logon
+$delays = @(0, 10, 20, 40, 60, 90, 120, 180, 240)
+$ok = $false
 foreach ($d in $delays) {{
     if ($d -gt 0) {{ Start-Sleep -Seconds $d }}
     try {{
@@ -612,30 +615,36 @@ foreach ($d in $delays) {{
         $req.ContentLength = $bytes.Length
         $s = $req.GetRequestStream(); $s.Write($bytes,0,$bytes.Length); $s.Close()
         $req.GetResponse().Close()
+        $ok = $true
         break
     }} catch {{}}
 }}
-# Task selbst loeschen
-schtasks /Delete /TN '{ps_task_name}' /F 2>$null
+# Task NUR bei Erfolg loeschen — sonst bleibt er fuer naechsten Logon-Versuch erhalten.
+if ($ok) {{
+    schtasks /Delete /TN '{ps_task_name}' /F 2>$null
+}}
 '@
 
 # Script in TEMP ablegen
 $scriptPath = Join-Path (Join-Path $env:SystemRoot 'Temp') 'sf_reboot_cb_{run_id}.ps1'
 [System.IO.File]::WriteAllText($scriptPath, $postScript, [Text.Encoding]::UTF8)
 
-# AtStartup Scheduled Task anlegen (laeuft als SYSTEM)
-$action  = New-ScheduledTaskAction -Execute 'powershell.exe' `
+# Zwei Trigger anlegen: AtStartup (SYSTEM, Tunnel evtl. noch nicht da) +
+# AtLogon (irgendein User — typischerweise wenn Zscaler-Client auch ready ist).
+$tStart = New-ScheduledTaskTrigger -AtStartup
+$tLogon = New-ScheduledTaskTrigger -AtLogOn
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
     -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
-$trigger = New-ScheduledTaskTrigger -AtStartup
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5) `
-    -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 8) `
+    -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
+    -MultipleInstances IgnoreNew
 $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
 
 Register-ScheduledTask -TaskName '{ps_task_name}' `
-    -Action $action -Trigger $trigger `
+    -Action $action -Trigger @($tStart, $tLogon) `
     -Settings $settings -Principal $principal -Force | Out-Null
 
-Write-Output "AtStartup Task registriert: {task_name}"
+Write-Output "Reboot-Callback-Task registriert: {task_name} (AtStartup + AtLogon)"
 Write-Output "Warte auf Reboot-Trigger vom Client oder Force-Timeout..."
 """
 
