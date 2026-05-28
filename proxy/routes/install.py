@@ -1360,6 +1360,26 @@ async def uninstall_package(
 
 # ── Shared dispatch helpers (für admin-driven bulk + profile apply) ───────────
 
+async def _register_or_reuse_log(
+    existing_log_id: int | None,
+    *, agent_id: str, hostname: str, package_name: str, display_name: str,
+    pkg_type: str, action: str, job_id: str, metadata: str | None = None,
+    workflow_run_id: int | None = None,
+) -> int:
+    """Erzeugt neuen action_log-Eintrag ODER nutzt den vorhandenen (queued)
+    Eintrag wieder (Queue-Tick). Returns log_id."""
+    if existing_log_id:
+        ok = await database.repurpose_queued_action_log(
+            existing_log_id, job_id=job_id, metadata=metadata,
+        )
+        if ok:
+            return existing_log_id
+    return await database.create_action_log(
+        agent_id, hostname, package_name, display_name, pkg_type, action,
+        job_id=job_id, metadata=metadata, workflow_run_id=workflow_run_id,
+    )
+
+
 async def dispatch_install_for_agent(
     agent_id: str,
     hostname: str,
@@ -1367,6 +1387,7 @@ async def dispatch_install_for_agent(
     version_pin: str | None = None,
     workflow_run_id: int | None = None,
     allow_duplicate: bool = False,
+    existing_log_id: int | None = None,
 ) -> dict:
     """Spawned einen install (oder upgrade fuer winget) für genau ein
     (Agent, Paket)-Pair und logged in install_log.
@@ -1418,9 +1439,10 @@ async def dispatch_install_for_agent(
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         import json as _json
         meta = _json.dumps({"winget_scope": scope, "winget_id": package_name, "version": ver})
-        log_id = await database.create_action_log(
-            agent_id, hostname, package_name,
-            pkg["display_name"], "winget", action, job_id=job_id, metadata=meta,
+        log_id = await _register_or_reuse_log(
+            existing_log_id, agent_id=agent_id, hostname=hostname,
+            package_name=package_name, display_name=pkg["display_name"],
+            pkg_type="winget", action=action, job_id=job_id, metadata=meta,
             workflow_run_id=workflow_run_id,
         )
         _spawn_bg(_deliver_command_bg(
@@ -1437,9 +1459,10 @@ async def dispatch_install_for_agent(
         inner_cmd = await _build_plugin_install_command(pkg, agent_id)
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, package_name,
-            pkg["display_name"], "plugin", "install", job_id=job_id,
+        log_id = await _register_or_reuse_log(
+            existing_log_id, agent_id=agent_id, hostname=hostname,
+            package_name=package_name, display_name=pkg["display_name"],
+            pkg_type="plugin", action="install", job_id=job_id,
             workflow_run_id=workflow_run_id,
         )
         _spawn_bg(_deliver_command_bg(
@@ -1456,9 +1479,10 @@ async def dispatch_install_for_agent(
         inner_cmd = await _build_install_command(pkg, agent_id)
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, package_name,
-            pkg["display_name"], "custom", "install", job_id=job_id,
+        log_id = await _register_or_reuse_log(
+            existing_log_id, agent_id=agent_id, hostname=hostname,
+            package_name=package_name, display_name=pkg["display_name"],
+            pkg_type="custom", action="install", job_id=job_id,
             workflow_run_id=workflow_run_id,
         )
         _spawn_bg(_deliver_command_bg(
@@ -1473,9 +1497,10 @@ async def dispatch_install_for_agent(
         inner_cmd = _build_choco_command("install", package_name, version=version_pin or pkg.get("version_pin"))
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, package_name,
-            pkg["display_name"], "choco", "install", job_id=job_id,
+        log_id = await _register_or_reuse_log(
+            existing_log_id, agent_id=agent_id, hostname=hostname,
+            package_name=package_name, display_name=pkg["display_name"],
+            pkg_type="choco", action="install", job_id=job_id,
             workflow_run_id=workflow_run_id,
         )
         _spawn_bg(_deliver_command_bg(
@@ -1504,6 +1529,7 @@ async def dispatch_uninstall_for_agent(
     hostname: str,
     pkg: dict,
     allow_duplicate: bool = False,
+    existing_log_id: int | None = None,
 ) -> dict:
     """Spawned uninstall-Aktion fuer ein (Agent, Paket)-Pair.
 
@@ -1538,9 +1564,10 @@ async def dispatch_uninstall_for_agent(
         scope = pkg.get("winget_scope") or "auto"
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, package_name,
-            pkg["display_name"], "winget", "uninstall", job_id=job_id,
+        log_id = await _register_or_reuse_log(
+            existing_log_id, agent_id=agent_id, hostname=hostname,
+            package_name=package_name, display_name=pkg["display_name"],
+            pkg_type="winget", action="uninstall", job_id=job_id,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1554,9 +1581,10 @@ async def dispatch_uninstall_for_agent(
         inner_cmd = _build_plugin_uninstall_command(pkg)
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, package_name,
-            pkg["display_name"], "plugin", "uninstall", job_id=job_id,
+        log_id = await _register_or_reuse_log(
+            existing_log_id, agent_id=agent_id, hostname=hostname,
+            package_name=package_name, display_name=pkg["display_name"],
+            pkg_type="plugin", action="uninstall", job_id=job_id,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1579,9 +1607,10 @@ async def dispatch_uninstall_for_agent(
         )
         job_id = _generate_job_id()
         ps_cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, package_name,
-            pkg["display_name"], "custom", "uninstall", job_id=job_id,
+        log_id = await _register_or_reuse_log(
+            existing_log_id, agent_id=agent_id, hostname=hostname,
+            package_name=package_name, display_name=pkg["display_name"],
+            pkg_type="custom", action="uninstall", job_id=job_id,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1594,9 +1623,10 @@ async def dispatch_uninstall_for_agent(
         inner_cmd = _build_choco_command("uninstall", package_name)
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, package_name,
-            pkg["display_name"], "choco", "uninstall", job_id=job_id,
+        log_id = await _register_or_reuse_log(
+            existing_log_id, agent_id=agent_id, hostname=hostname,
+            package_name=package_name, display_name=pkg["display_name"],
+            pkg_type="choco", action="uninstall", job_id=job_id,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],

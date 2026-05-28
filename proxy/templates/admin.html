@@ -5087,6 +5087,8 @@ button.outdated-badge.clickable:disabled {
   font-size: 11px; font-weight: 600; line-height: 1;
   white-space: nowrap;
 }
+.al-badge.queued   { background: var(--amber-bg); color: var(--amber); }
+.al-badge.cancelled{ background: var(--bg-hover); color: var(--fg-4); }
 .al-badge.pending  { background: var(--bg-hover); color: var(--fg-4); }
 .al-badge.running  { background: var(--blue-bg); color: var(--blue); }
 .al-badge.success  { background: var(--green-bg); color: var(--green); }
@@ -5847,11 +5849,13 @@ body.help-active [data-help]:not(.tab)::after {
     <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
       <select id="al-filter-status" class="input input-sm" onchange="loadActionLog(true)" style="width:140px">
         <option value="">Alle Status</option>
+        <option value="queued">Vorgemerkt</option>
         <option value="pending">Ausstehend</option>
         <option value="running">Laeuft</option>
         <option value="success">Erfolg</option>
         <option value="error">Fehler</option>
         <option value="skipped">Uebersprungen</option>
+        <option value="cancelled">Abgebrochen</option>
       </select>
       <select id="al-filter-type" class="input input-sm" onchange="loadActionLog(true)" style="width:140px">
         <option value="">Alle Typen</option>
@@ -10869,13 +10873,13 @@ async function _assignPkgToAgent(agentId, hostname, btn) {
   const orig = btn.innerHTML;
   btn.innerHTML = '…';
   try {
-    await api('POST', `/admin/api/agents/${encodeURIComponent(agentId)}/install/${encodeURIComponent(pkgName)}`);
-    toast(`Install-Dispatch an ${hostname} gestartet`);
-    // Optimistisch: Agent zu installed_ids hinzufügen damit er aus Picker verschwindet
-    _pkgAgentsCurrent.installed_ids.add(agentId);
-    _renderPkgAssignCandidates();
-    // Nach 3s Panel neu laden
-    setTimeout(() => openPkgAgentsPanel(_pkgAgentsCurrent.name, _pkgAgentsCurrent.display_name), 3000);
+    const _resp = await api('POST', `/admin/api/agents/${encodeURIComponent(agentId)}/install/${encodeURIComponent(pkgName)}`);
+    await handleDispatchResponse(_resp, () => {
+      toast(`Install-Dispatch an ${hostname} gestartet`);
+      _pkgAgentsCurrent.installed_ids.add(agentId);
+      _renderPkgAssignCandidates();
+      setTimeout(() => openPkgAgentsPanel(_pkgAgentsCurrent.name, _pkgAgentsCurrent.display_name), 3000);
+    });
   } catch (e) {
     btn.disabled = false;
     btn.innerHTML = orig;
@@ -11218,10 +11222,13 @@ async function installOnAgent(agentId, pkgName, hostname, btnEl) {
   btnEl.disabled = true;
   btnEl.innerHTML = '…';
   try {
-    await api('POST',
+    const _resp = await api('POST',
       `/admin/api/agents/${encodeURIComponent(agentId)}/install/${encodeURIComponent(pkgName)}`);
-    toast(`Update auf ${hostname} gestartet`);
-    setTimeout(() => { loadDistributions(); if (_distAgentsPkg) loadDistAgents(); }, 3000);
+    const _r = await handleDispatchResponse(_resp, () => {
+      toast(`Update auf ${hostname} gestartet`);
+      setTimeout(() => { loadDistributions(); if (_distAgentsPkg) loadDistAgents(); }, 3000);
+    });
+    if (_r !== 'dispatched') { btnEl.disabled = false; btnEl.innerHTML = orig; }
   } catch (e) {
     btnEl.disabled = false;
     btnEl.innerHTML = orig;
@@ -11237,10 +11244,13 @@ function uninstallOnAgent(agentId, pkgName, hostname, displayName, btnEl) {
       btnEl.disabled = true;
       btnEl.innerHTML = '…';
       try {
-        await api('POST',
+        const _resp = await api('POST',
           `/admin/api/agents/${encodeURIComponent(agentId)}/uninstall/${encodeURIComponent(pkgName)}`);
-        toast(`Uninstall auf ${hostname} gestartet`);
-        setTimeout(() => { loadDistributions(); if (_distAgentsPkg) loadDistAgents(); }, 3000);
+        const _r = await handleDispatchResponse(_resp, () => {
+          toast(`Uninstall auf ${hostname} gestartet`);
+          setTimeout(() => { loadDistributions(); if (_distAgentsPkg) loadDistAgents(); }, 3000);
+        });
+        if (_r !== 'dispatched') { btnEl.disabled = false; btnEl.innerHTML = orig; }
       } catch (e) {
         btnEl.disabled = false;
         btnEl.innerHTML = orig;
@@ -12089,9 +12099,12 @@ async function agentSoftwareInstall(packageName, displayName) {
   const snapshot = await _captureScanSnapshot();
   try {
     _markRowBusy(packageName);
-    await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/install/${encodeURIComponent(packageName)}`);
-    toast(`„${displayName}" auf ${a.hostname} läuft — winget kann ein paar Minuten brauchen.`);
-    _pollUntilScanned(snapshot, displayName);
+    const _resp = await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/install/${encodeURIComponent(packageName)}`);
+    const _r = await handleDispatchResponse(_resp, () => {
+      toast(`„${displayName}" auf ${a.hostname} läuft — winget kann ein paar Minuten brauchen.`);
+      _pollUntilScanned(snapshot, displayName);
+    });
+    if (_r !== 'dispatched') _agentSoftwareBusy.delete(packageName);
   } catch (e) {
     _agentSoftwareBusy.delete(packageName);
   }
@@ -12107,9 +12120,12 @@ function agentSoftwareUninstall(packageName, displayName) {
       const snapshot = await _captureScanSnapshot();
       try {
         _markRowBusy(packageName);
-        await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/uninstall/${encodeURIComponent(packageName)}`);
-        toast(`Deinstallation von „${displayName}" gestartet`);
-        _pollUntilScanned(snapshot, displayName);
+        const _resp = await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/uninstall/${encodeURIComponent(packageName)}`);
+        const _r = await handleDispatchResponse(_resp, () => {
+          toast(`Deinstallation von „${displayName}" gestartet`);
+          _pollUntilScanned(snapshot, displayName);
+        });
+        if (_r !== 'dispatched') _agentSoftwareBusy.delete(packageName);
       } catch (e) {
         _agentSoftwareBusy.delete(packageName);
       }
@@ -13396,6 +13412,54 @@ async function refreshWingetDiscoveryCount() {
 }
 
 // ── Confirm modal ────────────────────────────────────────────────────────────
+// Wrapper fuer install/uninstall-Dispatch-Responses. Wenn der Server
+// `queueable=true` meldet (Agent offline), wird ein Confirm-Dialog gezeigt
+// und bei Bestaetigung der Befehl in die Queue gelegt. onDispatched wird
+// nur ausgefuehrt wenn der Befehl LIVE gestartet wurde (kein Queue).
+// Returns Promise<'dispatched'|'queued'|'cancelled'>.
+async function handleDispatchResponse(resp, onDispatched) {
+  if (resp && resp.queueable) {
+    return await new Promise((resolve) => {
+      const actionLabel = resp.action === 'uninstall' ? 'Deinstallation' : 'Installation';
+      showConfirm(
+        'Agent nicht erreichbar',
+        `${resp.hostname} ist gerade nicht ueber Tactical erreichbar (Status: ${resp.reason}). ` +
+        `${actionLabel} von „${resp.display_name}" jetzt vormerken? Sobald der Agent wieder online ist, wird sie automatisch ausgefuehrt.`,
+        async () => {
+          try {
+            await api('POST', '/admin/api/queue-command', {
+              agent_id: resp.agent_id,
+              package_name: resp.package_name,
+              action: resp.action,
+            });
+            toast(`${actionLabel} vorgemerkt — wird ausgefuehrt sobald ${resp.hostname} online ist.`);
+            resolve('queued');
+          } catch (e) {
+            resolve('cancelled');
+          }
+        },
+        'Vormerken',
+        'btn-primary',
+      );
+      // Cancel-Button hijack: das bestehende Modal hat einen close-Button —
+      // wenn der User schliesst, resolve('cancelled'). showConfirm setzt onclick
+      // nur fuer OK; Cancel macht closeConfirm() ohne Callback. Wir setzen einen
+      // Watcher der nach Modal-Schliessen prueft.
+      const modalEl = document.getElementById('confirm-modal');
+      const mo = new MutationObserver(() => {
+        if (!modalEl.classList.contains('open')) {
+          mo.disconnect();
+          // Falls schon resolved (OK-Pfad), no-op
+          setTimeout(() => resolve('cancelled'), 50);
+        }
+      });
+      mo.observe(modalEl, { attributes: true, attributeFilter: ['class'] });
+    });
+  }
+  if (typeof onDispatched === 'function') onDispatched();
+  return 'dispatched';
+}
+
 function showConfirm(title, text, onOk, okLabel, okClass) {
   document.getElementById('confirm-title').textContent = title;
   document.getElementById('confirm-text').textContent = text;
@@ -14580,7 +14644,7 @@ init();
 var alPage = 0;
 const AL_PAGE_SIZE = 50;
 var _alFilterTimer = null;
-const _alStatusLabel = { pending: 'Ausstehend', running: 'Laeuft', success: 'Erfolg', error: 'Fehler', skipped: 'Uebersprungen' };
+const _alStatusLabel = { queued: 'Vorgemerkt', pending: 'Ausstehend', running: 'Laeuft', success: 'Erfolg', error: 'Fehler', skipped: 'Uebersprungen', cancelled: 'Abgebrochen' };
 
 // Tab aus URL-Hash wiederherstellen. Default ist home — wenn Hash fehlt
 // oder home ist, Home-Daten laden und nichts zu switchen.
@@ -14686,9 +14750,12 @@ function renderActionLog(entries) {
 
   const rows = entries.map(e => {
     const dur = _alDuration(e.created_at, e.completed_at);
-    const retryBtn = e.status === 'error'
-      ? `<button class="al-retry" onclick="event.stopPropagation();alRetry(${e.id})" title="Nochmal versuchen">&#8635;</button>`
-      : '';
+    let retryBtn = '';
+    if (e.status === 'error') {
+      retryBtn = `<button class="al-retry" onclick="event.stopPropagation();alRetry(${e.id})" title="Nochmal versuchen">&#8635;</button>`;
+    } else if (e.status === 'queued') {
+      retryBtn = `<button class="al-retry" onclick="event.stopPropagation();alCancelQueued(${e.id})" title="Vormerkung abbrechen">&times;</button>`;
+    }
     return `<div class="al-row${e.status === 'error' ? ' al-error' : ''}" onclick="alShowDetail(${e.id})">
       <span><span class="al-badge ${esc(e.status)}">${esc(_alStatusLabel[e.status] || e.status)}</span></span>
       <span class="truncate">${esc(e.hostname)}</span>
@@ -14754,6 +14821,14 @@ async function alRetry(logId) {
       toast('Aktion wird wiederholt...');
       loadActionLog();
     }
+  } catch (e) { /* api() hat bereits getoastet */ }
+}
+
+async function alCancelQueued(logId) {
+  try {
+    await api('POST', '/admin/api/action-log/' + logId + '/cancel-queued');
+    toast('Vormerkung abgebrochen');
+    loadActionLog();
   } catch (e) { /* api() hat bereits getoastet */ }
 }
 
