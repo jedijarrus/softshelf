@@ -3825,6 +3825,22 @@ async def update_action_log_status(log_id: int, status: str):
         await db.commit()
 
 
+async def repurpose_queued_action_log(
+    log_id: int, job_id: str | None, metadata: str | None = None,
+) -> bool:
+    """Existierenden queued/pending action_log fuer einen frischen Dispatch
+    nutzen: setzt job_id + metadata, status='pending'. Vom Queue-Tick verwendet
+    damit der bestehende Eintrag (mit urspruenglichem created_at) erhalten bleibt."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET job_id = ?, metadata = ?, status = 'pending' "
+            "WHERE id = ?",
+            (job_id, metadata, log_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
 async def complete_action_log(
     log_id: int, status: str, exit_code: int | None = None,
     error_summary: str | None = None, stdout: str | None = None,
@@ -3836,6 +3852,62 @@ async def complete_action_log(
             (status, exit_code, error_summary, stdout, log_id),
         )
         await db.commit()
+
+
+async def create_queued_action_log(
+    agent_id: str, hostname: str, package_name: str,
+    display_name: str, pkg_type: str, action: str,
+    metadata: str | None = None,
+) -> int:
+    """INSERT action_log mit status='queued'. Wartet auf Agent-Online via Queue-Tick."""
+    async with _db() as db:
+        cur = await db.execute(
+            "INSERT INTO action_log "
+            "(agent_id, hostname, package_name, display_name, pkg_type, action, "
+            " status, metadata) "
+            "VALUES (?,?,?,?,?,?, 'queued', ?)",
+            (agent_id, hostname, package_name, display_name, pkg_type, action, metadata),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def list_queued_actions() -> list[dict]:
+    """Alle action_log-Eintraege mit status='queued', sortiert nach age (oldest first)."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, agent_id, hostname, package_name, display_name, pkg_type, "
+            "       action, created_at, metadata "
+            "FROM action_log WHERE status = 'queued' "
+            "ORDER BY id ASC"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def cancel_queued_action(log_id: int) -> bool:
+    """status=queued → cancelled. Returns True wenn ein Eintrag betroffen."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET status = 'cancelled', completed_at = datetime('now') "
+            "WHERE id = ? AND status = 'queued'",
+            (log_id,),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def promote_queued_to_pending(log_id: int) -> bool:
+    """status=queued → pending. Wird vom Queue-Tick aufgerufen sobald
+    Agent online. Returns True wenn ein Eintrag betroffen."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET status = 'pending' "
+            "WHERE id = ? AND status = 'queued'",
+            (log_id,),
+        )
+        await db.commit()
+        return cur.rowcount > 0
 
 
 async def get_action_log(

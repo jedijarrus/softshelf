@@ -2942,6 +2942,43 @@ async def bulk_delete_errors_endpoint(body: _BulkErrorIdsBody):
     return {"ok": True, "deleted": count}
 
 
+class QueueCommandBody(BaseModel):
+    agent_id: str
+    package_name: str
+    action: str = Field(pattern=r"^(install|uninstall)$")
+
+
+@router.post("/admin/api/queue-command", dependencies=[Depends(_require_admin)])
+async def queue_command(body: QueueCommandBody):
+    """Legt einen Befehl als action_log mit status='queued' an. Der Queue-Tick
+    dispatched, sobald der Agent ueber Tactical online ist."""
+    if not _AGENT_ID_RE.fullmatch(body.agent_id):
+        raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
+    agent = await _resolve_agent(body.agent_id)
+    pkg = await database.get_package(body.package_name)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Paket nicht gefunden")
+    log_id = await database.create_queued_action_log(
+        agent_id=body.agent_id,
+        hostname=agent["hostname"],
+        package_name=pkg["name"],
+        display_name=pkg.get("display_name") or pkg["name"],
+        pkg_type=pkg.get("type") or "custom",
+        action=body.action,
+    )
+    return {"ok": True, "log_id": log_id, "message": "Befehl vorgemerkt."}
+
+
+@router.post("/admin/api/action-log/{log_id}/cancel-queued",
+             dependencies=[Depends(_require_admin)])
+async def cancel_queued_action_endpoint(log_id: int):
+    """Bricht einen vorgemerkten (queued) Befehl ab. Nur fuer status=queued."""
+    ok = await database.cancel_queued_action(log_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Kein vorgemerkter Eintrag mit dieser ID.")
+    return {"ok": True}
+
+
 @router.delete("/admin/api/action-log/{log_id}", dependencies=[Depends(_require_admin)])
 async def delete_action_log_entry(log_id: int):
     """Einzelnen Action-Log-Eintrag loeschen."""
@@ -3428,6 +3465,39 @@ async def _resolve_agent(agent_id: str) -> dict:
     raise HTTPException(status_code=404, detail="Agent nicht gefunden")
 
 
+async def _agent_online_check(agent_id: str) -> tuple[bool, str]:
+    """Pre-Flight: ist der Agent ueber Tactical erreichbar?
+    Returns (online, reason). Bei API-Fehler -> (False, 'check_failed')."""
+    try:
+        info = await get_rmm_client().check_agent_status(agent_id)
+    except Exception as e:
+        logger.warning("agent_online_check %s: %s", agent_id[:12], e)
+        return (False, "check_failed")
+    status = (info or {}).get("status") or "unknown"
+    if status == "online":
+        return (True, "online")
+    return (False, status)
+
+
+def _queueable_payload(
+    agent_id: str, hostname: str, pkg: dict, action: str, reason: str
+) -> dict:
+    """Antwort-Body wenn ein Befehl wegen Offline-Agent nicht abgesetzt
+    wurde. Frontend erkennt `queueable=True` und bietet 'Vormerken' an."""
+    return {
+        "ok": False,
+        "queueable": True,
+        "agent_id": agent_id,
+        "hostname": hostname,
+        "package_name": pkg["name"],
+        "display_name": pkg.get("display_name") or pkg["name"],
+        "pkg_type": pkg.get("type") or "custom",
+        "action": action,
+        "reason": reason,
+        "message": f"Agent {hostname!r} nicht erreichbar (Status: {reason}). Befehl kann vorgemerkt werden.",
+    }
+
+
 @router.post(
     "/admin/api/agents/{agent_id}/install/{package_name}",
     dependencies=[Depends(_require_admin)],
@@ -3446,6 +3516,9 @@ async def admin_install_on_agent(agent_id: str, package_name: str):
         raise HTTPException(status_code=404, detail="Paket nicht gefunden")
 
     agent = await _resolve_agent(agent_id)
+    online, reason = await _agent_online_check(agent_id)
+    if not online:
+        return _queueable_payload(agent_id, agent["hostname"], pkg, "install", reason)
     result = await dispatch_install_for_agent(agent_id, agent["hostname"], pkg)
     return {"ok": True, "agent": agent["hostname"], **result}
 
@@ -3467,6 +3540,9 @@ async def admin_uninstall_on_agent(agent_id: str, package_name: str):
         raise HTTPException(status_code=404, detail="Paket nicht gefunden")
 
     agent = await _resolve_agent(agent_id)
+    online, reason = await _agent_online_check(agent_id)
+    if not online:
+        return _queueable_payload(agent_id, agent["hostname"], pkg, "uninstall", reason)
     result = await dispatch_uninstall_for_agent(agent_id, agent["hostname"], pkg)
     return {"ok": True, "agent": agent["hostname"], **result}
 

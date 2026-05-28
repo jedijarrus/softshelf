@@ -356,6 +356,66 @@ async def _rollout_auto_advance_tick():
         logger.exception("rollout auto-advance tick crashed: %s", e)
 
 
+async def _queued_actions_tick():
+    """Alle 2 Min: pruefe queued action_log-Eintraege. Wenn der Ziel-Agent
+    laut Tactical online ist → promote auf 'pending' und dispatch ueber den
+    normalen Pfad (dispatch_install_for_agent / dispatch_uninstall_for_agent).
+    Agent offline → skippen, naechster Tick versucht es erneut.
+
+    Bei Tactical-API-Fehler im check skippen wir konservativ — wir wollen
+    keinen Dispatch ohne Online-Beweis.
+    """
+    try:
+        queued = await database.list_queued_actions()
+        if not queued:
+            return
+        tc = get_rmm_client()
+        from routes.install import (
+            dispatch_install_for_agent, dispatch_uninstall_for_agent,
+        )
+        for entry in queued:
+            agent_id = entry["agent_id"]
+            try:
+                info = await tc.check_agent_status(agent_id)
+            except Exception as e:
+                logger.warning("queue-tick: check_agent_status %s: %s", agent_id[:12], e)
+                continue
+            if (info or {}).get("status") != "online":
+                continue
+            pkg = await database.get_package(entry["package_name"])
+            if not pkg:
+                logger.warning(
+                    "queue-tick: paket %s nicht mehr in whitelist — cancel queued %s",
+                    entry["package_name"], entry["id"],
+                )
+                await database.cancel_queued_action(entry["id"])
+                continue
+            promoted = await database.promote_queued_to_pending(entry["id"])
+            if not promoted:
+                # Race: anderer Tick / manueller Cancel hat den Eintrag schon angefasst
+                continue
+            try:
+                if entry["action"] == "uninstall":
+                    await dispatch_uninstall_for_agent(
+                        agent_id, entry["hostname"], pkg, existing_log_id=entry["id"],
+                    )
+                else:
+                    await dispatch_install_for_agent(
+                        agent_id, entry["hostname"], pkg, existing_log_id=entry["id"],
+                    )
+                logger.info(
+                    "queue-tick: dispatched action_log %s (%s %s) agent=%s",
+                    entry["id"], entry["action"], entry["package_name"], agent_id[:12],
+                )
+            except Exception as e:
+                logger.exception("queue-tick: dispatch failed for %s: %s", entry["id"], e)
+                await database.complete_action_log(
+                    entry["id"], "error", error_summary=str(e)[:300],
+                )
+    except Exception as e:
+        logger.exception("queue tick crashed: %s", e)
+
+
 async def _scheduled_jobs_tick():
     """Minuetlicher Tick: checkt pending scheduled_jobs deren run_at <= now,
     fuehrt sie aus und markiert als done/failed."""
@@ -541,6 +601,17 @@ async def lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
         misfire_grace_time=120,
+    )
+    # Alle 2 Min: queued action_log Eintraege dispatchen wenn Agent ueber
+    # Tactical online ist (Offline-Queue, v2.6.x).
+    scheduler.add_job(
+        _queued_actions_tick,
+        IntervalTrigger(minutes=2),
+        id="_queued_actions_tick",
+        name="_queued_actions_tick",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=180,
     )
     scheduler.start()
     app.state.scheduler = scheduler
