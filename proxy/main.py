@@ -360,6 +360,20 @@ _queue_tactical_fail_streak = 0
 _QUEUE_TACTICAL_WARN_AFTER = 3  # nach 3 Ticks (~6 min) lautes Warning
 
 
+async def _log_cleanup_job():
+    """Taeglicher Prune fuer audit_log + action_log gemaess
+    `log_retention_days` (Default 90). Ergaenzt den Boot-Cleanup damit
+    auch laufende Container die DB nicht ueberwuchern lassen."""
+    try:
+        days = await runtime_int("log_retention_days") or 90
+        n = await database.cleanup_old_logs(days)
+        if n:
+            logger.info("log cleanup: %d Eintraege > %dd geloescht", n, days)
+        await database.cleanup_expired_sessions()
+    except Exception as e:
+        logger.warning("log cleanup tick: %s", e)
+
+
 async def _queued_actions_tick():
     """Alle 2 Min: pruefe queued action_log-Eintraege. Wenn der Ziel-Agent
     laut Tactical online ist → promote auf 'pending' und dispatch ueber den
@@ -681,6 +695,17 @@ async def lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
         misfire_grace_time=180,
+    )
+    # Taeglich 03:30 UTC: alte audit_log / action_log Eintraege prunen.
+    # Bisher lief das nur beim Boot — bei seltenem Restart wuchs die DB.
+    scheduler.add_job(
+        _log_cleanup_job,
+        CronTrigger(hour=3, minute=30),
+        id="_log_cleanup_job",
+        name="_log_cleanup_job",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
     scheduler.start()
     app.state.scheduler = scheduler

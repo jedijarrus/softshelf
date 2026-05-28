@@ -751,24 +751,24 @@ async def health_ping():
             await cur.fetchone()
 
 
-async def cleanup_old_logs(days: int):
-    """Löscht audit_log, install_log und event_log Einträge älter als N Tage."""
+async def cleanup_old_logs(days: int) -> int:
+    """Löscht audit_log, install_log und event_log Einträge älter als N Tage.
+    Returns Gesamt-Anzahl gelöschter Zeilen."""
     if days <= 0:
-        return
+        return 0
+    total = 0
     async with _db() as db:
-        await db.execute(
-            "DELETE FROM audit_log WHERE ts < datetime('now', ?)",
-            (f"-{days} days",),
-        )
-        await db.execute(
-            "DELETE FROM install_log WHERE ts < datetime('now', ?)",
-            (f"-{days} days",),
-        )
-        await db.execute(
-            "DELETE FROM event_log WHERE ts < datetime('now', ?)",
-            (f"-{days} days",),
-        )
+        for tbl in ("audit_log", "install_log", "event_log"):
+            try:
+                cur = await db.execute(
+                    f"DELETE FROM {tbl} WHERE ts < datetime('now', ?)",
+                    (f"-{days} days",),
+                )
+                total += cur.rowcount or 0
+            except Exception:
+                pass
         await db.commit()
+    return total
 
 
 # ── Packages ──────────────────────────────────────────────────────────────────
