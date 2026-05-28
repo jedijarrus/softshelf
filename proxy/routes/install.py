@@ -1115,7 +1115,8 @@ async def install_package(
     agent_id = token["agent_id"]
     hostname = token["hostname"]
     _ag_row = await database.get_agent(agent_id)
-    triggered_by = f"kiosk:{(_ag_row or {}).get('logged_in_user') or '?'}"
+    _u = ((_ag_row or {}).get('logged_in_user') or '').strip()
+    triggered_by = f"kiosk:{_u}" if _u else "kiosk"
 
     pkg = await database.get_package(body.package_name)
     if not pkg:

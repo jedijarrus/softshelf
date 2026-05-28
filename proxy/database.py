@@ -3963,23 +3963,25 @@ async def get_action_log(
     clauses: list[str] = []
     params: list = []
     if agent_id:
-        clauses.append("agent_id = ?"); params.append(agent_id)
+        clauses.append("al.agent_id = ?"); params.append(agent_id)
     if package_name:
-        clauses.append("package_name = ?"); params.append(package_name)
+        clauses.append("al.package_name = ?"); params.append(package_name)
     if status:
-        clauses.append("status = ?"); params.append(status)
+        clauses.append("al.status = ?"); params.append(status)
     if pkg_type:
-        clauses.append("pkg_type = ?"); params.append(pkg_type)
+        clauses.append("al.pkg_type = ?"); params.append(pkg_type)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     params += [limit, offset]
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            f"SELECT id, agent_id, hostname, package_name, display_name, "
-            f"pkg_type, action, status, exit_code, error_summary, "
-            f"created_at, completed_at, error_acked_at, triggered_by, "
-            f"workflow_run_id "
-            f"FROM action_log {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            f"SELECT al.id, al.agent_id, al.hostname, al.package_name, al.display_name, "
+            f"al.pkg_type, al.action, al.status, al.exit_code, al.error_summary, "
+            f"al.created_at, al.completed_at, al.error_acked_at, al.triggered_by, "
+            f"al.workflow_run_id, a.logged_in_user "
+            f"FROM action_log al LEFT JOIN agents a ON a.agent_id = al.agent_id "
+            f"{where} "
+            f"ORDER BY al.id DESC LIMIT ? OFFSET ?",
             params,
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]

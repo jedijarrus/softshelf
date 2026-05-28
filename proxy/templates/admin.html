@@ -14870,17 +14870,13 @@ function renderActionLog(entries) {
     const ptLabel = _alPkgTypeLabel[e.pkg_type] || e.pkg_type;
     const ptVisual = _alPkgTypeClass[e.pkg_type] || e.pkg_type;
     const actLabel = _alActionLabel[e.action] || e.action;
-    // Username aus triggered_by extrahieren — kiosk:<user> / admin:<user>.
-    // Workflow/queue/system zeigen wir hier nicht extra an (haben keinen User).
-    const trig = e.triggered_by || '';
-    const colonIdx = trig.indexOf(':');
-    const trigKind = colonIdx > 0 ? trig.substring(0, colonIdx) : trig;
-    const trigWho  = colonIdx > 0 ? trig.substring(colonIdx + 1) : '';
-    const showWho  = trigWho && (trigKind === 'kiosk' || trigKind === 'admin' || trigKind === 'bulk');
-    const userSuffix = showWho ? ` <span class="al-cell-user">· ${esc(trigWho)}</span>` : '';
+    // Logged-in Windows-User aus Telemetrie (gleiche Quelle wie Clients-Tab).
+    const who = (e.logged_in_user || '').trim();
+    const userSuffix = who ? ` <span class="al-cell-user">· ${esc(who)}</span>` : '';
+    const titleSuffix = who ? ' · ' + esc(who) : '';
     return `<div class="${rowCls.join(' ')}" onclick="alShowDetail(${e.id})">
       <span><span class="al-badge ${esc(e.status)}">${esc(_alStatusLabel[e.status] || e.status)}</span>${_alTriggerCompact(e.triggered_by, e.workflow_run_id)}</span>
-      <span class="al-cell-text" title="${esc(e.hostname)}${showWho ? ' · ' + esc(trigWho) : ''}">${esc(e.hostname)}${userSuffix}</span>
+      <span class="al-cell-text" title="${esc(e.hostname)}${titleSuffix}">${esc(e.hostname)}${userSuffix}</span>
       <span class="al-cell-text" title="${esc(e.display_name)}">${esc(e.display_name)}</span>
       <span><span class="pkg-type-pill ${esc(ptVisual)}" title="${esc(e.pkg_type)}">${esc(ptLabel)}</span></span>
       <span><span class="al-action-tag" title="${esc(e.action)}">${esc(actLabel)}</span></span>
