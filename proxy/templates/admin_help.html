@@ -18,6 +18,8 @@
         <li><a href="#wf-choco">Choco-Paket freigeben</a></li>
         <li><a href="#wf-custom">Eigenes MSI/EXE/Ordner hochladen</a></li>
         <li><a href="#wf-import">Bulk-Import winget-IDs</a></li>
+        <li><a href="#paket-optionen">Paket-Optionen (Edit-Panel)</a></li>
+        <li><a href="#paket-versionen">Versionen-History (custom)</a></li>
       </ol>
     </li>
     <li><a href="#version-pinning">Version Pinning</a></li>
@@ -42,12 +44,18 @@
     <li><a href="#verteilung">Verteilung & Updates</a></li>
     <li><a href="#fehler">Fehler &amp; Acknowledgement</a></li>
     <li><a href="#aktionen">Aktionen-Log</a></li>
+    <li><a href="#audit-log">Audit-Log</a></li>
     <li><a href="#scheduled">Wartungsfensters (Geplant)</a></li>
     <li><a href="#clients">Clients & Agent-Detail</a></li>
+    <li><a href="#client-update">Tray-Self-Update & Bulk-Push</a></li>
+    <li><a href="#discovery">Discovery (Software-Erkennung)</a></li>
+    <li><a href="#einladungen">Admin-Einladungen</a></li>
+    <li><a href="#branding">Branding & White-Label</a></li>
     <li><a href="#deployment">Deployment & Updates</a>
       <ol>
         <li><a href="#client-deploy">Kiosk-Client ausrollen</a></li>
         <li><a href="#exe-build">Client-EXEs bauen</a></li>
+        <li><a href="#build-history">Build-History</a></li>
         <li><a href="#settings">Einstellungen</a></li>
         <li><a href="#migration">Auf neuen Host migrieren</a></li>
         <li><a href="#backup">Backup & Restore</a></li>
@@ -331,6 +339,49 @@
 
 <div class="doc-callout info">
   <b>Was passiert beim Install:</b> {{SF_BRAND}} erkennt das ID-Format und setzt automatisch <code>--source msstore</code> und <code>run_as_user=True</code> (MS-Store-Apps sind Per-User-Appx). Der Agent muss einen eingeloggten User haben.
+</div>
+</section>
+
+<section id="paket-optionen">
+<h2>Paket-Optionen (Edit-Panel)</h2>
+
+<p>Im Edit-Panel jedes Pakets (Stift-Icon in der Paket-Liste) gibt es Optionen, die das Verhalten beim Install / Anzeige im Kiosk steuern:</p>
+
+<table class="doc-table">
+  <thead><tr><th>Feld</th><th>Wirkung</th></tr></thead>
+  <tbody>
+    <tr><td><b>Install-Args</b></td><td>Zusätzliche CLI-Argumente, die hinter <code>winget install</code> / <code>choco install</code> drangehängt werden. Beispiele winget: <code>--scope user</code>, <code>--silent</code>, <code>--accept-package-agreements</code>. Choco: <code>--params "/NoDesktopIcon"</code>.</td></tr>
+    <tr><td><b>Process-Check</b></td><td>Komma-separierte Prozessnamen (mit oder ohne <code>.exe</code>). Wenn beim Install einer dieser Prozesse läuft, bricht die Installation mit klarer Fehlermeldung ab. Der Kiosk zeigt dem User „Bitte X schließen" als Modal. Beispiel: <code>firefox,firefox.exe</code>.</td></tr>
+    <tr><td><b>Uninstall ausblenden</b> (<code>hide_uninstall</code>)</td><td>Wenn aktiviert, sehen End-User im Kiosk keinen „Deinstallieren"-Button für dieses Paket. Admin kann weiter über die Verteilung-Sicht deinstallieren. Typisch für Required-Pakete (AV, Backup-Agent).</td></tr>
+    <tr><td><b>Sichtbarkeit im Kiosk</b> (<code>hidden_in_kiosk</code>, 3-state)</td><td>
+      <code>0 = sichtbar</code> (Default): Paket erscheint in jedem Kiosk.<br>
+      <code>1 = versteckt</code>: Paket erscheint nie im Kiosk, nur Admin sieht es. Trotzdem dispatchbar über Profile/Workflows.<br>
+      <code>2 = nur wenn installiert</code>: Paket erscheint im Kiosk-Tab „Installiert", aber nicht in „Alle". Sinnvoll für Pakete, die nicht freiwillig gewählt werden sollen — der User sieht nur dass es da ist und kann updaten.</td></tr>
+    <tr><td><b>Install-Timeout</b></td><td>Sekunden, die der Installer maximal laufen darf. Default 120s. Office/SAP: 600–900s.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section id="paket-versionen">
+<h2>Versionen-History (Custom-Pakete)</h2>
+
+<p>Custom-Pakete (eigene MSI/EXE/Ordner) haben einen vollständigen Versions-Verlauf. Bei jedem Upload einer neuen Version wird die alte als <code>archived</code> markiert; die neue wird <code>current</code> und ist die, die Agents installieren.</p>
+
+<ol class="doc-steps">
+  <li>Tab <b>Pakete</b> → Custom-Paket öffnen (Stift-Icon).</li>
+  <li>Im Edit-Panel: <b>Versionen</b>-Tab (rechts oben im Panel).</li>
+  <li>Liste aller Uploads chronologisch mit Datum, Größe, Uploader, sha256.</li>
+</ol>
+
+<p>Pro Version verfügbar:</p>
+<ul>
+  <li><b>Als aktuell setzen</b> — alte Version wird wieder die aktive. Push-Update kann sie nun an alle Agents verteilen.</li>
+  <li><b>Beschreibung editieren</b> — Versions-Label / Notiz für interne Doku.</li>
+  <li><b>Löschen</b> — Datei + DB-Eintrag entfernt. Nicht möglich wenn die Version gerade <code>current</code> ist.</li>
+</ul>
+
+<div class="doc-callout warning">
+  Versionen-History gibt es <b>nur</b> für custom-Pakete. winget/choco managen ihre Versionen über den jeweiligen Catalog, plugins haben sha256-Tracking pro Agent ohne expliziten History-Tab.
 </div>
 </section>
 
@@ -641,8 +692,13 @@
   </tbody>
 </table>
 
-<h3>Run abbrechen</h3>
-<p>Im Abschnitt <b>Workflows</b> auf der Agent-Detail-Seite: <code>Abbrechen</code>-Button neben dem aktiven Run. Bereits laufende Steps auf dem Agent laufen zu Ende — nur das Weiterschalten zum nächsten Step wird verhindert.</p>
+<h3>Run abbrechen / pausieren / fortsetzen</h3>
+<ul>
+  <li><b>Abbrechen</b> — Status <code>cancelled</code>, kein nächster Step. Bereits laufende Step-Dispatches auf dem Agent laufen zu Ende.</li>
+  <li><b>Pausieren</b> — Status <code>paused</code>. Engine wartet, kein Auto-Advance. Step-Deadline wird ebenfalls eingefroren.</li>
+  <li><b>Fortsetzen</b> — von <code>paused</code> zurück zu <code>running</code>. Neue Step-Deadline wird gesetzt; bei Reboot-Steps wird der AtStartup-Task neu registriert wenn der Original-Task weg ist.</li>
+</ul>
+<p>Buttons im Workflow-Run-Card (Agent-Detail-Seite). Pause/Resume sind kein Ersatz für Abbrechen — sie verhindern nur den nächsten Tick.</p>
 
 <h3>Workflow im Kiosk freigeben (v2.6.0)</h3>
 <p>End-User können freigegebene Workflows direkt aus dem Tray-Kiosk starten — kein Admin-Eingriff nötig. Vorgehen:</p>
@@ -793,8 +849,49 @@
 <h3>Manueller Retry</h3>
 <p>Bei <code>Fehler</code>-Status: Klick auf <code>&#8635;</code> (Retry-Button) in der Aktions-Zeile oder im Detail-Modal. Erstellt eine neue Aktion mit gleichen Parametern.</p>
 
+<h3>Vormerk-Abbruch</h3>
+<p>Bei <code>Vorgemerkt</code>-Status (gelb, Offline-Queue): Klick auf <code>&times;</code> in der Aktions-Zeile bricht die Vormerkung ab. Status wird auf <code>Abgebrochen</code> gesetzt. Bevor der Tick den Agent online sieht, kann jederzeit abgebrochen werden.</p>
+
+<h3>„Ausgelöst durch" (v2.6.x)</h3>
+<p>Jede Aktion ist mit ihrer Quelle markiert. In der Tabelle: kleiner runder Buchstaben-Dot neben der Status-Pille. Im Detail-Modal: ausführliche Pille.</p>
+<table class="doc-table">
+  <thead><tr><th>Dot</th><th>Bedeutung</th></tr></thead>
+  <tbody>
+    <tr><td><code>A</code></td><td><b>Admin</b> — Single-Click im Admin-UI (install/uninstall/update-client)</td></tr>
+    <tr><td><code>K</code></td><td><b>Kiosk</b> — End-User hat im Tray geklickt (Windows-User wird mitgeloggt)</td></tr>
+    <tr><td><code>W</code></td><td><b>Workflow</b> — Step aus einem Workflow-Run (run-id im Tooltip)</td></tr>
+    <tr><td><code>B</code></td><td><b>Bulk</b> — Bulk-Update-Client aus Admin-UI</td></tr>
+    <tr><td><code>P</code></td><td><b>Profil</b> — Profile-Apply hat das Paket nachinstalliert</td></tr>
+    <tr><td><code>R</code></td><td><b>Rollout</b> — Phased-Rollout-Tick hat dispatched</td></tr>
+    <tr><td><code>Q</code></td><td><b>Queue</b> — Queue-Tick hat eine vorgemerkte Aktion dispatched</td></tr>
+    <tr><td><code>S</code></td><td><b>System</b> — Auto-Update / Scheduled Job</td></tr>
+    <tr><td>—</td><td>Legacy-Eintrag (vor v2.6.x angelegt)</td></tr>
+  </tbody>
+</table>
+
 <div class="doc-callout info">
-  <b>Detail-Modal:</b> Klick auf eine Zeile im Aktionen-Tab &ouml;ffnet ein Modal mit: Agent, Paket, Typ, Exit-Code, Dauer, Fehlermeldung und aufklappbarem vollem PowerShell-Output.
+  <b>Detail-Modal:</b> Klick auf eine Zeile im Aktionen-Tab &ouml;ffnet ein Modal mit: Agent, Paket, Typ, Exit-Code, Dauer, Ausgelöst durch, Fehlermeldung und aufklappbarem vollem PowerShell-Output.
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="audit-log">
+<h1>Audit-Log</h1>
+
+<p class="doc-lead">Jeder Admin-API-Call wird mit Methode, Pfad, Status, Client-IP, User-Agent und Dauer aufgezeichnet. Lese-Endpoints werden zur Geräuschreduktion gefiltert; State-Changes (POST/PATCH/DELETE) immer geloggt.</p>
+
+<p>Tab <b>Audit</b> (Sidebar-Gruppe „Verwaltung", nur für <code>admin</code>-Rolle sichtbar).</p>
+
+<ul>
+  <li>Filterbar nach HTTP-Method, Status-Code, Pfad-Prefix.</li>
+  <li>Zeitstempel in UTC + lokal.</li>
+  <li>Export als CSV über den Button oben rechts.</li>
+  <li>Cleanup: Einträge älter als 90 Tage werden täglich um 03:30 UTC automatisch gelöscht (Job <code>_audit_cleanup_job</code>).</li>
+</ul>
+
+<div class="doc-callout info">
+  Für agent-seitige Aktionen (Install, Reboot, Workflow-Step) siehe <a href="#aktionen">Aktionen-Log</a> — das Audit-Log enthält nur HTTP-Calls am Proxy.
 </div>
 </section>
 
@@ -836,23 +933,188 @@
 
 <h3>Spalten</h3>
 <ul>
-  <li><b>Status</b>: Online (<5 Min) / Heute aktiv (<24h) / Offline / Gesperrt</li>
-  <li><b>Hostname</b></li>
-  <li><b>Ring</b>: prod / Ring 1 / Ring 2 / Ring 3 als Badge</li>
-  <li><b>Registriert</b> / <b>Letzter Kontakt</b></li>
-  <li><b>Agent-ID</b> (klickbar-to-copy)</li>
+  <li><b>Hostname</b> + „Gesperrt"-Pille wenn Agent in der Blocklist.</li>
+  <li><b>User</b>: aktuell eingeloggter Windows-User (Telemetrie).</li>
+  <li><b>Ring</b>: prod / Ring 1 / Ring 2 / Ring 3 als Badge.</li>
+  <li><b>Client-Version</b>: Tray-Version + farbiger Indikator (aktuell / veraltet / unbekannt).</li>
+  <li><b>Letzter Kontakt Kiosk</b>: Wann der Tray das letzte Mal Telemetrie gesendet hat. Ampelfarbe nach Alter.</li>
+  <li><b>Letzter Kontakt RMM</b>: Was Tactical sieht (eigene last_seen-Quelle, kann abweichen).</li>
+  <li><b>Agent-ID</b> (klickbar-to-copy).</li>
+  <li><b>Filter</b>: Hostname, Benutzer oder Agent-ID — alle drei werden durchsucht.</li>
+  <li><b>CSV-Export</b>: Aktualisieren-Button → CSV-Export-Button.</li>
+</ul>
+
+<h3>Massen-Aktionen (Bulk-Bar)</h3>
+<p>Checkbox-Spalte links → Markierungen werden in einer schwebenden Aktions-Leiste oben gesammelt:</p>
+<ul>
+  <li><b>Setup pushen</b> — schickt das aktuelle Setup.exe an alle markierten Clients (nur veraltete, mit „force"-Option zwanghaftes Reinstall auf alle).</li>
+  <li><b>Ring setzen</b> — Bulk-Ring-Update auf die Auswahl.</li>
 </ul>
 
 <h3>Agent-Detail-Seite (Zeilen-Klick)</h3>
 <p>Vollbild-Sicht mit:</p>
 <ul>
-  <li><b>Header-Actions</b>: Ring setzen (nur admin), Neu scannen, Token widerrufen, Sperren, Löschen.</li>
+  <li><b>Header-Actions</b>: Ring setzen (nur admin), Neu scannen, Token widerrufen, Sperren, Löschen, Workflows.</li>
   <li><b>Fehler-Banner</b> wenn ungeackte Fehler-Action da ist.</li>
   <li><b>Profile-Pills</b>: welchen Profilen ist der Agent zugewiesen.</li>
   <li><b>Update-Banner</b> mit Liste der outdated Pakete + „Alle updaten".</li>
   <li><b>Software-Liste</b>: Tactical-Scan + winget_state zusammengeführt (token-score-dedup), Status-Badges (verwaltet/unverwaltet/Update verfügbar), Filter-Chips, Aktionen pro Zeile.</li>
+  <li><b>Workflows</b>: laufende + abgeschlossene Workflow-Runs für diesen Agent. Buttons: Run starten, Cancel, Pause/Resume.</li>
   <li><b>Installations-Verlauf</b>: Log aller Install/Uninstall-Events von diesem Agent.</li>
 </ul>
+
+<h3>Token widerrufen</h3>
+<p><code>Token widerrufen</code> erhöht die <code>token_version</code> des Agents in der DB. Der alte Machine-JWT verliert sofort die Gültigkeit (Auth-Check schlägt fehl). Der Tray zeigt dem User einen Vollbild-„Token widerrufen"-Overlay mit „Neu installieren"-Button — bei Klick wird die Reinstall-URL aus den Settings geöffnet (falls gesetzt) oder der User wird auf IT verwiesen.</p>
+<p>Anwendung: Agent wurde umgemeldet (neuer Besitzer), Hardware ausgetauscht ohne Setup-Re-Run, oder Verdacht auf Token-Kompromittierung.</p>
+
+<h3>Sperren / Entsperren</h3>
+<p>Sperren-Modal: Grund eingeben (Pflichtfeld). Ban-Eintrag landet in <code>agent_blocklist</code> — Pre-Flight-Check beim nächsten Dispatch lehnt mit „Agent gesperrt: &lt;Grund&gt;" ab. Tray-Polling läuft weiter aber alle Install-Anfragen scheitern. Sperrgrund + Datum erscheinen in der Agent-Detail-Header.</p>
+<p>Entsperren: <code>Entsperren</code> in der Agent-Detail-Sicht. Löscht den Blocklist-Eintrag, Audit-Log erfasst den entsperrenden Admin.</p>
+
+<h3>Löschen</h3>
+<p><code>Löschen</code> entfernt den Agent komplett (DB + zugehörige action_log/install_log via Cascade). Auf der Maschine bleibt der Tray installiert — beim nächsten Heartbeat bekommt er 401 (Token unbekannt) und zeigt den „Token widerrufen"-Overlay. Sinnvoll für ausgemusterte Geräte.</p>
+
+<h3>Tactical-Queue (Diagnose)</h3>
+<p>Endpoint <code>GET /admin/api/tactical-queue</code> liefert die Liste der gerade aktiven + wartenden Tactical-RMM-Kommandos pro Agent. Wird im Aktionen-Tab oben rechts als kleines „Tactical: N aktiv"-Indikator gerendert. Nützlich wenn Installations-Calls verzögert wirken — wenn die Queue voll ist, drosselt der Tactical-Worker.</p>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="client-update">
+<h1>Tray-Self-Update & Bulk-Push</h1>
+
+<p class="doc-lead">Das Tray-EXE updatet sich nicht automatisch — der Push muss aktiv getriggert werden. Drei Wege.</p>
+
+<h3>Einzelne Maschine</h3>
+<ol class="doc-steps">
+  <li>Tab <b>Clients</b> → Zeile → Update-Icon (rechts neben Agent-ID).</li>
+  <li>Bei Online-Agent: Setup.exe wird via Tactical <code>run_command</code> auf den Agent geladen, Tray gekillt, Setup ausgeführt, neuer Tray gestartet. Dauert 1–3 Min.</li>
+  <li>Bei Offline-Agent: Status <code>Vorgemerkt</code> — beim nächsten Online-Status wird automatisch dispatched (siehe Offline-Queue).</li>
+</ol>
+
+<h3>Bulk: Alle veralteten Clients</h3>
+<ol class="doc-steps">
+  <li>Tab <b>Clients</b> → Banner mit Version-Verteilung („X aktuell · Y veraltet · Soll-Version: 2.6.0").</li>
+  <li>Banner-Button <code>Updates pushen</code>.</li>
+  <li>Bestätigen — alle Clients unter Soll-Version bekommen den Update-Befehl. Offline-Agents werden automatisch gequeued.</li>
+</ol>
+
+<h3>Bulk: Ausgewählte Clients (force-reinstall)</h3>
+<ol class="doc-steps">
+  <li>Tab <b>Clients</b> → Checkboxen markieren.</li>
+  <li>Bulk-Bar → <code>Setup pushen</code>.</li>
+  <li>Im Modal: <code>Force-Reinstall</code> wenn auch Clients auf aktueller Version re-installiert werden sollen (Tray hängt, Registry-Cleanup erforderlich, o.ä.).</li>
+</ol>
+
+<h3>Soll-Version (Minimum-Required)</h3>
+<p>Settings → <code>client_min_required_version</code> setzen. Wenn ein Tray mit BUILD_VERSION &lt; min_required pollt, zeigt der Tray einen <b>nicht-wegklickbaren</b> Force-Update-Modal. Sinnvoll wenn ein Security-Fix oder Pflichtfeature im Tray ausgerollt werden muss.</p>
+<p>Leer lassen = kein Zwang. Der Tray prüft sonst lediglich „latest" vs „current" und blendet eine wegklickbare Banner-Notification ein.</p>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="discovery">
+<h1>Discovery (Software-Erkennung)</h1>
+
+<p class="doc-lead">{{SF_BRAND}} sammelt aus zwei Quellen, welche Software auf den Agents installiert ist — damit Admins schnell sehen, was es zu whitelisten lohnt.</p>
+
+<h3>Quellen</h3>
+<table class="doc-table">
+  <thead><tr><th>Quelle</th><th>Was</th><th>Wann</th></tr></thead>
+  <tbody>
+    <tr><td><b>winget export / upgrade</b></td><td>Per-Agent winget-Inventur (installierte IDs, verfügbare Upgrades). Liefert exakte winget-IDs.</td><td>Nightly 02:00 UTC + manuell „Neu scannen" pro Agent</td></tr>
+    <tr><td><b>Tactical software_scan</b></td><td>Windows-Software-Scan von Tactical. Liefert Display-Namen + Publisher + Version (kein winget-ID-Mapping).</td><td>Tactical-eigene Scan-Periode (i.d.R. täglich)</td></tr>
+  </tbody>
+</table>
+
+<h3>Winget-Enrichment-Job</h3>
+<p>Cron 02:30 UTC. Holt alle Tactical-Software-Einträge der gesamten Flotte, dedupliziert pro Display-Name, matcht gegen den lokalen winget-Catalog mit Token-Score-Ranking + Confidence-Heuristik. Trifft eine sichere Übereinstimmung → winget-ID wird mit dem Software-Eintrag verknüpft. So sieht man im Discovery-Tab pro Software-Name nicht nur „Postman 11.x auf 17 Agents", sondern auch „→ <code>Postman.Postman</code>" als 1-Klick-Activate.</p>
+
+<h3>Discovery-Tab</h3>
+<p>Sidebar → <b>Pakete</b> → <code>+ Paket hinzufügen</code> → <i>Discovery</i>. Liste aller in der Flotte installierten Software mit Confidence-Badges:</p>
+<ul>
+  <li><span class="al-badge success">Hoch</span> — winget-Match sicher, Activate-Button („<code>+</code>") direkt verfügbar.</li>
+  <li><span class="al-badge skipped">Mittel</span> — wahrscheinlicher Match, Vorschau-Tooltip mit winget-ID.</li>
+  <li><span class="al-badge pending">Niedrig</span> — kein eindeutiger Match, „manuell"-Hinweis.</li>
+</ul>
+
+<h3>Manueller Re-Trigger</h3>
+<p>Settings → <code>Discovery → Winget-Catalog refreshen</code> / <code>Nightly-Scan jetzt starten</code> / <code>Enrichment jetzt starten</code>. Hilfreich nach Catalog-Updates oder wenn ein neuer Agent gerade gerade frisch eingeloggt ist.</p>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="einladungen">
+<h1>Admin-Einladungen (v2.5.0)</h1>
+
+<p class="doc-lead">Statt manuell Admin-User mit Passwort anzulegen, lädt man sie per Link ein — der Empfänger setzt selbst Benutzername + Passwort. Token-basiert, einmalig, mit Ablauf.</p>
+
+<h3>Einladung erstellen</h3>
+<ol class="doc-steps">
+  <li>Tab <b>Benutzer</b> (Sidebar-Gruppe „Verwaltung", nur admin-Rolle).</li>
+  <li>Abschnitt <b>Einladungen</b> → <code>+ Einladung</code>.</li>
+  <li>Im Modal: <b>Rolle</b> (admin/operator/viewer), <b>Hinweis</b> (optional, dem Eingeladenen angezeigt — z.B. „Für Marketing-Team-Onboarding"), <b>Gültigkeit</b> (1 / 7 / 14 / 30 Tage).</li>
+  <li><code>Erstellen</code> → Modal mit Link <code>https://&lt;dein-portal&gt;/invite/&lt;token&gt;</code>.</li>
+  <li>Link kopieren und per sicherem Kanal (Signal, Teams-DM, etc.) an den Empfänger schicken.</li>
+</ol>
+
+<h3>Annahme-Flow (User-Sicht)</h3>
+<p>Empfänger öffnet den Link → Public-Seite (kein Login). Zeigt:</p>
+<ul>
+  <li>Einlader-Name + erstellt-Datum + Gültig-bis.</li>
+  <li>Die zugewiesene Rolle (kann nicht geändert werden).</li>
+  <li>Hinweis-Text wenn gesetzt.</li>
+  <li>Formular: <b>Benutzername</b> (frei wählbar, muss eindeutig sein), <b>Anzeigename</b>, <b>Passwort</b> (min. 8 Zeichen) + Wiederholung.</li>
+</ul>
+<p>Submit → User wird mit der eingeladenen Rolle angelegt. Einladung wird atomar als „akzeptiert" markiert (kein Re-Use möglich). Empfänger ist automatisch eingeloggt.</p>
+
+<h3>Einladungen verwalten</h3>
+<p>Liste aller Einladungen im Benutzer-Tab mit Status (offen / akzeptiert / abgelaufen / widerrufen) und Aktionen:</p>
+<ul>
+  <li><b>Link kopieren</b> — nur bei offenen Einladungen.</li>
+  <li><b>Widerrufen</b> — Token wird sofort ungültig. Wenn der Empfänger den Link gerade öffnet, sieht er „Einladung widerrufen".</li>
+  <li><b>Löschen</b> — Eintrag aus der DB entfernen (auch akzeptierte). Der erstellte User bleibt natürlich erhalten.</li>
+</ul>
+
+<div class="doc-callout warning">
+  <b>Kein SSO via Einladung.</b> Einladungen legen <b>lokale</b> Accounts an. Microsoft-Entra-User werden separat über das SSO-Flow gemappt (siehe Settings → SSO). Ein Email-Hint hilft beim späteren Verknüpfen, ersetzt aber das SSO-Setup nicht.
+</div>
+
+<h3>Rate-Limit</h3>
+<p>Annahme-Endpoint <code>POST /invite/{token}</code> ist auf 10 Versuche pro 60s pro Client-IP begrenzt — Brute-Force-Schutz gegen Token-Raten. Bei zu vielen Versuchen kommt 429.</p>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="branding">
+<h1>Branding & White-Label</h1>
+
+<p class="doc-lead">{{SF_BRAND}} kann komplett mit eigenem Namen, Logo und Icon betrieben werden — sowohl im Admin-Portal als auch im Tray-Kiosk und im Setup.exe.</p>
+
+<h3>Einstellungen</h3>
+<table class="doc-table">
+  <thead><tr><th>Setting</th><th>Wirkung</th></tr></thead>
+  <tbody>
+    <tr><td><code>admin_portal_title</code></td><td>Anzeige-Name im Admin-Portal (Browser-Titel, Sidebar-Logo, Email-Absender, Reboot-Dialog-Titel).</td></tr>
+    <tr><td><code>product_slug</code></td><td>Technischer Slug (A-Z0-9_- nur). Bestimmt: Setup.exe-Dateiname (<code>&lt;slug&gt;-setup.exe</code>), Tray-EXE-Dateiname, Windows-Service-Name, Registry-Key-Pfad. Änderung wirkt erst nach EXE-Rebuild + Re-Deploy auf Clients.</td></tr>
+    <tr><td><code>client_app_name</code></td><td>Anzeige-Name im Tray (Fenster-Titel, Toast-Notifications, Reboot-Dialog).</td></tr>
+    <tr><td><code>publisher</code></td><td>Publisher-String, der ins EXE-Metadata-Feld geschrieben wird (Windows zeigt das in Programme-und-Features).</td></tr>
+    <tr><td><b>Icon-Upload</b></td><td>ICO-Datei (Multi-Resolution, 16/32/48/256). Wird ins Setup.exe + Tray-EXE eingebettet, erscheint als Tray-Symbol + im Startmenu.</td></tr>
+    <tr><td><b>Logo (Admin-UI)</b></td><td>SVG/PNG für das Sidebar-Logo im Admin-Portal. Nur Web, nicht EXE.</td></tr>
+  </tbody>
+</table>
+
+<h3>Workflow</h3>
+<ol class="doc-steps">
+  <li>Settings öffnen, <code>product_slug</code> und <code>admin_portal_title</code> setzen.</li>
+  <li>Icon hochladen (Settings → Branding).</li>
+  <li><b>EXEs neu bauen</b> (Settings → „EXEs bauen") — die neuen Settings werden ins Image gebakken.</li>
+  <li>Bestehende Clients via Tray-Self-Update (siehe Client-Update-Sektion) auf die neuen EXEs heben.</li>
+</ol>
+
+<div class="doc-callout info">
+  Slug-Wechsel auf einer produktiven Flotte: das alte Tray-EXE (z.B. <code>Softshelf.exe</code>) und die neue (z.B. <code>Acme.exe</code>) sind getrennte Installationen. Bei der Migration wird das alte Tray deinstalliert und das neue aufgespielt — eingeloggte User sehen beide Tray-Icons kurzzeitig.
+</div>
 </section>
 
 <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -887,8 +1149,28 @@
 <ol class="doc-steps">
   <li>Tab <b>Einstellungen</b> → Abschnitt „Client-EXEs" → <code>EXEs bauen</code>.</li>
   <li>Build-Progress wird live angezeigt. Dauert ~3-4 Minuten (Wine + PyInstaller).</li>
-  <li>Nach Abschluss sind die neuen EXEs unter <code>/download/</code> verfügbar.</li>
+  <li>Nach Abschluss sind die neuen EXEs unter <code>/download/</code> verfügbar. Das System markiert den neuen Build automatisch als <code>is_current</code> — Tray-Self-Update verwendet ab sofort diese Version.</li>
 </ol>
+
+<h3>Version-Override</h3>
+<p>Standardmäßig wird die Version aus <code>client/_tray_version.py</code> gelesen. Im Build-Modal optional <b>Version-Override</b> setzen (z.B. <code>2.6.1-rc1</code> für einen Release-Candidate ohne Code-Bump). Override muss <code>[a-zA-Z0-9][a-zA-Z0-9._\-+]*</code> matchen.</p>
+
+<div class="doc-callout warning">
+  Direktes Triggern des Builders (z.B. via <code>docker exec</code> + urllib) <b>überspringt</b> die <code>finish_build_log</code>-Markierung — der Build wandert nicht als <code>is_current</code> in die DB. Immer über die Admin-UI / <code>POST /admin/api/build</code> triggern.
+</div>
+</section>
+
+<section id="build-history">
+<h2>Build-History</h2>
+
+<p>Settings → Abschnitt „Client-EXEs" → unter dem Build-Button die Liste aller bisherigen Builds chronologisch. Pro Build:</p>
+<ul>
+  <li><b>Version</b> (z.B. 2.6.0), <b>Datum</b>, <b>Trigger</b> (Admin-User).</li>
+  <li><b>Status</b>: <code>running</code> / <code>success</code> / <code>failed</code>.</li>
+  <li><b>SHA256</b> der beiden EXEs (Setup + Tray) — wird vom Tray für Integrity-Check beim Self-Update verwendet.</li>
+  <li><b>Log</b>: Klick zeigt den vollen Build-Log (PyInstaller-Output, hilfreich bei failed-Builds).</li>
+  <li><b>Als aktuell setzen</b>: Bei einem alten erfolgreichen Build → ihn wieder zum <code>is_current</code> machen. Sinnvoll wenn der neueste Build kaputt ist und du auf einen funktionierenden zurückrollen willst.</li>
+</ul>
 </section>
 
 <section id="settings">
@@ -897,18 +1179,38 @@
 <p>Tab <b>Einstellungen</b> enthält alle Runtime-Config (greift sofort, kein Restart):</p>
 
 <table class="doc-table">
-  <thead><tr><th>Gruppe</th><th>Felder</th></tr></thead>
+  <thead><tr><th>Setting</th><th>Pflicht</th><th>Bedeutung</th></tr></thead>
   <tbody>
-    <tr><td><b>Tactical</b></td><td>URL, API-Key</td></tr>
-    <tr><td><b>Registrierung</b></td><td>Registration-Secret + Rotate-Button</td></tr>
-    <tr><td><b>Proxy</b></td><td>Public-URL (für Downloads durch Tactical-Agent)</td></tr>
-    <tr><td><b>Tokens</b></td><td>TTL für Machine-Tokens</td></tr>
-    <tr><td><b>Logs</b></td><td>Aufbewahrungs-Tage</td></tr>
-    <tr><td><b>Uploads</b></td><td>Max-MB für Custom-Files</td></tr>
-    <tr><td><b>Branding</b></td><td>Portal-Titel, Client-Name, Publisher, Produkt-Slug, Icon</td></tr>
-    <tr><td><b>SSO</b></td><td>Microsoft-Entra-Config (Tenant-ID, Client-ID, Secret)</td></tr>
+    <tr><td><code>tactical_url</code></td><td>ja</td><td>Tactical-RMM-API-Endpoint (z.B. <code>https://api.example.com</code>).</td></tr>
+    <tr><td><code>tactical_api_key</code></td><td>ja</td><td>API-Key (Tactical → Settings → API-Keys, mindestens „Run Commands" + „View Agents" Permission).</td></tr>
+    <tr><td><code>registration_secret</code></td><td>ja</td><td>Pre-Shared-Key für die Setup.exe-Registrierung. <b>Rotate</b>-Button generiert einen neuen — bestehende Agents bleiben registriert, aber neue Setup.exe-Aufrufe brauchen das neue Secret.</td></tr>
+    <tr><td><code>proxy_public_url</code></td><td>ja</td><td>Öffentliche URL, unter der der Proxy erreichbar ist (z.B. <code>https://kiosk.example.com</code>). Wird ins Setup.exe einkompiliert und für Script-Downloads vom Agent benutzt. <b>Muss</b> von den Agents erreichbar sein.</td></tr>
+    <tr><td><code>trusted_proxies</code></td><td>nein</td><td>Komma-separierte IPs/Hostnames die <code>X-Forwarded-For</code>-Header setzen dürfen. Loopback (127.0.0.1, ::1) ist immer drin. Bei Caddy/Traefik die Container-IP eintragen.</td></tr>
+    <tr><td><code>machine_token_ttl_days</code></td><td>nein</td><td>Tage bis ein Machine-Token abläuft. Default 365. Niedriger = öfter Token-Refresh nötig. Höher = Risiko bei kompromittierten Tokens.</td></tr>
+    <tr><td><code>client_min_required_version</code></td><td>nein</td><td>Wenn gesetzt: Tray mit BUILD_VERSION &lt; min_required zeigt nicht-wegklickbaren Force-Update-Modal. Leer = optionales Update.</td></tr>
+    <tr><td><code>upload_max_mb</code></td><td>nein</td><td>Maximalgröße für Custom-Paket-Uploads in MB. Default 500.</td></tr>
+    <tr><td><code>retention_days_action_log</code></td><td>nein</td><td>Aktionen-Log-Aufbewahrung. Default 90 Tage. Cleanup-Job läuft täglich.</td></tr>
+    <tr><td><code>admin_portal_title</code></td><td>nein</td><td>Anzeige-Name im Admin-Portal (Browser-Titel, Sidebar). Default „Softshelf".</td></tr>
+    <tr><td><code>product_slug</code></td><td>nein</td><td>Technischer Slug für EXE-Dateinamen + Registry. Wirkt erst nach EXE-Rebuild.</td></tr>
+    <tr><td><code>client_app_name</code></td><td>nein</td><td>Anzeige-Name im Tray.</td></tr>
+    <tr><td><code>publisher</code></td><td>nein</td><td>Publisher-Metadaten im EXE.</td></tr>
+    <tr><td><code>sso_*</code></td><td>nein</td><td>Microsoft-Entra-OIDC-Config (Tenant-ID, Client-ID, Client-Secret, allowed-domains). Aktiviert SSO-Login-Button auf der Login-Seite.</td></tr>
   </tbody>
 </table>
+
+<h3>TLS / Reverse-Proxy</h3>
+<p>Der Proxy kann selbst kein TLS. Im Produktiv-Setup läuft Caddy oder Traefik vor dem Container und terminiert TLS. Wichtig: <code>X-Forwarded-Proto: https</code> muss vom Reverse-Proxy gesetzt werden, sonst landen Session-Cookies nicht als <code>Secure</code> und Browser blocken sie in HTTPS-Kontexten.</p>
+<p>Wenn Caddy/Traefik nicht auf <code>127.0.0.1</code> läuft (z.B. separater Container), muss seine IP unter <code>trusted_proxies</code> eingetragen sein — sonst ignoriert der Rate-Limiter den XFF-Header und alle Requests gehen über den Proxy-Bucket.</p>
+
+<h3>SSO einrichten</h3>
+<ol class="doc-steps">
+  <li>Microsoft Entra → App-Registrierung → Neue Registrierung. Name z.B. „Softshelf Admin".</li>
+  <li>Redirect-URI: <code>&lt;proxy_public_url&gt;/admin/sso/callback</code>.</li>
+  <li>API-Permissions: <code>openid</code>, <code>email</code>, <code>profile</code>, <code>User.Read</code>.</li>
+  <li>Client-Secret erzeugen.</li>
+  <li>In den Softshelf-Settings unter SSO eintragen: Tenant-ID, Client-ID, Client-Secret, erlaubte Email-Domains.</li>
+  <li>Login-Seite zeigt jetzt einen „Mit Microsoft anmelden"-Button. Bei erstem Login: der eingeloggte Entra-User wird als operator-Account angelegt (Admin muss anschließend die Rolle hochsetzen).</li>
+</ol>
 </section>
 
 <section id="migration">
