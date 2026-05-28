@@ -382,6 +382,32 @@ async def _queued_actions_tick():
                 continue
             if (info or {}).get("status") != "online":
                 continue
+            # client_update braucht keinen Paket-Lookup — re-call der Endpoint-Logik.
+            if entry.get("pkg_type") == "client_update":
+                promoted = await database.promote_queued_to_pending(entry["id"])
+                if not promoted:
+                    continue
+                try:
+                    from routes.admin import _do_client_update
+                    ag = await database.get_agent(agent_id)
+                    if not ag:
+                        await database.complete_action_log(
+                            entry["id"], "error",
+                            error_summary="Agent nicht mehr in DB",
+                        )
+                        continue
+                    await _do_client_update(agent_id, ag, existing_log_id=entry["id"])
+                    logger.info(
+                        "queue-tick: client-update dispatched action_log %s agent=%s",
+                        entry["id"], agent_id[:12],
+                    )
+                except Exception as e:
+                    logger.exception("queue-tick: client-update failed for %s: %s", entry["id"], e)
+                    await database.complete_action_log(
+                        entry["id"], "error", error_summary=str(e)[:300],
+                    )
+                continue
+
             pkg = await database.get_package(entry["package_name"])
             if not pkg:
                 logger.warning(
