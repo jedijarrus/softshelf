@@ -5068,13 +5068,26 @@ button.outdated-badge.clickable:disabled {
 /* ── Action Log ──────────────────────────────────────────── */
 .al-row {
   display: grid;
-  grid-template-columns: 100px 200px minmax(0, 1fr) 80px 100px 120px 70px 36px;
-  align-items: center; gap: 0 10px;
-  padding: 9px var(--row-pad-x);
+  grid-template-columns: 108px 196px minmax(0, 1fr) 104px 92px 116px 72px 32px;
+  align-items: center; gap: 0 12px;
+  padding: 10px var(--row-pad-x);
   border-bottom: 1px solid var(--border);
   font-size: 13px; cursor: pointer;
   transition: background .12s;
 }
+.al-row:not(.al-head) > span { display: flex; align-items: center; min-width: 0; }
+.al-row:not(.al-head) > span.al-cell-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.al-row .al-action-tag {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-3);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  text-transform: lowercase;
+}
+.al-row.al-queued { box-shadow: inset 3px 0 0 var(--amber); }
 .al-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .al-row:hover { background: var(--bg-hover); }
 .al-row.al-error { border-left: 3px solid var(--red); }
@@ -5843,8 +5856,10 @@ body.help-active [data-help]:not(.tab)::after {
         <h1 class="section-title">Aktionen</h1>
         <div class="section-sub">Install-, Uninstall- und Upgrade-Aktionen mit Ergebnis und Output.</div>
       </div>
-      <button class="btn btn-ghost btn-sm" onclick="alDeleteAllErrors()" style="color:var(--red)">Alle Fehler löschen</button>
-      <button class="btn btn-ghost btn-sm" onclick="loadActionLog(true)">Aktualisieren</button>
+      <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+        <button class="btn btn-ghost btn-sm" onclick="alDeleteAllErrors()" style="color:var(--red)">Alle Fehler löschen</button>
+        <button class="btn btn-ghost btn-sm" onclick="loadActionLog(true)">Aktualisieren</button>
+      </div>
     </div>
     <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
       <select id="al-filter-status" class="input input-sm" onchange="loadActionLog(true)" style="width:140px">
@@ -14675,6 +14690,9 @@ var alPage = 0;
 const AL_PAGE_SIZE = 50;
 var _alFilterTimer = null;
 const _alStatusLabel = { queued: 'Vorgemerkt', pending: 'Ausstehend', running: 'Läuft', success: 'Erfolg', error: 'Fehler', skipped: 'Übersprungen', cancelled: 'Abgebrochen' };
+const _alPkgTypeLabel = { winget: 'winget', choco: 'choco', custom: 'custom', plugin: 'plugin', client_update: 'update', script: 'script' };
+const _alPkgTypeClass = { client_update: 'custom' }; // visuell wie custom-Pille (violet dot)
+const _alActionLabel  = { install: 'install', uninstall: 'uninstall', upgrade: 'upgrade', reboot: 'reboot', run: 'run' };
 
 // Tab aus URL-Hash wiederherstellen. Default ist home — wenn Hash fehlt
 // oder home ist, Home-Daten laden und nichts zu switchen.
@@ -14786,14 +14804,20 @@ function renderActionLog(entries) {
     } else if (e.status === 'queued') {
       retryBtn = `<button class="al-retry" onclick="event.stopPropagation();alCancelQueued(${e.id})" title="Vormerkung abbrechen">&times;</button>`;
     }
-    return `<div class="al-row${e.status === 'error' ? ' al-error' : ''}" onclick="alShowDetail(${e.id})">
+    const rowCls = ['al-row'];
+    if (e.status === 'error')  rowCls.push('al-error');
+    if (e.status === 'queued') rowCls.push('al-queued');
+    const ptLabel = _alPkgTypeLabel[e.pkg_type] || e.pkg_type;
+    const ptVisual = _alPkgTypeClass[e.pkg_type] || e.pkg_type;
+    const actLabel = _alActionLabel[e.action] || e.action;
+    return `<div class="${rowCls.join(' ')}" onclick="alShowDetail(${e.id})">
       <span><span class="al-badge ${esc(e.status)}">${esc(_alStatusLabel[e.status] || e.status)}</span></span>
-      <span class="truncate">${esc(e.hostname)}</span>
-      <span class="truncate">${esc(e.display_name)}</span>
-      <span><span class="pkg-type-pill ${esc(e.pkg_type)}">${esc(e.pkg_type)}</span></span>
-      <span title="${esc(e.action)}">${esc(e.action)}</span>
-      <span title="${esc(fmtDt(e.created_at))}">${esc(relTime(e.created_at))}</span>
-      <span>${esc(dur)}</span>
+      <span class="al-cell-text" title="${esc(e.hostname)}">${esc(e.hostname)}</span>
+      <span class="al-cell-text" title="${esc(e.display_name)}">${esc(e.display_name)}</span>
+      <span><span class="pkg-type-pill ${esc(ptVisual)}" title="${esc(e.pkg_type)}">${esc(ptLabel)}</span></span>
+      <span><span class="al-action-tag" title="${esc(e.action)}">${esc(actLabel)}</span></span>
+      <span class="al-cell-text" title="${esc(fmtDt(e.created_at))}">${esc(relTime(e.created_at))}</span>
+      <span class="al-cell-text">${esc(dur)}</span>
       <span>${retryBtn}</span>
     </div>`;
   }).join('');
