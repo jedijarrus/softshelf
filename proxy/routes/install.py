@@ -1378,7 +1378,7 @@ async def _register_or_reuse_log(
             return existing_log_id
     return await database.create_action_log(
         agent_id, hostname, package_name, display_name, pkg_type, action,
-        job_id=job_id, metadata=metadata, workflow_run_id=workflow_run_id, triggered_by=triggered_by,
+        job_id=job_id, metadata=metadata, workflow_run_id=workflow_run_id,
         triggered_by=triggered_by,
     )
 
