@@ -5068,7 +5068,7 @@ button.outdated-badge.clickable:disabled {
 /* ── Action Log ──────────────────────────────────────────── */
 .al-row {
   display: grid;
-  grid-template-columns: 108px 196px minmax(0, 1fr) 104px 92px 116px 72px 32px;
+  grid-template-columns: 132px 196px minmax(0, 1fr) 104px 92px 116px 72px 32px;
   align-items: center; gap: 0 12px;
   padding: 10px var(--row-pad-x);
   border-bottom: 1px solid var(--border);
@@ -5088,6 +5088,36 @@ button.outdated-badge.clickable:disabled {
   text-transform: lowercase;
 }
 .al-row.al-queued { box-shadow: inset 3px 0 0 var(--amber); }
+.al-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-3);
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+}
+.al-trigger.trig-admin    { color: var(--blue); background: var(--blue-bg); border-color: var(--blue-bg); }
+.al-trigger.trig-kiosk    { color: var(--green); background: var(--green-bg); border-color: var(--green-border); }
+.al-trigger.trig-workflow { color: var(--violet, #7c3aed); background: #f5f3ff; border-color: #ddd6fe; }
+.al-trigger.trig-system   { color: var(--fg-3); }
+.al-trigger-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px; height: 16px;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 50%;
+  background: var(--bg-hover);
+  color: var(--fg-3);
+  margin-left: 6px;
+  flex-shrink: 0;
+  user-select: none;
+}
 .al-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .al-row:hover { background: var(--bg-hover); }
 .al-row.al-error { border-left: 3px solid var(--red); }
@@ -14694,6 +14724,35 @@ const _alPkgTypeLabel = { winget: 'winget', choco: 'choco', custom: 'custom', pl
 const _alPkgTypeClass = { client_update: 'custom' }; // visuell wie custom-Pille (violet dot)
 const _alActionLabel  = { install: 'install', uninstall: 'uninstall', upgrade: 'upgrade', reboot: 'reboot', run: 'run' };
 
+// Trigger-Anzeige: Quelle in lesbare Form + Icon
+function _alFormatTrigger(trig, workflowRunId) {
+  if (!trig && workflowRunId) trig = 'workflow:' + workflowRunId;
+  if (!trig) return '<span style="color:var(--fg-5)">—</span>';
+  const [kind, who] = String(trig).split(':', 2);
+  const map = {
+    admin:    { label: 'Admin',    icon: '👤', cls: 'trig-admin' },
+    kiosk:    { label: 'Kiosk',    icon: '🖥', cls: 'trig-kiosk' },
+    workflow: { label: 'Workflow', icon: '⛭', cls: 'trig-workflow' },
+    bulk:     { label: 'Bulk',     icon: '⏶', cls: 'trig-admin' },
+    profile:  { label: 'Profil',   icon: '⊞', cls: 'trig-system' },
+    rollout:  { label: 'Rollout',  icon: '⇪', cls: 'trig-system' },
+    queue:    { label: 'Queue',    icon: '⏲', cls: 'trig-system' },
+    system:   { label: 'System',   icon: '⚙', cls: 'trig-system' },
+  };
+  const m = map[kind] || { label: kind, icon: '·', cls: 'trig-system' };
+  const detail = who ? ' ' + esc(who) : '';
+  return `<span class="al-trigger ${m.cls}" title="${esc(trig)}">${m.label}${detail}</span>`;
+}
+
+function _alTriggerCompact(trig, workflowRunId) {
+  if (!trig && workflowRunId) trig = 'workflow:' + workflowRunId;
+  if (!trig) return '';
+  const [kind] = String(trig).split(':', 2);
+  const map = { admin:'A', kiosk:'K', workflow:'W', bulk:'B', profile:'P', rollout:'R', queue:'Q', system:'S' };
+  const letter = map[kind] || '·';
+  return `<span class="al-trigger-dot" title="${esc(trig)}">${letter}</span>`;
+}
+
 // Tab aus URL-Hash wiederherstellen. Default ist home — wenn Hash fehlt
 // oder home ist, Home-Daten laden und nichts zu switchen.
 (function _restoreTabFromHash() {
@@ -14811,7 +14870,7 @@ function renderActionLog(entries) {
     const ptVisual = _alPkgTypeClass[e.pkg_type] || e.pkg_type;
     const actLabel = _alActionLabel[e.action] || e.action;
     return `<div class="${rowCls.join(' ')}" onclick="alShowDetail(${e.id})">
-      <span><span class="al-badge ${esc(e.status)}">${esc(_alStatusLabel[e.status] || e.status)}</span></span>
+      <span><span class="al-badge ${esc(e.status)}">${esc(_alStatusLabel[e.status] || e.status)}</span>${_alTriggerCompact(e.triggered_by, e.workflow_run_id)}</span>
       <span class="al-cell-text" title="${esc(e.hostname)}">${esc(e.hostname)}</span>
       <span class="al-cell-text" title="${esc(e.display_name)}">${esc(e.display_name)}</span>
       <span><span class="pkg-type-pill ${esc(ptVisual)}" title="${esc(e.pkg_type)}">${esc(ptLabel)}</span></span>
@@ -14853,6 +14912,7 @@ async function alShowDetail(logId) {
       <div><div class="label">Exit-Code</div>${entry.exit_code != null ? entry.exit_code : '\u2014'}</div>
       <div><div class="label">Gestartet</div>${esc(fmtDt(entry.created_at))}</div>
       <div><div class="label">Abgeschlossen</div>${entry.completed_at ? esc(fmtDt(entry.completed_at)) + (dur ? ' (' + esc(dur) + ')' : '') : '\u2014'}</div>
+      <div><div class="label">Ausgel\u00f6st durch</div>${_alFormatTrigger(entry.triggered_by, entry.workflow_run_id)}</div>
     </div>
     ${entry.error_summary ? `<div class="al-error-banner"><strong>Fehler:</strong> ${esc(entry.error_summary)}</div>` : ''}
     ${entry.stdout ? `<details><summary style="cursor:pointer;margin-bottom:8px;font-size:13px;color:var(--fg-3)">Vollstaendiger Output</summary><div class="al-stdout">${esc(entry.stdout)}</div></details>` : ''}
