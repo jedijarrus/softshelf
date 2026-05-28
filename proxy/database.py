@@ -3957,6 +3957,7 @@ async def promote_queued_to_pending(log_id: int) -> bool:
 async def get_action_log(
     agent_id: str | None = None, package_name: str | None = None,
     status: str | None = None, pkg_type: str | None = None,
+    q: str | None = None,
     limit: int = 50, offset: int = 0,
 ) -> list[dict]:
     """Filterbarer Query OHNE stdout (nur in Detail-Endpoint)."""
@@ -3970,6 +3971,10 @@ async def get_action_log(
         clauses.append("al.status = ?"); params.append(status)
     if pkg_type:
         clauses.append("al.pkg_type = ?"); params.append(pkg_type)
+    if q:
+        like = f"%{q.strip()}%"
+        clauses.append("(al.hostname LIKE ? OR a.logged_in_user LIKE ? OR al.display_name LIKE ?)")
+        params.extend([like, like, like])
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     params += [limit, offset]
     async with _db() as db:

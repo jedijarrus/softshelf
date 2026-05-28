@@ -5068,7 +5068,7 @@ button.outdated-badge.clickable:disabled {
 /* ── Action Log ──────────────────────────────────────────── */
 .al-row {
   display: grid;
-  grid-template-columns: 132px 196px minmax(0, 1fr) 104px 92px 116px 72px 32px;
+  grid-template-columns: 132px 180px 140px minmax(0, 1fr) 96px 88px 116px 70px 32px;
   align-items: center; gap: 0 12px;
   padding: 10px var(--row-pad-x);
   border-bottom: 1px solid var(--border);
@@ -5911,7 +5911,7 @@ body.help-active [data-help]:not(.tab)::after {
         <option value="plugin">Plugin</option>
       </select>
       <div class="input-search" style="max-width:200px">
-        <input class="input input-sm" type="search" id="al-filter-agent" placeholder="Agent filtern..." oninput="alFilterDebounce()">
+        <input class="input input-sm" type="search" id="al-filter-agent" placeholder="Suche: Hostname, User, Paket..." oninput="alFilterDebounce()">
       </div>
       <span class="filter-stamp" id="al-count"></span>
     </div>
@@ -14831,7 +14831,7 @@ async function loadActionLog(reset) {
   const ag = document.getElementById('al-filter-agent').value.trim();
   if (st) params.set('status', st);
   if (tp) params.set('pkg_type', tp);
-  if (ag) params.set('agent_id', ag);
+  if (ag) params.set('q', ag);
   params.set('limit', AL_PAGE_SIZE);
   params.set('offset', alPage * AL_PAGE_SIZE);
   try {
@@ -14852,7 +14852,7 @@ function renderActionLog(entries) {
   countEl.textContent = entries.length >= AL_PAGE_SIZE ? `${AL_PAGE_SIZE}+ Eintraege` : `${entries.length} Eintraege`;
 
   const head = `<div class="al-row al-head">
-    <span>Status</span><span>Agent</span><span>Paket</span><span>Typ</span>
+    <span>Status</span><span>Agent</span><span>User</span><span>Paket</span><span>Typ</span>
     <span>Aktion</span><span>Zeitpunkt</span><span>Dauer</span><span></span>
   </div>`;
 
@@ -14870,13 +14870,11 @@ function renderActionLog(entries) {
     const ptLabel = _alPkgTypeLabel[e.pkg_type] || e.pkg_type;
     const ptVisual = _alPkgTypeClass[e.pkg_type] || e.pkg_type;
     const actLabel = _alActionLabel[e.action] || e.action;
-    // Logged-in Windows-User aus Telemetrie (gleiche Quelle wie Clients-Tab).
     const who = (e.logged_in_user || '').trim();
-    const userSuffix = who ? ` <span class="al-cell-user">· ${esc(who)}</span>` : '';
-    const titleSuffix = who ? ' · ' + esc(who) : '';
     return `<div class="${rowCls.join(' ')}" onclick="alShowDetail(${e.id})">
       <span><span class="al-badge ${esc(e.status)}">${esc(_alStatusLabel[e.status] || e.status)}</span>${_alTriggerCompact(e.triggered_by, e.workflow_run_id)}</span>
-      <span class="al-cell-text" title="${esc(e.hostname)}${titleSuffix}">${esc(e.hostname)}${userSuffix}</span>
+      <span class="al-cell-text" title="${esc(e.hostname)}">${esc(e.hostname)}</span>
+      <span class="al-cell-text al-cell-user" title="${esc(who)}">${who ? esc(who) : '<span style="color:var(--fg-5)">—</span>'}</span>
       <span class="al-cell-text" title="${esc(e.display_name)}">${esc(e.display_name)}</span>
       <span><span class="pkg-type-pill ${esc(ptVisual)}" title="${esc(e.pkg_type)}">${esc(ptLabel)}</span></span>
       <span><span class="al-action-tag" title="${esc(e.action)}">${esc(actLabel)}</span></span>
