@@ -11286,10 +11286,17 @@ async function loadAgents() {
   }
 }
 
+function _utcParse(s) {
+  // SQLite '2026-05-04 13:12:34' oder ISO '...T...' mit/ohne Z → Date.
+  let v = s.includes('T') ? s : s.replace(' ', 'T');
+  if (!/[zZ]|[+-]\d\d:?\d\d$/.test(v)) v += 'Z';
+  return new Date(v);
+}
+
 function agentStatus(lastSeen) {
   if (!lastSeen) return {cls:'status-offline', label:'Unbekannt'};
-  const utc = lastSeen.includes('T') ? lastSeen : lastSeen.replace(' ', 'T');
-  const diff = (Date.now() - new Date(utc + 'Z').getTime()) / 1000;
+  const diff = (Date.now() - _utcParse(lastSeen).getTime()) / 1000;
+  if (isNaN(diff))   return {cls:'status-offline', label:'Unbekannt'};
   if (diff < 300)    return {cls:'status-online',  label:'Online'};
   if (diff < 86400)  return {cls:'status-active',  label:'Heute aktiv'};
   return {cls:'status-offline', label:'Offline'};
@@ -11297,14 +11304,14 @@ function agentStatus(lastSeen) {
 
 function fmtDt(s) {
   if (!s) return '–';
-  const utc = s.includes('T') ? s : s.replace(' ', 'T');
-  return new Date(utc + 'Z').toLocaleString('de');
+  const d = _utcParse(s);
+  return isNaN(d) ? '–' : d.toLocaleString('de');
 }
 
 function relTime(s) {
   if (!s) return '–';
-  const utc = s.includes('T') ? s : s.replace(' ', 'T');
-  const diff = (Date.now() - new Date(utc + 'Z').getTime()) / 1000;
+  const diff = (Date.now() - _utcParse(s).getTime()) / 1000;
+  if (isNaN(diff)) return '–';
   if (diff < 5)       return 'gerade eben';
   if (diff < 60)      return `vor ${Math.floor(diff)}s`;
   if (diff < 3600)    return `vor ${Math.floor(diff/60)} Min`;
