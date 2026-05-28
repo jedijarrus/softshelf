@@ -3101,12 +3101,13 @@ async def get_action_log_list(
     package_name: str | None = Query(default=None),
     status: str | None = Query(default=None),
     pkg_type: str | None = Query(default=None),
+    q: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
     return await database.get_action_log(
         agent_id=agent_id, package_name=package_name,
-        status=status, pkg_type=pkg_type,
+        status=status, pkg_type=pkg_type, q=q,
         limit=limit, offset=offset,
     )
 
