@@ -3120,8 +3120,22 @@ async def get_agent_action_summary(agent_id: str):
 async def get_agents():
     agents = await database.get_agents()
     error_counts = await database.get_agent_error_counts()
+    # Tactical-RMM last_seen mit-enrichen (gecachet 60s in tactical_client).
+    # Bei API-Fehler bleibt rmm_last_seen einfach None.
+    rmm_map: dict[str, str] = {}
+    try:
+        tc = get_rmm_client()
+        rmm_agents = await tc._list_agents_cached()
+        if rmm_agents:
+            for ra in rmm_agents:
+                aid = ra.get("agent_id")
+                if aid:
+                    rmm_map[aid] = ra.get("last_seen") or ""
+    except Exception:
+        pass
     for a in agents:
         a["error_count"] = error_counts.get(a["agent_id"], 0)
+        a["rmm_last_seen"] = rmm_map.get(a["agent_id"]) or None
     return agents
 
 
