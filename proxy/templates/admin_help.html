@@ -659,6 +659,19 @@
 <p>Im Kiosk taucht ein zusätzlicher Tab <b>Aktionen</b> auf (nur sichtbar wenn mindestens ein Workflow verfügbar ist). User klickt <code>Ausführen</code> → Confirm-Dialog mit Beschreibung + Step-Liste → <code>Starten</code>. Während der Run läuft zeigt die Karte Progress-Bar + aktuellen Schritt; Reboot-Steps öffnen weiterhin den bekannten Reboot-Dialog.</p>
 
 <p>Rate-Limit: 5 Starts pro 60 Sekunden pro Agent-IP. Pro Agent darf weiterhin nur <b>ein</b> Workflow gleichzeitig laufen.</p>
+
+<h3>Offline-Queue (v2.6.x)</h3>
+<p>Wenn ein Agent ueber Tactical RMM gerade nicht erreichbar ist, scheitern Install/Uninstall/Tray-Update nicht mehr hart, sondern landen als <code>queued</code> (gelber Status) im Aktionen-Tab.</p>
+<ul>
+  <li>Ein APScheduler-Job (<code>_queued_actions_tick</code>) prueft alle 2&nbsp;Minuten den Agent-Status und dispatched den Befehl sobald der Agent online ist.</li>
+  <li>Bei einzelnen Install/Uninstall-Klicks fragt das UI <b>vor</b> dem Vormerken („Agent offline — vormerken?"). Bei Bulk-Installs und Profile-Apply wird automatisch gequeued (kein Modal pro Agent).</li>
+  <li><b>Tray-Update via Queue nimmt immer die aktuelle Build-Version zum Dispatch-Zeitpunkt</b> — nicht die Version, die zum Vormerk-Zeitpunkt aktiv war. Wenn zwischen Vormerken und Dispatch ein neuer Build entsteht, bekommt der Agent den neuen Build.</li>
+  <li>Aufraeumung: queued Eintraege aelter als 7 Tage oder mit nicht mehr existierendem Agent werden automatisch auf <code>cancelled</code> gesetzt.</li>
+  <li>Manueller Abbruch: Aktionen-Tab → X-Button neben queued-Zeile.</li>
+</ul>
+<div class="doc-callout warning">
+  Workflows sind <b>nicht</b> Teil der Offline-Queue. Workflow-Steps gegen einen offline Agent laufen weiter in den klassischen Tactical-Timeout. Das ist Absicht, weil Workflows eigene Deadline-Semantik haben (<code>step_deadline_at</code>, <code>force_after_hours</code>).
+</div>
 </section>
 
 </section>

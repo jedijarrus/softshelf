@@ -2068,6 +2068,7 @@ async def execute_scheduled_job(job: dict) -> dict:
                     try:
                         await dispatch_install_for_agent(
                             miss["agent_id"], miss.get("hostname") or "", pkg,
+                            queue_if_offline=True,
                         )
                         dispatched += 1
                     except Exception as e:
@@ -2813,6 +2814,7 @@ async def fix_compliance(stage: str = "all"):
             try:
                 await dispatch_install_for_agent(
                     miss["agent_id"], miss.get("hostname") or "", pkg,
+                    queue_if_offline=True,
                 )
                 dispatched += 1
             except Exception as e:
@@ -2958,6 +2960,17 @@ async def queue_command(body: QueueCommandBody):
     pkg = await database.get_package(body.package_name)
     if not pkg:
         raise HTTPException(status_code=404, detail="Paket nicht gefunden")
+    existing = await database.has_pending_action(
+        body.agent_id, body.package_name, action=body.action,
+    )
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Bereits eine Aktion ({existing['status']}) fuer "
+                f"{body.package_name!r} auf {agent['hostname']} (id={existing['id']})."
+            ),
+        )
     log_id = await database.create_queued_action_log(
         agent_id=body.agent_id,
         hostname=agent["hostname"],
@@ -4385,6 +4398,7 @@ async def run_profile_autoupdate_endpoint(profile_id: int, request: Request):
             try:
                 await dispatch_install_for_agent(
                     ag["agent_id"], ag["hostname"], pkg, version_pin=pin,
+                    queue_if_offline=True,
                 )
                 queued += 1
             except HTTPException as e:
@@ -4446,7 +4460,15 @@ async def _apply_profile_sequential(agent_id: str, hostname: str,
     from routes.install import dispatch_install_for_agent
     for pkg, pin in packages_to_install:
         try:
-            result = await dispatch_install_for_agent(agent_id, hostname, pkg, version_pin=pin)
+            result = await dispatch_install_for_agent(
+                agent_id, hostname, pkg, version_pin=pin, queue_if_offline=True,
+            )
+            if result.get("queued"):
+                logger.info(
+                    "profile sequential: %s offline — pkg %s queued (log %s), skip wait",
+                    agent_id[:12], pkg.get("name"), result.get("log_id"),
+                )
+                continue
         except Exception as e:
             logger.warning(
                 "Profile sequential install failed agent=%s pkg=%s: %s",
@@ -5765,18 +5787,16 @@ async def clients_version_distribution():
     return await database.get_client_version_distribution()
 
 
-async def _do_client_update(agent_id: str, agent: dict, existing_log_id: int | None = None) -> dict:
-    """Eigentliches Client-Update: laed Setup.exe und fuehrt es als SYSTEM aus.
-    Synchroner run_command — daher Pre-Flight beim Endpoint vorher noetig
-    (siehe update_client_for_agent / Queue-Tick).
-    """
+async def _check_client_update_prereqs() -> tuple[dict, str, str, str, str]:
+    """Validiert Runtime-Settings + Build VOR Erstellung eines action_log.
+    Wirft HTTPException bei Konfigurationsfehlern.
+    Returns (current_build, proxy_url, reg_secret, slug, target_version)."""
     current = await database.get_current_build()
     if not current or current.get("status") != "success":
         raise HTTPException(
             status_code=400,
             detail="Kein aktueller Build vorhanden — bitte zuerst EXEs bauen.",
         )
-
     proxy_url_raw = await runtime_value("proxy_public_url")
     if not proxy_url_raw:
         raise HTTPException(
@@ -5788,8 +5808,20 @@ async def _do_client_update(agent_id: str, agent: dict, existing_log_id: int | N
     slug = await runtime_value("product_slug") or "Softshelf"
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,30}", slug):
         raise HTTPException(status_code=500, detail="Ungueltiger product_slug in Settings")
-
     target_version = current.get("version") or "?"
+    return (current, proxy_url, reg_secret, slug, target_version)
+
+
+async def _do_client_update(agent_id: str, agent: dict, existing_log_id: int | None = None) -> dict:
+    """Eigentliches Client-Update: laed Setup.exe und fuehrt es als SYSTEM aus.
+    Synchroner run_command — daher Pre-Flight beim Endpoint vorher noetig
+    (siehe update_client_for_agent / Queue-Tick).
+
+    Prerequisites werden VOR action_log create/promote validiert damit ein
+    Settings-Fehler keinen stuck pending-Eintrag zuruecklaesst (siehe Review-#3).
+    """
+    current, proxy_url, reg_secret, slug, target_version = await _check_client_update_prereqs()
+
     job_id = _make_random_token()
     meta = __import__("json").dumps({"target_version": target_version})
     if existing_log_id:
@@ -5958,6 +5990,7 @@ async def bulk_update_client(body: BulkUpdateClientBody):
         agents = [a for a in agents if (a.get("client_version") or "") != target_version]
 
     dispatched = 0
+    queued = 0
     skipped = 0
     failed: list[str] = []
     for a in agents:
@@ -5965,10 +5998,17 @@ async def bulk_update_client(body: BulkUpdateClientBody):
             skipped += 1
             continue
         try:
-            await update_client_for_agent(a["agent_id"])
-            dispatched += 1
+            r = await update_client_for_agent(a["agent_id"])
+            if isinstance(r, dict) and r.get("queueable"):
+                queued += 1
+            else:
+                dispatched += 1
         except HTTPException as e:
-            failed.append(f"{a.get('hostname')}: {e.detail}")
+            # 409 (bereits queued/pending) -> skipped, andere -> failed
+            if e.status_code == 409:
+                skipped += 1
+            else:
+                failed.append(f"{a.get('hostname')}: {e.detail}")
         except Exception as e:
             failed.append(f"{a.get('hostname')}: {e}")
 
@@ -5976,6 +6016,7 @@ async def bulk_update_client(body: BulkUpdateClientBody):
         "ok": True,
         "target_version": target_version,
         "dispatched": dispatched,
+        "queued": queued,
         "skipped": skipped,
         "failed": failed,
     }
