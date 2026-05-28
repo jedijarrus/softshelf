@@ -8913,7 +8913,8 @@ function exportAgentsCsv() {
     {key:'agent_id', label:'Agent-ID'},
     {key:'ring', label:'Ring'},
     {key:'registered_at', label:'Registriert'},
-    {key:'last_seen', label:'Letzter Kontakt'},
+    {key:'last_seen', label:'Letzter Kontakt Kiosk'},
+    {key:'rmm_last_seen', label:'Letzter Kontakt RMM'},
     {key: r => r.banned ? 'ja' : 'nein', label:'Gesperrt'},
   ], cachedAgents || []);
 }
@@ -11472,41 +11473,40 @@ function renderAgents() {
     <div class="tbl-wrap"><table class="tbl">
     <thead><tr>
       <th style="width:32px"><input type="checkbox" id="agent-select-all" onchange="toggleSelectAllAgents(this.checked)"></th>
-      <th>Status</th>
       <th>Hostname</th>
       <th>User</th>
       <th>Ring</th>
       <th>Client-Version</th>
-      <th>Letzter Kontakt</th>
+      <th>Letzter Kontakt Kiosk</th>
+      <th>Letzter Kontakt RMM</th>
       <th>Agent-ID</th>
       <th></th>
     </tr></thead>
     <tbody>
     ${agents.map(a => {
-      const st = a.banned ? {cls: 'status-banned', label: 'Gesperrt'} : agentStatus(a.last_seen);
+      const kioskSt = agentStatus(a.last_seen);
+      const rmmSt   = agentStatus(a.rmm_last_seen);
       const ring = (a.ring >= 1 && a.ring <= 3) ? a.ring : 3;
       const ringLbl = _ringLabels[ring] || (ring === 3 ? 'Produktion' : `Ring ${ring}`);
       const ringBadge = `<span class="ring-badge ring-${ring}" title="${esc(ringLbl)}">${esc(ringLbl)}</span>`;
       const verStat = _agentVersionStatus(a, cv);
       const verCell = `<span class="agent-ver agent-ver-${verStat.cls}" title="${esc(a.os_version || '')}">${esc(verStat.label)}</span>`;
       const isSel = _selectedAgentIds.has(a.agent_id);
-      // Update/Reinstall-Icon fuer alle Agents (ausser banned). Tooltip + Wirkung
-      // unterscheiden sich nach Status: outdated = Update, current = Reinstall,
-      // unknown = Setup pushen (z.B. Tray fehlt evtl.).
       const upTip = verStat.cls === 'outdated'
         ? 'Update auf neue Version pushen'
         : (verStat.cls === 'current' ? 'Tray-EXE neu installieren (force-reinstall)' : 'Setup.exe pushen');
       const updateBtn = a.banned
         ? ''
         : `<button class="icon-btn" title="${esc(upTip)}" onclick="event.stopPropagation();updateSingleClient(${jsStr(a.agent_id)},${jsStr(a.hostname)})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>`;
+      const bannedPill = a.banned ? `<span class="status status-banned" style="margin-left:6px">Gesperrt</span>` : '';
       return `<tr class="${a.banned ? 'row-banned' : ''}">
         <td><input type="checkbox" class="agent-select-cb" ${isSel?'checked':''} onclick="event.stopPropagation();toggleAgentSelected(${jsStr(a.agent_id)},this.checked)"></td>
-        <td><span class="status ${st.cls}">${st.label}</span></td>
-        <td><span class="cell-host">${esc(a.hostname)}</span>${a.error_count ? `<span class="agent-error-badge">${a.error_count} Fehler</span>` : ''}</td>
+        <td><span class="cell-host">${esc(a.hostname)}</span>${bannedPill}${a.error_count ? `<span class="agent-error-badge">${a.error_count} Fehler</span>` : ''}</td>
         <td style="font-size:12px;color:var(--fg-4)">${esc(a.logged_in_user || '—')}</td>
         <td>${ringBadge}</td>
         <td>${verCell}</td>
-        <td><span class="cell-time" title="${esc(fmtDt(a.last_seen))}">${esc(relTime(a.last_seen))}</span></td>
+        <td><span class="cell-time ${kioskSt.cls}" title="${esc(fmtDt(a.last_seen))} (${esc(kioskSt.label)})">${esc(relTime(a.last_seen))}</span></td>
+        <td><span class="cell-time ${rmmSt.cls}" title="${esc(fmtDt(a.rmm_last_seen))} (${esc(rmmSt.label)})">${esc(relTime(a.rmm_last_seen))}</span></td>
         <td><span class="copy-id" title="${esc(a.agent_id)} — klicken zum Kopieren" onclick="copyId(${jsStr(a.agent_id)},this)">${esc(a.agent_id.substring(0,14))}…</span></td>
         <td>${updateBtn}<button class="row-action" onclick="openAgentDetail(${jsStr(a.agent_id)},${jsStr(a.hostname)})" title="Installationen">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
