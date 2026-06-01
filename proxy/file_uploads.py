@@ -25,7 +25,7 @@ import database
 
 UPLOAD_DIR = os.path.join(os.path.dirname(database.DB_PATH), "uploads")
 ALLOWED_EXTENSIONS = (".msi", ".exe")
-ARCHIVE_ENTRY_EXTENSIONS = (".exe", ".msi", ".bat", ".cmd")
+ARCHIVE_ENTRY_EXTENSIONS = (".exe", ".msi", ".bat", ".cmd", ".ps1")
 _PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,99}$")
 
 

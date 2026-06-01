@@ -239,15 +239,28 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
             )
         entry_win = entry_point.replace("/", "\\")
         ep_quoted = _ps_quote(entry_win)
+        ep_lower = entry_point.lower()
+        is_ps1 = ep_lower.endswith(".ps1")
         args_array = _ps_arg_array(install_args)
-        args_line = (
-            f"$proc = Start-Process -FilePath $exe -ArgumentList {args_array} "
-            f"-WorkingDirectory $workDir -PassThru -WindowStyle Hidden"
-            if args_array
-            else
-            f"$proc = Start-Process -FilePath $exe "
-            f"-WorkingDirectory $workDir -PassThru -WindowStyle Hidden"
-        )
+        if is_ps1:
+            # .ps1-Entry: powershell.exe -ExecutionPolicy Bypass -File <exe> <args>
+            ps_args = "'-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $exe"
+            if args_array:
+                ps_args += f", {args_array}"
+            args_line = (
+                f"$proc = Start-Process -FilePath powershell.exe "
+                f"-ArgumentList {ps_args} "
+                f"-WorkingDirectory $workDir -PassThru -WindowStyle Hidden"
+            )
+        else:
+            args_line = (
+                f"$proc = Start-Process -FilePath $exe -ArgumentList {args_array} "
+                f"-WorkingDirectory $workDir -PassThru -WindowStyle Hidden"
+                if args_array
+                else
+                f"$proc = Start-Process -FilePath $exe "
+                f"-WorkingDirectory $workDir -PassThru -WindowStyle Hidden"
+            )
         parts = [
             "$ErrorActionPreference = 'Continue'\n",
             pre_check,
