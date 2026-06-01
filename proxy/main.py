@@ -42,6 +42,18 @@ logger = logging.getLogger("softshelf")
 
 VERSION = "2.6.0"
 
+# Build-Timestamp = mtime der main.py beim Docker COPY. Aenderet sich nur
+# bei einem Image-Rebuild, nicht bei Container-Restart. Damit kann der
+# Admin im Header pruefen welcher Stand grade laeuft.
+try:
+    _build_ts = os.path.getmtime(__file__)
+    BUILD_AT = datetime.fromtimestamp(_build_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+except Exception:
+    BUILD_AT = "unbekannt"
+
+# Optional: Git-SHA vom Build-Server, falls Dockerfile als ARG/ENV gesetzt.
+GIT_SHA = (os.environ.get("GIT_SHA") or "")[:12]
+
 # /app/downloads — shared volume mit dem builder-Container
 DOWNLOADS_DIR = "/app/downloads"
 
@@ -783,7 +795,12 @@ async def health(request: Request):
         await database.health_ping()
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"DB nicht erreichbar: {e}")
-    result: dict = {"status": "ok", "version": VERSION}
+    result: dict = {
+        "status": "ok",
+        "version": VERSION,
+        "build_at": BUILD_AT,
+        "git_sha": GIT_SHA,
+    }
     # Optional: wenn ein gueltiges Bearer-Token mitkommt, pending_actions mitsenden
     try:
         auth_header = request.headers.get("authorization", "")
