@@ -16,6 +16,10 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+# Modulweite Referenz auf den APScheduler — von health_checks gelesen,
+# damit Job-Status im System-Status-Tab angezeigt werden kann.
+scheduler: "AsyncIOScheduler | None" = None
 from apscheduler.triggers.cron import CronTrigger
 
 import admin_auth
@@ -31,7 +35,7 @@ from middleware.audit_logger import audit_log_middleware
 from middleware.csrf import csrf_middleware
 from middleware.rate_limit import rate_limit_middleware
 from middleware.rate_limit import is_trusted_peer as _is_trusted_peer
-from routes import packages, install, admin, register, workflows_kiosk
+from routes import packages, install, admin, register, workflows_kiosk, health
 from rmm import get_rmm_client
 
 logger = logging.getLogger("softshelf")
@@ -594,6 +598,7 @@ async def lifespan(app: FastAPI):
     # APScheduler für nightly winget Scan + Enrichment + Catalog-Refresh.
     # Reihenfolge: Catalog refresh zuerst, dann scan, dann enrichment (das den
     # frischen Catalog mit dem Scan kombiniert).
+    global scheduler
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(
         _winget_catalog_refresh_job,
@@ -736,6 +741,7 @@ app.include_router(install.router,  prefix="/api/v1")
 app.include_router(register.router, prefix="/api/v1")
 app.include_router(workflows_kiosk.router, prefix="/api/v1")
 app.include_router(admin.router)
+app.include_router(health.router)
 
 
 @app.get("/api/v1/client-config")

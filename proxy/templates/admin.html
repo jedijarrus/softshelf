@@ -3907,6 +3907,145 @@ html[data-theme="dark"] .cm-s-softshelf-light .cm-bracket   { color: #d1d5db; }
   .script-editor-wrap, .script-editor-toolbar button { transition: none !important; }
 }
 
+/* ─── SYSTEM-STATUS (Healthchecks) ─────────────────────────────────────── */
+.hc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+.hc-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.hc-card:hover {
+  border-color: var(--fg-4);
+  box-shadow: 0 2px 8px rgba(9, 9, 11, .05);
+}
+.hc-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  line-height: 1.3;
+}
+.hc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--fg-muted, #94a3b8);
+}
+.hc-dot-ok    { background: var(--green); }
+.hc-dot-warn  { background: var(--amber); }
+.hc-dot-error { background: var(--red); }
+.hc-dot-info  { background: var(--blue); }
+.hc-card-msg {
+  font-size: 12px;
+  color: var(--fg-3);
+  line-height: 1.45;
+  word-break: break-word;
+}
+.hc-card-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10.5px;
+  color: var(--fg-5);
+  font-family: var(--mono);
+}
+.hc-card-details {
+  display: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-3);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow: auto;
+}
+.hc-card.open .hc-card-details { display: block; }
+.hc-card-expand-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-4);
+  font-size: 10.5px;
+  font-family: var(--mono);
+  cursor: pointer;
+  padding: 0;
+  margin: 0;
+}
+.hc-card-expand-btn:hover { color: var(--fg); }
+
+.hc-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+.hc-action-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hc-action-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.hc-action-desc {
+  font-size: 11.5px;
+  color: var(--fg-3);
+  line-height: 1.45;
+}
+.hc-action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hc-action-status {
+  font-size: 12px;
+  color: var(--fg-3);
+  font-family: var(--mono);
+  flex: 1;
+  text-align: right;
+}
+.hc-action-status.ok    { color: var(--green); }
+.hc-action-status.warn  { color: var(--amber); }
+.hc-action-status.error { color: var(--red); }
+.hc-action-log {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hc-card { transition: none; }
+}
+
 /* ─── TOAST ───────────────────────────────────────────────────────────── */
 
 .toast {
@@ -5643,6 +5782,10 @@ body.help-active [data-help]:not(.tab)::after {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
     Aktionen
   </button>
+  <button class="tab" data-tab="health" onclick="switchTab('health',this)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    System-Status
+  </button>
 
   <div class="sidebar-group-label">System</div>
   <button class="tab" data-tab="users" onclick="switchTab('users',this)">
@@ -6193,6 +6336,62 @@ body.help-active [data-help]:not(.tab)::after {
     </div>
     <div id="action-log-list"></div>
     <div id="al-pagination" style="display:flex;gap:8px;justify-content:center;padding:12px 0"></div>
+  </section>
+
+  <!-- ── System-Status Tab ───────────────────────────────────── -->
+  <section class="tab-pane" id="tab-health">
+    <div class="section-head">
+      <div>
+        <h1 class="section-title">System-Status</h1>
+        <div class="section-sub">
+          Gesundheits-Check aller Komponenten. Kontinuierliche Prüfungen oben,
+          aktive Tests darunter, Anomalien zuletzt.
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+        <button class="btn btn-ghost btn-sm" onclick="loadHealthAll()">Alle aktualisieren</button>
+      </div>
+    </div>
+
+    <div class="section-divider" style="margin-top:6px"><span class="label">Komponenten</span></div>
+    <div id="hc-tier1-grid" class="hc-grid"></div>
+
+    <div class="section-divider" style="margin-top:18px"><span class="label">Aktive Tests</span></div>
+    <div class="hc-actions-grid">
+      <div class="hc-action-card">
+        <div class="hc-action-title">Probe-Build</div>
+        <div class="hc-action-desc">Erstellt ein Mini-EXE im Builder. Verifiziert Wine + PyInstaller funktionieren. ~30s.</div>
+        <div class="hc-action-row">
+          <button class="btn btn-primary btn-sm" id="hc-btn-probe-build" onclick="runHealthProbeBuild()">Starten</button>
+          <span class="hc-action-status" id="hc-status-probe-build">—</span>
+        </div>
+        <pre class="hc-action-log" id="hc-log-probe-build" style="display:none"></pre>
+      </div>
+      <div class="hc-action-card">
+        <div class="hc-action-title">DB Integrity</div>
+        <div class="hc-action-desc">SQLite <code>PRAGMA integrity_check</code> auf der gesamten DB.</div>
+        <div class="hc-action-row">
+          <button class="btn btn-primary btn-sm" id="hc-btn-db-integrity" onclick="runHealthDbIntegrity()">Starten</button>
+          <span class="hc-action-status" id="hc-status-db-integrity">—</span>
+        </div>
+        <pre class="hc-action-log" id="hc-log-db-integrity" style="display:none"></pre>
+      </div>
+      <div class="hc-action-card">
+        <div class="hc-action-title">Tactical-Roundtrip</div>
+        <div class="hc-action-desc">Prüft Online-Status eines Test-Agents via Tactical. Deckt Proxy → Tactical → Agent ab.</div>
+        <div class="hc-action-row" style="flex-wrap:wrap;gap:6px">
+          <input class="input input-sm" id="hc-rt-agent" placeholder="agent_id" style="flex:1;min-width:160px;font-family:var(--mono);font-size:11px">
+          <button class="btn btn-primary btn-sm" id="hc-btn-tactical-rt" onclick="runHealthTacticalRt()">Starten</button>
+        </div>
+        <div class="hc-action-row">
+          <span class="hc-action-status" id="hc-status-tactical-rt">—</span>
+        </div>
+        <pre class="hc-action-log" id="hc-log-tactical-rt" style="display:none"></pre>
+      </div>
+    </div>
+
+    <div class="section-divider" style="margin-top:18px"><span class="label">Anomalien</span></div>
+    <div id="hc-anomalies-grid" class="hc-grid"></div>
   </section>
 </main>
 </div>
@@ -7406,6 +7605,7 @@ function switchTab(name, btn) {
   if (name === 'workflows')    loadWorkflows();
   if (name === 'audit')        loadAudit();
   if (name === 'actions')      loadActionLog(true);
+  if (name === 'health')       loadHealthAll();
   if (name === 'users')        { loadUsers(); loadInvitations(); }
   if (name === 'settings')     loadSettings();
   if (name === 'help')         loadHelp();
@@ -12710,6 +12910,149 @@ function agentUnban() {
 }
 
 // ── Audit ────────────────────────────────────────────────────────────────────
+// ── System-Status (Healthchecks) ───────────────────────────────────────
+const _HC_STATUS_LABEL = {ok: 'OK', warn: 'Warnung', error: 'Fehler', info: 'Info'};
+
+function _hcRenderCard(c) {
+  const status = c.status || 'info';
+  return '<div class="hc-card hc-card-' + esc(status) + '">' +
+           '<div class="hc-card-head">' +
+             '<span class="hc-dot hc-dot-' + esc(status) + '"></span>' +
+             esc(c.label || c.key) +
+           '</div>' +
+           '<div class="hc-card-msg">' + esc(c.message || '') + '</div>' +
+           '<div class="hc-card-meta">' +
+             '<span>' + esc(_HC_STATUS_LABEL[status] || status) + '</span>' +
+             (c.latency_ms != null
+               ? '<span>' + c.latency_ms + ' ms</span>'
+               : '<span></span>') +
+           '</div>' +
+           (c.details
+             ? '<button type="button" class="hc-card-expand-btn" onclick="this.parentElement.classList.toggle(\'open\')">Details ▾</button>' +
+               '<div class="hc-card-details">' + esc(c.details) + '</div>'
+             : '') +
+         '</div>';
+}
+
+function _hcRenderGrid(elId, checks) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (!checks || !checks.length) {
+    el.innerHTML = '<div class="empty-mini">Keine Daten.</div>';
+    return;
+  }
+  el.innerHTML = checks.map(_hcRenderCard).join('');
+}
+
+async function loadHealthTier1() {
+  const el = document.getElementById('hc-tier1-grid');
+  if (el) el.innerHTML = '<div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Komponenten werden geprüft…</span></div>';
+  try {
+    const data = await api('GET', '/admin/api/health/tier1');
+    _hcRenderGrid('hc-tier1-grid', data.checks);
+  } catch(e) {
+    if (el) el.innerHTML = '<div class="empty-mini" style="color:var(--red)">Fehler beim Laden: ' + esc(String(e)) + '</div>';
+  }
+}
+
+async function loadHealthAnomalies() {
+  const el = document.getElementById('hc-anomalies-grid');
+  if (el) el.innerHTML = '<div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Anomalien werden geprüft…</span></div>';
+  try {
+    const data = await api('GET', '/admin/api/health/anomalies');
+    _hcRenderGrid('hc-anomalies-grid', data.checks);
+  } catch(e) {
+    if (el) el.innerHTML = '<div class="empty-mini" style="color:var(--red)">Fehler beim Laden: ' + esc(String(e)) + '</div>';
+  }
+}
+
+async function loadHealthAll() {
+  await Promise.all([loadHealthTier1(), loadHealthAnomalies()]);
+}
+
+function _hcSetActionStatus(key, status, message) {
+  const s = document.getElementById('hc-status-' + key);
+  if (!s) return;
+  s.className = 'hc-action-status ' + (status || '');
+  s.textContent = message || '';
+}
+
+function _hcSetActionLog(key, text) {
+  const el = document.getElementById('hc-log-' + key);
+  if (!el) return;
+  if (text) {
+    el.style.display = 'block';
+    el.textContent = text;
+  } else {
+    el.style.display = 'none';
+    el.textContent = '';
+  }
+}
+
+function _hcLockBtn(id, lock, label) {
+  const b = document.getElementById(id);
+  if (!b) return;
+  if (lock) {
+    b.disabled = true;
+    b._origLabel = b.textContent;
+    b.innerHTML = '<span class="spinner"></span> ' + (label || 'Läuft…');
+  } else {
+    b.disabled = false;
+    b.textContent = b._origLabel || 'Starten';
+  }
+}
+
+async function runHealthProbeBuild() {
+  _hcLockBtn('hc-btn-probe-build', true, 'Baut…');
+  _hcSetActionStatus('probe-build', '', 'Läuft…');
+  _hcSetActionLog('probe-build', '');
+  try {
+    const r = await api('POST', '/admin/api/health/probe-build', null, {timeoutMs: 180000});
+    _hcSetActionStatus('probe-build', r.status, r.message || '');
+    if (r.details) _hcSetActionLog('probe-build', r.details);
+  } catch(e) {
+    _hcSetActionStatus('probe-build', 'error', String(e));
+  } finally {
+    _hcLockBtn('hc-btn-probe-build', false);
+  }
+}
+
+async function runHealthDbIntegrity() {
+  _hcLockBtn('hc-btn-db-integrity', true, 'Prüft…');
+  _hcSetActionStatus('db-integrity', '', 'Läuft…');
+  _hcSetActionLog('db-integrity', '');
+  try {
+    const r = await api('POST', '/admin/api/health/db-integrity');
+    _hcSetActionStatus('db-integrity', r.status, r.message || '');
+    if (r.details) _hcSetActionLog('db-integrity', r.details);
+  } catch(e) {
+    _hcSetActionStatus('db-integrity', 'error', String(e));
+  } finally {
+    _hcLockBtn('hc-btn-db-integrity', false);
+  }
+}
+
+async function runHealthTacticalRt() {
+  const agentId = (document.getElementById('hc-rt-agent').value || '').trim();
+  if (!agentId) { toast('agent_id erforderlich'); return; }
+  _hcLockBtn('hc-btn-tactical-rt', true, 'Prüft…');
+  _hcSetActionStatus('tactical-rt', '', 'Läuft…');
+  _hcSetActionLog('tactical-rt', '');
+  try {
+    const r = await api('POST', '/admin/api/health/tactical-rt', {agent_id: agentId});
+    _hcSetActionStatus('tactical-rt', r.status, r.message || '');
+    const log = [];
+    if (r.hostname) log.push('Host: ' + r.hostname);
+    if (r.last_seen) log.push('Last seen: ' + r.last_seen);
+    if (r.output) log.push('Output: ' + r.output);
+    if (log.length) _hcSetActionLog('tactical-rt', log.join('\n'));
+  } catch(e) {
+    _hcSetActionStatus('tactical-rt', 'error', String(e));
+  } finally {
+    _hcLockBtn('hc-btn-tactical-rt', false);
+  }
+}
+
 async function loadAudit() {
   const btn = document.getElementById('audit-refresh-btn');
   btn.disabled = true;

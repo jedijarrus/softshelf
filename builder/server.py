@@ -86,6 +86,60 @@ async def health():
     return {"status": "ok"}
 
 
+_SELFTEST_SCRIPT = r"""
+set -e
+SELFTEST_DIR="$(mktemp -d -p /tmp sf-selftest-XXXXXX)"
+cd "$SELFTEST_DIR"
+cat > hello.py <<'PYEOF'
+print("ok")
+PYEOF
+echo "=== wine python --version ==="
+wine python --version 2>&1 || true
+echo
+echo "=== pyinstaller --version ==="
+wine pyinstaller --version 2>&1 || true
+echo
+echo "=== build hello.exe ==="
+wine pyinstaller --onefile --clean --noconfirm --distpath ./dist --workpath ./build --specpath . hello.py 2>&1
+ls -la ./dist
+if [ -f ./dist/hello.exe ]; then
+    SIZE_KB=$(($(stat -c '%s' ./dist/hello.exe) / 1024))
+    echo "SELFTEST_OK ($SIZE_KB KB)"
+else
+    echo "SELFTEST_FAIL: hello.exe not produced"
+    exit 1
+fi
+"""
+
+
+@app.post("/selftest")
+async def selftest():
+    """Quick-Build-Probe: Wine + PyInstaller produzieren ein 1-Liner-EXE.
+    Erfolgt unter dem regulaeren build-lock, damit kein Konflikt mit echtem
+    Build. ~30s im Cold-Case."""
+    if _build_lock.locked():
+        raise HTTPException(status_code=409, detail="Ein Build laeuft bereits.")
+    async with _build_lock:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "bash", "-c", _SELFTEST_SCRIPT,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+            log = stdout.decode("utf-8", errors="replace")
+            ok = proc.returncode == 0 and "SELFTEST_OK" in log
+            return {"ok": ok, "log": log}
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return {"ok": False, "log": "Timeout (>120s)"}
+        except Exception as e:
+            return {"ok": False, "log": f"Selftest-Fehler: {e}"}
+
+
 @app.post("/build")
 async def build(req: BuildRequest):
     """Triggert den build.sh-Lauf. Seriell — nur ein Build gleichzeitig."""
