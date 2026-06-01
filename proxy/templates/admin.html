@@ -15425,16 +15425,31 @@ function renderWorkflows() {
             : '') +
           metaHtml +
         '</div>' +
-        '<button class="icon-btn" title="Workflow löschen" ' +
-                'aria-label="Workflow ' + esc(wf.name) + ' löschen" ' +
-                'onclick="event.stopPropagation(); confirmDeleteWorkflow(' + wf.id + ', ' + jsStr(wf.name) + ')" ' +
-                'style="flex-shrink:0">' +
-          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>' +
-        '</button>' +
+        '<div style="display:flex;gap:2px;flex-shrink:0">' +
+          '<button class="icon-btn" title="Workflow klonen" ' +
+                  'aria-label="Workflow ' + esc(wf.name) + ' klonen" ' +
+                  'onclick="event.stopPropagation(); cloneWorkflow(' + wf.id + ')">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
+          '</button>' +
+          '<button class="icon-btn" title="Workflow löschen" ' +
+                  'aria-label="Workflow ' + esc(wf.name) + ' löschen" ' +
+                  'onclick="event.stopPropagation(); confirmDeleteWorkflow(' + wf.id + ', ' + jsStr(wf.name) + ')">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>' +
+          '</button>' +
+        '</div>' +
       '</div>' +
       flowHtml +
     '</div>';
   }).join('');
+}
+
+async function cloneWorkflow(id) {
+  try {
+    const row = await api('POST', '/admin/api/workflows/' + id + '/clone');
+    toast('Workflow geklont: ' + (row && row.name ? row.name : ''));
+    await loadWorkflows();
+    if (row && row.id) openWorkflowEditor(row.id);
+  } catch(e) {}
 }
 
 function confirmDeleteWorkflow(id, name) {

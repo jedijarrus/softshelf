@@ -6422,6 +6422,43 @@ async def delete_workflow(wid: int):
     return {"ok": True}
 
 
+@router.post("/admin/api/workflows/{wid}/clone", dependencies=[Depends(_require_admin)])
+async def clone_workflow(wid: int):
+    """Workflow inklusive Steps duplizieren. Name = '<orig> (Kopie)',
+    bei Namens-Konflikt wird durchnummeriert. kiosk_enabled wird auf 0
+    gesetzt damit der Klon nicht versehentlich sofort live im Tray
+    sichtbar ist — Admin muss bewusst aktivieren."""
+    src = await database.get_workflow(wid)
+    if not src:
+        raise HTTPException(status_code=404, detail="Workflow nicht gefunden")
+    existing_names = {w["name"] for w in await database.get_workflows()}
+    base = f"{src['name']} (Kopie)"
+    candidate = base
+    n = 2
+    while candidate in existing_names:
+        candidate = f"{base} {n}"
+        n += 1
+        if n > 999:
+            raise HTTPException(status_code=409, detail="Zu viele Kopien")
+    try:
+        new_id = await database.create_workflow(
+            candidate,
+            src.get("description") or "",
+            src.get("steps") or "[]",
+            kiosk_enabled=0,
+            kiosk_description=src.get("kiosk_description") or "",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    row = await database.get_workflow(new_id)
+    if row:
+        try:
+            row["steps"] = _json.loads(row.get("steps") or "[]")
+        except Exception:
+            row["steps"] = []
+    return row
+
+
 @router.get("/admin/api/workflows/{wid}/runs", dependencies=[Depends(_require_admin)])
 async def get_workflow_runs(wid: int, limit: int = Query(default=50, ge=1, le=500)):
     """Letzte Runs fuer einen Workflow."""
