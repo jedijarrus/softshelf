@@ -14002,7 +14002,26 @@ async function doFolderUpload() {
         } catch (e2) { toast('Aktualisierung fehlgeschlagen: ' + e2.message, true); }
       };
     } else {
-      init(); closeAll(); resetFolderForm();
+      // Upload OK, aber keine Metadata erkannt — Sidebar offen lassen
+      // damit der Admin Args/Detection manuell setzen kann.
+      init();
+      toast('Hochgeladen — Felder unten ausfuellen oder Sidebar schliessen');
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = 'Aktualisieren';
+      submitBtn.onclick = async function() {
+        const pArgs = document.getElementById('folder-args').value.trim();
+        const pDet = document.getElementById('folder-detection').value.trim();
+        const pUninst = document.getElementById('folder-uninstall')?.value?.trim() || '';
+        try {
+          await api('PATCH', '/admin/api/custom/' + encodeURIComponent(result.name), {
+            install_args: pArgs,
+            detection_name: pDet,
+            uninstall_cmd: pUninst,
+          });
+          toast('Paket aktualisiert');
+          init(); closeAll(); resetFolderForm();
+        } catch (e2) { toast('Aktualisierung fehlgeschlagen: ' + e2.message, true); }
+      };
     }
   } catch (e) {
     toast('Upload fehlgeschlagen: ' + e.message, true);
