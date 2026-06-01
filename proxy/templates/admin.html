@@ -4928,6 +4928,13 @@ html[data-theme="dark"] .cm-s-softshelf-light .cm-bracket   { color: #d1d5db; }
   flex-shrink: 0;
   user-select: none;
 }
+.wf-flow-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.wf-step { max-width: 200px; }
 
 /* Card hover state for clickable workflow cards */
 .pkg-card.wf-card { transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
@@ -15330,14 +15337,18 @@ function renderWorkflows() {
   }
   el.innerHTML = _workflows.map(wf => {
     const steps = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []);
-    // Execution-Reihenfolge zeigen, mit Pfeilen dazwischen.
-    const stepItems = steps.map((s, i) => _wfStepItem(s, i));
+    // Execution-Reihenfolge zeigen. Pfeil + nachfolgender Step bilden eine
+    // atomare Einheit (.wf-flow-pair) damit sie beim Wrap nicht getrennt
+    // werden — kein einsamer Pfeil am Zeilenanfang.
     let flowHtml = '';
-    if (stepItems.length) {
-      const parts = [];
-      stepItems.forEach((it, i) => {
-        if (i > 0) parts.push('<span class="wf-flow-arrow" aria-hidden="true">→</span>');
-        parts.push(it);
+    if (steps.length) {
+      const parts = steps.map((s, i) => {
+        const item = _wfStepItem(s, i);
+        if (i === 0) return item;
+        return '<span class="wf-flow-pair">' +
+                 '<span class="wf-flow-arrow" aria-hidden="true">→</span>' +
+                 item +
+               '</span>';
       });
       flowHtml = '<div class="wf-flow">' + parts.join('') + '</div>';
     }
