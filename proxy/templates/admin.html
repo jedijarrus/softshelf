@@ -2878,7 +2878,7 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   cursor: pointer;
   transition: all .14s;
 }
-.upload-drop:hover, .upload-drop.dragover {
+.upload-drop:hover, .upload-drop.dragover, .upload-drop.is-dragover {
   border-color: var(--fg);
   background: var(--bg-hover);
 }
@@ -13770,6 +13770,91 @@ function _pickDefaultEntry(entries) {
   if (m) return m;
   return entries[0];
 }
+
+// Drag-and-drop: nimmt sowohl einzelne Dateien als auch Ordner an.
+// Rekursiver Walk via webkitGetAsEntry damit Ordnerstrukturen erhalten
+// bleiben (analog zu webkitdirectory-Input).
+async function _walkEntry(entry, basePath) {
+  if (entry.isFile) {
+    return new Promise((resolve) => {
+      entry.file((file) => {
+        try {
+          // webkitRelativePath ist read-only auf File. Wir setzen unsere
+          // eigene Eigenschaft, die der restliche Code via .webkitRelativePath
+          // ausliest — Object.defineProperty mit value reicht weil das Original
+          // beim drop leer ist.
+          Object.defineProperty(file, 'webkitRelativePath', {
+            value: basePath ? (basePath + '/' + file.name) : file.name,
+            configurable: true,
+          });
+        } catch (_) { /* Manche Browser lassen das nicht zu — Backend fallt auf .name zurueck */ }
+        resolve([file]);
+      });
+    });
+  }
+  if (entry.isDirectory) {
+    const reader = entry.createReader();
+    const all = [];
+    const here = basePath ? (basePath + '/' + entry.name) : entry.name;
+    while (true) {
+      const batch = await new Promise((res) => reader.readEntries(res));
+      if (!batch.length) break;
+      for (const sub of batch) {
+        const got = await _walkEntry(sub, here);
+        all.push(...got);
+      }
+    }
+    return all;
+  }
+  return [];
+}
+
+async function _collectDroppedItems(dataTransfer) {
+  const items = dataTransfer.items;
+  if (!items || !items.length) {
+    return Array.from(dataTransfer.files || []);
+  }
+  const all = [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind !== 'file') continue;
+    const entry = (it.webkitGetAsEntry && it.webkitGetAsEntry()) || null;
+    if (entry) {
+      const got = await _walkEntry(entry, '');
+      all.push(...got);
+    } else {
+      const f = it.getAsFile();
+      if (f) all.push(f);
+    }
+  }
+  return all;
+}
+
+function _bindFolderDrop() {
+  const drop = document.getElementById('folder-drop');
+  if (!drop || drop.dataset.dndBound === '1') return;
+  drop.dataset.dndBound = '1';
+  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, (e) => {
+    stop(e);
+    drop.classList.add('is-dragover');
+  }));
+  ['dragleave', 'dragend'].forEach(ev => drop.addEventListener(ev, (e) => {
+    stop(e);
+    drop.classList.remove('is-dragover');
+  }));
+  drop.addEventListener('drop', async (e) => {
+    stop(e);
+    drop.classList.remove('is-dragover');
+    if (!e.dataTransfer) return;
+    const files = await _collectDroppedItems(e.dataTransfer);
+    if (!files.length) { toast('Keine Dateien erkannt', true); return; }
+    onFolderSelected(files);
+  });
+}
+// Initial-Bind beim DOM-Load. _bindFolderDrop ist idempotent — wird beim
+// Re-Render des Drop-Targets neu aufgerufen.
+document.addEventListener('DOMContentLoaded', _bindFolderDrop);
 
 function onFolderSelected(fileList) {
   _folderFiles = Array.from(fileList || []);
