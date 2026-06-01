@@ -257,7 +257,17 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
             "_sfProgress 'Download laeuft...'\n",
             f"_sfDownload '{url_quoted}' $zipPath\n",
             "_sfProgress 'Download abgeschlossen, entpacke...'\n",
-            "Expand-Archive -LiteralPath $zipPath -DestinationPath $extPath -Force\n",
+            # Statt Expand-Archive (Parametersatz-Bug in einigen PS-5.1-Builds)
+            # die robustere .NET-API. Ziel-Dir muss vorher geleert werden weil
+            # ExtractToDirectory bei vorhandenem Pfad wirft.
+            "if (Test-Path -LiteralPath $extPath) { Remove-Item -LiteralPath $extPath -Recurse -Force -ErrorAction SilentlyContinue }\n",
+            "Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue\n",
+            "try {\n",
+            "    [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $extPath)\n",
+            "} catch {\n",
+            "    # Fallback auf Expand-Archive falls .NET nicht verfuegbar\n",
+            "    Expand-Archive -Path $zipPath -DestinationPath $extPath -Force\n",
+            "}\n",
             f"$exe = Join-Path $extPath '{ep_quoted}'\n",
             "if (-not (Test-Path -LiteralPath $exe)) {\n",
             "    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue\n",
