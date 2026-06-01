@@ -22,6 +22,21 @@ services:
       # Environment (z.B. Dockhand-UI „Environment variables")
       - path: .env
         required: false
+    environment:
+      # Fallback wenn .env fehlt (Dockhand-UI Env-Vars werden via
+      # Compose-Interpolation durchgereicht). Wenn Dockhand selbst die
+      # Variable nicht setzt, bleibt der Wert leer und env_file/Defaults
+      # greifen.
+      SECRET_KEY: ${SECRET_KEY:-}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_PORTAL_TITLE: ${ADMIN_PORTAL_TITLE:-}
+      TACTICAL_URL: ${TACTICAL_URL:-}
+      TACTICAL_API_KEY: ${TACTICAL_API_KEY:-}
+      OIDC_TENANT_ID: ${OIDC_TENANT_ID:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
     depends_on:
       - softshelf-builder
     healthcheck:
