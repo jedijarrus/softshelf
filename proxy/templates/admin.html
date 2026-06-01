@@ -4935,6 +4935,30 @@ html[data-theme="dark"] .cm-s-softshelf-light .cm-bracket   { color: #d1d5db; }
   flex-shrink: 0;
 }
 .wf-step { max-width: 200px; }
+.wf-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--fg-3);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.wf-toggle:hover {
+  background: var(--bg-soft);
+  color: var(--fg);
+  border-color: var(--fg-4);
+  border-style: solid;
+}
+.wf-toggle:focus-visible {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 1px;
+}
 
 /* Card hover state for clickable workflow cards */
 .pkg-card.wf-card { transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
@@ -15284,6 +15308,7 @@ async function pollActionResult(logId, displayName) {
 
 // ── Workflows ───────────────────────────────────────────────────────────
 let _workflows = [];
+let _wfExpanded = {}; // wf.id → bool (collapsed step-list expanded?)
 let _wfEditing = null; // null = new, number = editing ID
 let _wfSteps = [];     // current editor steps
 
@@ -15295,12 +15320,17 @@ async function loadWorkflows() {
 }
 
 function _wfStepLabel(s) {
-  // Leitet einen sprechenden Step-Namen ab. Reihenfolge: explizites label,
-  // sonst type-spezifisch (Paket-Name / Reboot-Hinweis / Script-Name).
+  // Reihenfolge: explizites Label, sonst type-spezifischer Best-Guess.
+  // Install/Uninstall: bevorzugt display_name aus store (z.B. "Microsoft 365"
+  // statt "Office365Business"), Fallback auf package_name-Key.
   if (s.label && s.label.trim()) return s.label.trim();
   const p = s.payload || {};
-  if (s.type === 'install')   return p.package_name || 'Install';
-  if (s.type === 'uninstall') return p.package_name ? 'Uninstall ' + p.package_name : 'Uninstall';
+  const pkgDisplay = (k) => (k && typeof store !== 'undefined' && store[k] && store[k].display_name) ? store[k].display_name : k;
+  if (s.type === 'install')   return pkgDisplay(p.package_name) || 'Install';
+  if (s.type === 'uninstall') {
+    const dn = pkgDisplay(p.package_name);
+    return dn ? 'Uninstall ' + dn : 'Uninstall';
+  }
   if (s.type === 'reboot')    return p.message ? 'Reboot · ' + p.message : 'Reboot';
   if (s.type === 'script')    return p.script_name || p.script_id || 'Script';
   return s.type || 'Step';
@@ -15339,17 +15369,37 @@ function renderWorkflows() {
     const steps = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []);
     // Execution-Reihenfolge zeigen. Pfeil + nachfolgender Step bilden eine
     // atomare Einheit (.wf-flow-pair) damit sie beim Wrap nicht getrennt
-    // werden — kein einsamer Pfeil am Zeilenanfang.
+    // werden. Lange Workflows (>6) standardmäßig collapsed mit
+    // "X weitere"-Toggle.
     let flowHtml = '';
+    const COLLAPSE_THRESHOLD = 6;
+    const COLLAPSE_PREVIEW = 4;
     if (steps.length) {
-      const parts = steps.map((s, i) => {
-        const item = _wfStepItem(s, i);
-        if (i === 0) return item;
-        return '<span class="wf-flow-pair">' +
-                 '<span class="wf-flow-arrow" aria-hidden="true">→</span>' +
-                 item +
-               '</span>';
-      });
+      const expanded = !!_wfExpanded[wf.id];
+      const longList = steps.length > COLLAPSE_THRESHOLD;
+      const shown = (longList && !expanded) ? COLLAPSE_PREVIEW : steps.length;
+      const parts = [];
+      for (let i = 0; i < shown; i++) {
+        const item = _wfStepItem(steps[i], i);
+        if (i === 0) parts.push(item);
+        else parts.push('<span class="wf-flow-pair"><span class="wf-flow-arrow" aria-hidden="true">→</span>' + item + '</span>');
+      }
+      if (longList && !expanded) {
+        const remaining = steps.length - COLLAPSE_PREVIEW;
+        parts.push(
+          '<button type="button" class="wf-toggle" ' +
+            'onclick="event.stopPropagation(); _wfExpanded[' + wf.id + ']=true; renderWorkflows()">' +
+            '+' + remaining + ' weitere' +
+          '</button>'
+        );
+      } else if (longList && expanded) {
+        parts.push(
+          '<button type="button" class="wf-toggle" ' +
+            'onclick="event.stopPropagation(); _wfExpanded[' + wf.id + ']=false; renderWorkflows()">' +
+            '⊖ einklappen' +
+          '</button>'
+        );
+      }
       flowHtml = '<div class="wf-flow">' + parts.join('') + '</div>';
     }
     // Failure-Policy-Summary (nur wenn nicht-abort-Steps vorhanden)
