@@ -13814,18 +13814,26 @@ async function _collectDroppedItems(dataTransfer) {
   if (!items || !items.length) {
     return Array.from(dataTransfer.files || []);
   }
-  const all = [];
+  // WICHTIG: DataTransferItem.webkitGetAsEntry() muss SYNCHRON fuer alle
+  // Items aufgerufen werden — nach dem ersten await wird die items-Liste
+  // invalidiert und die uebrigen Items liefern null/ungueltig.
+  const collected = []; // [{entry?: FileSystemEntry, file?: File}]
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     if (it.kind !== 'file') continue;
-    const entry = (it.webkitGetAsEntry && it.webkitGetAsEntry()) || null;
+    const entry = it.webkitGetAsEntry && it.webkitGetAsEntry();
     if (entry) {
-      const got = await _walkEntry(entry, '');
-      all.push(...got);
+      collected.push({entry});
     } else {
       const f = it.getAsFile();
-      if (f) all.push(f);
+      if (f) collected.push({file: f});
     }
+  }
+  const all = [];
+  for (const c of collected) {
+    if (c.file) { all.push(c.file); continue; }
+    const got = await _walkEntry(c.entry, '');
+    all.push(...got);
   }
   return all;
 }
