@@ -13,6 +13,8 @@ services:
     volumes:
       - ./data:/app/data              # SQLite persistent
       - ./downloads:/app/downloads    # shared mit builder für softshelf*.exe
+    env_file:
+      - .env
     depends_on:
       - softshelf-builder
     healthcheck:
