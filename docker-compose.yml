@@ -11,10 +11,17 @@ services:
     ports:
       - "8765:8765"
     volumes:
-      - ./data:/app/data              # SQLite persistent
-      - ./downloads:/app/downloads    # shared mit builder für softshelf*.exe
+      # Pfade konfigurierbar via Env-Vars. Default = relative
+      # Repo-Pfade (passt für .38 / klassisches Setup). Bei Dockhand
+      # auf /opt/softshelf umstellen via Stack-Env-Vars
+      # (SOFTSHELF_DATA_PATH=/opt/softshelf/data, SOFTSHELF_DOWNLOADS_PATH=/opt/softshelf/downloads)
+      - ${SOFTSHELF_DATA_PATH:-./data}:/app/data
+      - ${SOFTSHELF_DOWNLOADS_PATH:-./downloads}:/app/downloads
     env_file:
-      - .env
+      # .env optional: wenn nicht vorhanden, kommen Vars aus Container-
+      # Environment (z.B. Dockhand-UI „Environment variables")
+      - path: .env
+        required: false
     depends_on:
       - softshelf-builder
     healthcheck:
@@ -36,7 +43,7 @@ services:
     container_name: softshelf-builder
     restart: unless-stopped
     volumes:
-      - ./downloads:/app/downloads    # shared mit proxy für softshelf*.exe
+      - ${SOFTSHELF_DOWNLOADS_PATH:-./downloads}:/app/downloads
     # Builder ist NICHT nach außen exposed — nur im internen docker-Netz
     expose:
       - "8766"
