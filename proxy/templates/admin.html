@@ -5701,7 +5701,11 @@ body.help-active [data-help]:not(.tab)::after {
       <svg class="theme-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
       <svg class="theme-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
     </button>
-    <span class="meta-item hide-sm"><span class="label">Version</span><span class="value" id="meta-version">1.1.0</span></span>
+    <span class="meta-item hide-sm" id="meta-version-wrap" title="Server-Version · Image-Build">
+      <span class="label">Version</span>
+      <span class="value" id="meta-version">…</span>
+      <span class="value" id="meta-build" style="margin-left:6px;color:var(--fg-5);font-size:10.5px;font-family:var(--mono)"></span>
+    </span>
     <span class="meta-item"><span class="value" id="meta-time">--:--:--</span></span>
     <span class="conn" id="conn">
       <span class="conn-dot"></span>
@@ -7556,6 +7560,14 @@ async function healthPing() {
       try {
         const d = await r.json();
         if (d.version) document.getElementById('meta-version').textContent = d.version;
+        const meta = [];
+        if (d.build_at) meta.push(d.build_at);
+        if (d.git_sha)  meta.push(d.git_sha);
+        document.getElementById('meta-build').textContent = meta.length ? ('· ' + meta.join(' · ')) : '';
+        const wrap = document.getElementById('meta-version-wrap');
+        if (wrap) wrap.title = 'Server-Version: ' + (d.version || '?') +
+          (d.build_at ? '\\nImage-Build: ' + d.build_at : '') +
+          (d.git_sha ? '\\nGit SHA: ' + d.git_sha : '');
       } catch {}
     }
   } catch {
