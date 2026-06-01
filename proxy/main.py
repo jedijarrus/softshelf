@@ -46,8 +46,9 @@ VERSION = "2.6.0"
 # bei einem Image-Rebuild, nicht bei Container-Restart. Damit kann der
 # Admin im Header pruefen welcher Stand grade laeuft.
 try:
+    from zoneinfo import ZoneInfo
     _build_ts = os.path.getmtime(__file__)
-    BUILD_AT = datetime.fromtimestamp(_build_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    BUILD_AT = datetime.fromtimestamp(_build_ts, tz=ZoneInfo("Europe/Berlin")).strftime("%Y-%m-%d %H:%M")
 except Exception:
     BUILD_AT = "unbekannt"
 
