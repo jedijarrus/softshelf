@@ -4863,38 +4863,115 @@ html[data-theme="dark"] .cm-s-softshelf-light .cm-bracket   { color: #d1d5db; }
   font-weight: 500;
 }
 
-/* Workflow-Step-Liste in der Uebersicht (kompakt, no border) */
-.wf-step-list {
+/* Workflow-Übersicht: Step-Flow mit Reihenfolge + Pfeil-Konnektoren */
+.wf-flow {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
-  margin-top: 10px;
-  padding-top: 10px;
+  gap: 6px;
+  align-items: center;
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px solid var(--border);
 }
 .wf-step {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 5px 9px 5px 7px;
+  border-radius: 6px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
   color: var(--fg-2);
   white-space: nowrap;
-  max-width: 220px;
+  max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.wf-step::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
+.wf-step .wf-step-idx {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-4);
+  background: var(--bg);
+  padding: 2px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
   flex-shrink: 0;
 }
-.wf-step-install::before    { background: var(--green); }
-.wf-step-uninstall::before  { background: var(--red); }
-.wf-step-reboot::before     { background: var(--amber); }
-.wf-step-script::before     { background: var(--blue); }
-.wf-step-step::before       { background: var(--fg-4); }
+.wf-step .wf-step-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.wf-step .wf-step-label {
+  overflow: hidden; text-overflow: ellipsis;
+}
+.wf-step .wf-step-suffix {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-4);
+  flex-shrink: 0;
+}
+.wf-step-install   { background: color-mix(in srgb, var(--green) 8%, var(--bg-soft)); border-color: color-mix(in srgb, var(--green) 25%, var(--border)); }
+.wf-step-uninstall { background: color-mix(in srgb, var(--red) 8%, var(--bg-soft)); border-color: color-mix(in srgb, var(--red) 25%, var(--border)); }
+.wf-step-reboot    { background: color-mix(in srgb, var(--amber) 10%, var(--bg-soft)); border-color: color-mix(in srgb, var(--amber) 30%, var(--border)); }
+.wf-step-script    { background: color-mix(in srgb, var(--blue) 8%, var(--bg-soft)); border-color: color-mix(in srgb, var(--blue) 25%, var(--border)); }
+.wf-step-install   .wf-step-dot { background: var(--green); }
+.wf-step-uninstall .wf-step-dot { background: var(--red); }
+.wf-step-reboot    .wf-step-dot { background: var(--amber); }
+.wf-step-script    .wf-step-dot { background: var(--blue); }
+.wf-step-step      .wf-step-dot { background: var(--fg-4); }
+.wf-flow-arrow {
+  color: var(--fg-5);
+  font-size: 11px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+/* Card hover state for clickable workflow cards */
+.pkg-card.wf-card { transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+.pkg-card.wf-card:hover {
+  border-color: var(--fg-4);
+  box-shadow: 0 2px 8px rgba(9, 9, 11, .06);
+}
+html[data-theme="dark"] .pkg-card.wf-card:hover {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .35);
+}
+.pkg-card.wf-card:focus-visible {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 2px;
+}
+
+/* Workflow meta-line (Kiosk badge + failure-policy summary) */
+.wf-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--fg-4);
+}
+.wf-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 4px;
+  line-height: 1.4;
+}
+.wf-badge-kiosk { background: color-mix(in srgb, var(--blue) 12%, transparent); color: var(--blue); }
+.wf-badge-step-count { background: var(--bg-soft); color: var(--fg-3); border: 1px solid var(--border); }
+.wf-badge-warn { background: color-mix(in srgb, var(--amber) 14%, transparent); color: color-mix(in srgb, var(--amber) 80%, var(--fg)); }
+.wf-badge-info { background: var(--bg-soft); color: var(--fg-3); border: 1px solid var(--border); }
+@media (prefers-reduced-motion: reduce) {
+  .pkg-card.wf-card { transition: none !important; }
+}
 
 /* Picker (Profile-Editor Paket-Auswahl) */
 .pkg-picker {
@@ -15222,12 +15299,25 @@ function _wfStepLabel(s) {
   return s.type || 'Step';
 }
 
-function _wfStepItem(s) {
+function _wfFailureSuffix(s) {
+  const fp = s.on_failure || 'abort';
+  if (fp === 'abort') return '';
+  if (fp === 'skip')  return '<span class="wf-step-suffix" title="Bei Fehler: Step überspringen">⊘</span>';
+  const m = /^retry:(\d+)$/.exec(fp);
+  if (m) return '<span class="wf-step-suffix" title="Bei Fehler: ' + m[1] + 'x wiederholen">↻' + esc(m[1]) + '</span>';
+  return '';
+}
+
+function _wfStepItem(s, idx) {
   const label = _wfStepLabel(s);
   const type = s.type || 'step';
   const trunc = label.length > 30 ? label.slice(0, 29) + '…' : label;
-  return '<span class="wf-step wf-step-' + esc(type) + '" title="' + esc(label) + '">' +
-           esc(trunc) +
+  const fpTip = (s.on_failure && s.on_failure !== 'abort') ? ' · ' + s.on_failure : '';
+  return '<span class="wf-step wf-step-' + esc(type) + '" title="' + esc(label) + ' (' + esc(type) + fpTip + ')">' +
+           '<span class="wf-step-idx">' + (idx + 1) + '</span>' +
+           '<span class="wf-step-dot"></span>' +
+           '<span class="wf-step-label">' + esc(trunc) + '</span>' +
+           _wfFailureSuffix(s) +
          '</span>';
 }
 
@@ -15240,37 +15330,60 @@ function renderWorkflows() {
   }
   el.innerHTML = _workflows.map(wf => {
     const steps = typeof wf.steps === 'string' ? JSON.parse(wf.steps) : (wf.steps || []);
-    const counts = {install: 0, uninstall: 0, reboot: 0, script: 0};
-    steps.forEach(s => { if (counts[s.type] !== undefined) counts[s.type] += 1; });
-    const summaryParts = [];
-    if (counts.install)   summaryParts.push(counts.install + ' Install' + (counts.install !== 1 ? 's' : ''));
-    if (counts.uninstall) summaryParts.push(counts.uninstall + ' Uninstall' + (counts.uninstall !== 1 ? 's' : ''));
-    if (counts.reboot)    summaryParts.push(counts.reboot + ' Reboot' + (counts.reboot !== 1 ? 's' : ''));
-    if (counts.script)    summaryParts.push(counts.script + ' Script' + (counts.script !== 1 ? 's' : ''));
-    const counterStr = steps.length + ' Steps · ' + summaryParts.join(' · ');
-    // Steps fuer Anzeige alphabetisch sortiert (Reihenfolge bleibt im Editor erhalten,
-    // aber die Uebersicht braucht keine Execution-Reihenfolge — nur "was steckt drin?").
-    const stepsForDisplay = steps.slice().sort((a, b) => {
-      return _wfStepLabel(a).localeCompare(_wfStepLabel(b), 'de', {sensitivity: 'base'});
-    });
-    const itemsHtml = stepsForDisplay.map(_wfStepItem).join('');
-    return '<div class="pkg-card" style="cursor:pointer" onclick="openWorkflowEditor(' + wf.id + ')">' +
+    // Execution-Reihenfolge zeigen, mit Pfeilen dazwischen.
+    const stepItems = steps.map((s, i) => _wfStepItem(s, i));
+    let flowHtml = '';
+    if (stepItems.length) {
+      const parts = [];
+      stepItems.forEach((it, i) => {
+        if (i > 0) parts.push('<span class="wf-flow-arrow" aria-hidden="true">→</span>');
+        parts.push(it);
+      });
+      flowHtml = '<div class="wf-flow">' + parts.join('') + '</div>';
+    }
+    // Failure-Policy-Summary (nur wenn nicht-abort-Steps vorhanden)
+    const nonAbort = steps.filter(s => s.on_failure && s.on_failure !== 'abort').length;
+    const stepCountBadge =
+      '<span class="wf-badge wf-badge-step-count">' + steps.length + ' Step' + (steps.length !== 1 ? 's' : '') + '</span>';
+    const fpBadge = nonAbort
+      ? '<span class="wf-badge wf-badge-warn" title="Schritte mit Retry/Skip-Policy">' + nonAbort + '× Retry/Skip</span>'
+      : '';
+    const kioskBadge = wf.kiosk_enabled
+      ? '<span class="wf-badge wf-badge-kiosk">Kiosk</span>'
+      : '';
+    const metaHtml =
+      '<div class="wf-meta">' + stepCountBadge + kioskBadge + fpBadge + '</div>';
+    return '<div class="pkg-card wf-card" tabindex="0" role="button" aria-label="Workflow ' + esc(wf.name) + ' bearbeiten" ' +
+             'onclick="openWorkflowEditor(' + wf.id + ')" ' +
+             'onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();openWorkflowEditor(' + wf.id + ')}">' +
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">' +
         '<div style="flex:1;min-width:0">' +
-          '<div class="pkg-name" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
-            '<span>' + esc(wf.name) + '</span>' +
-            (wf.kiosk_enabled ? '<span style="font-size:10px;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;background:var(--blue-soft,#dbeafe);color:var(--blue,#2563eb);padding:2px 6px;border-radius:4px">Kiosk</span>' : '') +
-          '</div>' +
-          (wf.description ? '<div style="font-size:12px;color:var(--fg-3);margin-top:2px">' + esc(wf.description) + '</div>' : '') +
-          '<div style="font-size:11px;color:var(--fg-4);margin-top:6px;letter-spacing:0.3px;text-transform:uppercase">' + esc(counterStr) + '</div>' +
+          '<div class="pkg-name">' + esc(wf.name) + '</div>' +
+          (wf.description
+            ? '<div style="font-size:12.5px;color:var(--fg-3);margin-top:3px;line-height:1.45">' + esc(wf.description) + '</div>'
+            : '') +
+          metaHtml +
         '</div>' +
-        '<button class="icon-btn" title="Löschen" onclick="event.stopPropagation(); deleteWorkflow(' + wf.id + ')" style="flex-shrink:0">' +
+        '<button class="icon-btn" title="Workflow löschen" ' +
+                'aria-label="Workflow ' + esc(wf.name) + ' löschen" ' +
+                'onclick="event.stopPropagation(); confirmDeleteWorkflow(' + wf.id + ', ' + jsStr(wf.name) + ')" ' +
+                'style="flex-shrink:0">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>' +
         '</button>' +
       '</div>' +
-      (itemsHtml ? '<div class="wf-step-list">' + itemsHtml + '</div>' : '') +
+      flowHtml +
     '</div>';
   }).join('');
+}
+
+function confirmDeleteWorkflow(id, name) {
+  showConfirm(
+    'Workflow löschen',
+    'Workflow „' + name + '" wirklich löschen? Laufende Runs werden NICHT abgebrochen — bitte vorher prüfen.',
+    () => deleteWorkflow(id),
+    'Löschen',
+    'btn-danger'
+  );
 }
 
 function openWorkflowEditor(id) {
