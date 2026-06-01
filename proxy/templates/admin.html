@@ -7561,12 +7561,12 @@ async function healthPing() {
         const d = await r.json();
         if (d.version) document.getElementById('meta-version').textContent = d.version;
         const meta = [];
-        if (d.build_at) meta.push(d.build_at);
+        if (d.build_at) meta.push('Last Build ' + d.build_at);
         if (d.git_sha)  meta.push(d.git_sha);
         document.getElementById('meta-build').textContent = meta.length ? ('· ' + meta.join(' · ')) : '';
         const wrap = document.getElementById('meta-version-wrap');
         if (wrap) wrap.title = 'Server-Version: ' + (d.version || '?') +
-          (d.build_at ? '\\nImage-Build: ' + d.build_at : '') +
+          (d.build_at ? '\\nLast Build: ' + d.build_at + ' (Europe/Berlin)' : '') +
           (d.git_sha ? '\\nGit SHA: ' + d.git_sha : '');
       } catch {}
     }
