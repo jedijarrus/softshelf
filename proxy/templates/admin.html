@@ -13752,7 +13752,7 @@ function resetUploadForm() {
 let _folderFiles = [];
 
 function _isInstallerName(name) {
-  return /\.(exe|msi|bat|cmd)$/i.test(name);
+  return /\.(exe|msi|bat|cmd|ps1)$/i.test(name);
 }
 
 function _pickDefaultEntry(entries) {
@@ -13887,9 +13887,9 @@ function onFolderSelected(fileList) {
 
   const sel = document.getElementById('folder-entry');
   if (!entries.length) {
-    sel.innerHTML = '<option value="">\u2014 keine .exe/.msi/.bat im Ordner \u2014</option>';
+    sel.innerHTML = '<option value="">\u2014 keine .exe/.msi/.bat/.ps1 im Ordner \u2014</option>';
     sel.disabled = true;
-    toast('Im Ordner wurde keine .exe/.msi/.bat/.cmd gefunden', true);
+    toast('Im Ordner wurde keine .exe/.msi/.bat/.cmd/.ps1 gefunden', true);
     return;
   }
   sel.disabled = false;
