@@ -3739,6 +3739,174 @@ button.outdated-badge.clickable:disabled {
   border-bottom-right-radius: var(--r-lg);
 }
 
+/* ─── SCRIPT EDITOR (CodeMirror) ──────────────────────────────────────── */
+
+.script-editor-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow: hidden;
+  background: var(--bg-soft);
+  transition: border-color .15s ease;
+}
+.script-editor-wrap:focus-within { border-color: var(--fg-4); }
+.script-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.script-editor-toolbar .tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--fg-4);
+}
+.script-editor-toolbar .spacer { flex: 1; }
+.script-editor-toolbar button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-3);
+  padding: 4px 8px;
+  border-radius: var(--r-sm, 4px);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.script-editor-toolbar button:hover {
+  background: var(--bg);
+  color: var(--fg);
+  border-color: var(--border);
+}
+.script-editor-toolbar button:focus-visible {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 1px;
+}
+.script-editor-toolbar svg { width: 12px; height: 12px; }
+.script-editor-host { background: var(--bg); }
+.script-editor-host .CodeMirror {
+  height: auto;
+  min-height: 180px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  background: var(--bg);
+  color: var(--fg);
+}
+.script-editor-host .CodeMirror-gutters {
+  background: var(--bg-soft);
+  border-right: 1px solid var(--border);
+}
+.script-editor-host .CodeMirror-linenumber { color: var(--fg-5); }
+.script-editor-host .CodeMirror-cursor { border-left-color: var(--fg); }
+.script-editor-host .CodeMirror-selected { background: var(--bg-3, rgba(120,120,180,.18)); }
+.script-editor-host .CodeMirror-focused .CodeMirror-selected { background: var(--bg-3, rgba(120,120,180,.28)); }
+.script-editor-host .CodeMirror-activeline-background { background: var(--bg-soft); }
+
+/* Light-mode PowerShell syntax */
+.cm-s-softshelf-light .cm-keyword   { color: #7c3aed; font-weight: 500; }
+.cm-s-softshelf-light .cm-variable  { color: #0f766e; }
+.cm-s-softshelf-light .cm-variable-2{ color: #0f766e; }
+.cm-s-softshelf-light .cm-string    { color: #b91c1c; }
+.cm-s-softshelf-light .cm-string-2  { color: #b91c1c; }
+.cm-s-softshelf-light .cm-number    { color: #c2410c; }
+.cm-s-softshelf-light .cm-comment   { color: #6b7280; font-style: italic; }
+.cm-s-softshelf-light .cm-operator  { color: #1f2937; }
+.cm-s-softshelf-light .cm-builtin   { color: #1d4ed8; }
+.cm-s-softshelf-light .cm-def       { color: #1d4ed8; }
+.cm-s-softshelf-light .cm-bracket   { color: #374151; }
+
+/* Dark-mode PowerShell syntax */
+html[data-theme="dark"] .cm-s-softshelf-light .cm-keyword   { color: #c4b5fd; }
+html[data-theme="dark"] .cm-s-softshelf-light .cm-variable  { color: #5eead4; }
+html[data-theme="dark"] .cm-s-softshelf-light .cm-variable-2{ color: #5eead4; }
+html[data-theme="dark"] .cm-s-softshelf-light .cm-string    { color: #fca5a5; }
+html[data-theme="dark"] .cm-s-softshelf-light .cm-string-2  { color: #fca5a5; }
+html[data-theme="dark"] .cm-s-softshelf-light .cm-number    { color: #fdba74; }
+html[data-theme="dark"] .cm-s-softshelf-light .cm-comment   { color: #9ca3af; }
+html[data-theme="dark"] .cm-s-softshelf-light .cm-operator  { color: #e5e7eb; }
+html[data-theme="dark"] .cm-s-softshelf-light .cm-builtin   { color: #93c5fd; }
+html[data-theme="dark"] .cm-s-softshelf-light .cm-def       { color: #93c5fd; }
+html[data-theme="dark"] .cm-s-softshelf-light .cm-bracket   { color: #d1d5db; }
+
+.script-meta-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  align-items: center;
+}
+.script-meta-row label {
+  font-size: 11px;
+  color: var(--fg-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.script-meta-row input[type="number"] {
+  width: 80px;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+.script-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--fg-4);
+  line-height: 1.5;
+}
+.script-hint code {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  background: var(--bg-soft);
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+/* ─── FULLSCREEN SCRIPT MODAL ─────────────────────────────────────────── */
+.modal.modal-full .modal-card {
+  max-width: min(1200px, 96vw);
+  width: 100%;
+  height: min(86vh, 900px);
+  display: flex;
+  flex-direction: column;
+}
+.modal.modal-full .modal-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px 16px;
+}
+.modal.modal-full .script-editor-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.modal.modal-full .script-editor-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.modal.modal-full .script-editor-host .CodeMirror {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal.open, .modal-card { animation: none !important; }
+  .script-editor-wrap, .script-editor-toolbar button { transition: none !important; }
+}
+
 /* ─── TOAST ───────────────────────────────────────────────────────────── */
 
 .toast {
@@ -6511,6 +6679,39 @@ body.help-active [data-help]:not(.tab)::after {
     <button class="btn btn-primary" id="wf-save-btn" onclick="saveWorkflow()">Speichern</button>
   </div>
 </aside>
+
+<!-- FULLSCREEN SCRIPT EDITOR MODAL -->
+<div class="modal modal-full" id="script-fullscreen-modal" role="dialog" aria-modal="true" aria-labelledby="script-fs-title">
+  <div class="modal-card">
+    <div class="modal-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <div>
+        <div class="modal-tag">SCRIPT-STEP</div>
+        <div class="modal-title" id="script-fs-title">PowerShell-Code</div>
+      </div>
+      <button class="icon-btn" onclick="closeScriptFullscreen()" title="Schließen (Esc)" aria-label="Schließen">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="script-editor-wrap">
+        <div class="script-editor-toolbar">
+          <span class="tag">PowerShell · SYSTEM</span>
+          <span class="spacer"></span>
+          <span style="font-size:11px;color:var(--fg-4)">Tab = Einrücken · Ctrl+S Speichern · Esc Schließen</span>
+        </div>
+        <div class="script-editor-host" id="script-fs-host"></div>
+      </div>
+      <div class="script-hint" style="margin-top:8px">
+        Läuft als <code>NT AUTHORITY\SYSTEM</code> ohne Desktop. <code>winget</code> nicht im PATH —
+        Pfad-Resolver verwenden. <code>Invoke-WebRequest</code> kann hängen, nutze <code>Net.WebClient</code> oder BITS.
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeScriptFullscreen()">Abbrechen</button>
+      <button class="btn btn-primary" onclick="commitScriptFullscreen()">Übernehmen</button>
+    </div>
+  </div>
+</div>
 
 <!-- PASSWORD CHANGE MODAL -->
 <div class="modal" id="password-modal">
@@ -15102,11 +15303,162 @@ function openWorkflowEditor(id) {
 function closeWorkflowEditor() {
   _wfEditing = null;
   _wfSteps = [];
+  _wfCmInstances = {};
+  const fs = document.getElementById('script-fullscreen-modal');
+  if (fs && fs.classList.contains('open')) closeScriptFullscreen();
   document.getElementById('wf-editor-panel').classList.remove('open');
   document.getElementById('overlay').classList.remove('open');
 }
 
+// ── CodeMirror lazy-load + Script-Step-Editor ──────────────────────────
+let _cmLoadPromise = null;
+function _ensureCodeMirror() {
+  if (window.CodeMirror && window.CodeMirror.modes && window.CodeMirror.modes.powershell) {
+    return Promise.resolve();
+  }
+  if (_cmLoadPromise) return _cmLoadPromise;
+  const base = 'https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16';
+  const loadCss = (href) => new Promise((res, rej) => {
+    const l = document.createElement('link');
+    l.rel = 'stylesheet'; l.href = href;
+    l.onload = res; l.onerror = () => rej(new Error('css load fail'));
+    document.head.appendChild(l);
+  });
+  const loadJs = (src) => new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error('js load fail'));
+    document.head.appendChild(s);
+  });
+  _cmLoadPromise = (async () => {
+    await loadCss(base + '/codemirror.min.css');
+    await loadJs(base + '/codemirror.min.js');
+    await loadJs(base + '/mode/powershell/powershell.min.js');
+    try {
+      await loadJs(base + '/addon/edit/matchbrackets.min.js');
+      await loadJs(base + '/addon/selection/active-line.min.js');
+    } catch(e) { /* optional */ }
+  })();
+  return _cmLoadPromise;
+}
+
+let _wfCmInstances = {};
+let _scriptFsState = null;
+
+function _wfBuildCmConfig(initialValue, onSave, onEsc) {
+  return {
+    value: initialValue || '',
+    mode: 'powershell',
+    lineNumbers: true,
+    indentUnit: 2,
+    tabSize: 2,
+    smartIndent: false,
+    indentWithTabs: false,
+    matchBrackets: true,
+    styleActiveLine: true,
+    theme: 'softshelf-light',
+    viewportMargin: Infinity,
+    extraKeys: {
+      Tab: (cm) => {
+        if (cm.somethingSelected()) cm.indentSelection('add');
+        else cm.replaceSelection('  ', 'end');
+      },
+      'Shift-Tab': (cm) => cm.indentSelection('subtract'),
+      'Ctrl-S': () => { if (onSave) onSave(); return false; },
+      'Cmd-S': () => { if (onSave) onSave(); return false; },
+      Esc: () => { if (onEsc) onEsc(); return false; },
+    },
+  };
+}
+
+function _initWfScriptEditors() {
+  const scriptSteps = _wfSteps.map((s, i) => ({s, i})).filter(x => x.s.type === 'script');
+  if (!scriptSteps.length) return;
+  _ensureCodeMirror().then(() => {
+    scriptSteps.forEach(({s, i}) => {
+      const host = document.getElementById('wf-script-host-' + i);
+      if (!host || host.dataset.cmMounted === '1') return;
+      const cm = window.CodeMirror(host, _wfBuildCmConfig(
+        (s.payload || {}).code || '',
+        () => saveWorkflow(),
+        null,
+      ));
+      cm.on('change', () => {
+        if (_wfSteps[i] && _wfSteps[i].type === 'script') {
+          _wfSteps[i].payload = _wfSteps[i].payload || {};
+          _wfSteps[i].payload.code = cm.getValue();
+        }
+      });
+      _wfCmInstances[i] = cm;
+      host.dataset.cmMounted = '1';
+    });
+  }).catch(err => {
+    console.warn('CodeMirror load fail, fallback textarea:', err);
+    scriptSteps.forEach(({s, i}) => {
+      const host = document.getElementById('wf-script-host-' + i);
+      if (!host || host.dataset.cmMounted) return;
+      const ta = document.createElement('textarea');
+      ta.className = 'input';
+      ta.style.cssText = 'font-family:var(--mono);font-size:12px;width:100%;min-height:160px;border:0;border-radius:0;background:var(--bg);padding:8px 10px';
+      ta.placeholder = 'PowerShell-Code…';
+      ta.value = (s.payload || {}).code || '';
+      ta.addEventListener('input', () => { _wfSteps[i].payload.code = ta.value; });
+      host.appendChild(ta);
+      host.dataset.cmMounted = 'fallback';
+    });
+  });
+}
+
+function openScriptFullscreen(idx) {
+  const step = _wfSteps[idx];
+  if (!step || step.type !== 'script') return;
+  if (_wfCmInstances[idx]) step.payload.code = _wfCmInstances[idx].getValue();
+  const modal = document.getElementById('script-fullscreen-modal');
+  modal.classList.add('open');
+  document.getElementById('script-fs-title').textContent = step.label
+    ? ('PowerShell-Code · ' + step.label)
+    : ('PowerShell-Code · Step ' + (idx + 1));
+  _ensureCodeMirror().then(() => {
+    const host = document.getElementById('script-fs-host');
+    host.innerHTML = '';
+    const cm = window.CodeMirror(host, _wfBuildCmConfig(
+      step.payload.code || '',
+      () => commitScriptFullscreen(),
+      () => closeScriptFullscreen(),
+    ));
+    setTimeout(() => { cm.refresh(); cm.focus(); }, 30);
+    _scriptFsState = { stepIdx: idx, cm: cm };
+  });
+}
+
+function commitScriptFullscreen() {
+  if (!_scriptFsState) { closeScriptFullscreen(); return; }
+  const { stepIdx, cm } = _scriptFsState;
+  const code = cm.getValue();
+  if (_wfSteps[stepIdx]) {
+    _wfSteps[stepIdx].payload = _wfSteps[stepIdx].payload || {};
+    _wfSteps[stepIdx].payload.code = code;
+  }
+  if (_wfCmInstances[stepIdx]) _wfCmInstances[stepIdx].setValue(code);
+  closeScriptFullscreen();
+}
+
+function closeScriptFullscreen() {
+  const modal = document.getElementById('script-fullscreen-modal');
+  if (modal) modal.classList.remove('open');
+  const host = document.getElementById('script-fs-host');
+  if (host) host.innerHTML = '';
+  _scriptFsState = null;
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const m = document.getElementById('script-fullscreen-modal');
+    if (m && m.classList.contains('open')) closeScriptFullscreen();
+  }
+});
+
 function renderWfSteps() {
+  _wfCmInstances = {};
   const el = document.getElementById('wf-steps-list');
   if (!_wfSteps.length) {
     el.innerHTML = '<div class="empty-mini" style="padding:12px 0">Keine Steps. Füge unten welche hinzu.</div>';
@@ -15121,7 +15473,26 @@ function renderWfSteps() {
       ).join('');
       payloadFields = '<select class="input" data-wf="package" style="font-size:12px" onchange="_wfSteps[' + i + '].payload.package_name=this.value"><option value="">\u2014 Paket wählen \u2014</option>' + opts + '</select>';
     } else if (s.type === 'script') {
-      payloadFields = '<textarea class="input" rows="4" style="font-family:var(--mono);font-size:12px" placeholder="PowerShell-Code\u2026" oninput="_wfSteps[' + i + '].payload.code=this.value">' + esc((s.payload||{}).code || '') + '</textarea>';
+      const tmo = (s.payload && s.payload.timeout) || 120;
+      payloadFields =
+        '<div class="script-editor-wrap">' +
+          '<div class="script-editor-toolbar">' +
+            '<span class="tag">PowerShell</span>' +
+            '<span class="spacer"></span>' +
+            '<button type="button" onclick="openScriptFullscreen(' + i + ')" title="Vollbild (Esc zum Schlie\u00dfen)">' +
+              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 14v6h6M20 10V4h-6M4 20l7-7M20 4l-7 7"/></svg>' +
+              'Vollbild' +
+            '</button>' +
+          '</div>' +
+          '<div class="script-editor-host" id="wf-script-host-' + i + '"></div>' +
+        '</div>' +
+        '<div class="script-meta-row">' +
+          '<label>Timeout (s)' +
+            '<input type="number" class="input" data-wf="script-timeout" min="30" max="3600" step="10" value="' + tmo + '" ' +
+              'oninput="_wfSteps[' + i + '].payload.timeout=Math.max(30,Math.min(3600,+this.value||120))">' +
+          '</label>' +
+          '<span class="script-hint" style="margin:0;flex:1">L\u00e4uft als SYSTEM ohne Desktop. <code>winget</code> nicht im PATH.</span>' +
+        '</div>';
     } else if (s.type === 'reboot') {
       const p = s.payload || {};
       payloadFields = '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
@@ -15150,6 +15521,7 @@ function renderWfSteps() {
       payloadFields +
     '</div>';
   }).join('');
+  _initWfScriptEditors();
 }
 
 // Drag-drop for step reordering
@@ -15182,8 +15554,16 @@ function _syncWfStepsFromDOM() {
       const pkgEl = q('[data-wf="package"]');
       if (pkgEl) s.payload.package_name = pkgEl.value;
     } else if (s.type === 'script') {
-      const ta = q('textarea');
-      if (ta) s.payload.code = ta.value;
+      // Prefer CodeMirror instance if mounted; else fallback textarea
+      const cm = _wfCmInstances[i];
+      if (cm) {
+        s.payload.code = cm.getValue();
+      } else {
+        const ta = q('textarea');
+        if (ta) s.payload.code = ta.value;
+      }
+      const tmoEl = q('[data-wf="script-timeout"]');
+      if (tmoEl) s.payload.timeout = Math.max(30, Math.min(3600, +tmoEl.value || 120));
     } else if (s.type === 'reboot') {
       const nums = card.querySelectorAll('input[type="number"]');
       if (nums[0]) s.payload.countdown = +nums[0].value;
