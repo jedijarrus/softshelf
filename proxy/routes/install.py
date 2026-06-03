@@ -693,6 +693,7 @@ def _build_winget_command(
     extra_args: str = "",
     process_check: str = "",
     display_name: str = "",
+    uninstall_override: str = "",
 ) -> str:
     """
     Baut den PowerShell-Wrapper für winget install/upgrade/uninstall.
@@ -872,6 +873,42 @@ if ($remaining.Count -gt 0) {{
 }}
 """
 
+    # Final Uninstall-Override: admin-konfigurierter PowerShell-Befehl, der
+    # nur dann feuert, wenn nach winget + ARP-Fallback noch ARP-Eintraege
+    # zum display_name uebrig sind. Typischer Use-Case: TeamViewer
+    # (vendor-uninstall.exe /S) oder andere MSI-Reste die weder winget
+    # noch ARP-Fallback raeumen koennen. Override-String wird als-ist
+    # in PowerShell evaluiert; Admin hat ihn bewusst gesetzt.
+    uninstall_override_block = ""
+    if action == "uninstall" and display_name and uninstall_override:
+        safe_dn2 = display_name.replace("'", "''")[:120]
+        safe_override = uninstall_override.replace("'", "''")[:500]
+        uninstall_override_block = f"""
+$dnOv = '{safe_dn2}'
+$stillThere = $false
+foreach ($k in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*')) {{
+    if (Get-ItemProperty $k -ErrorAction SilentlyContinue | Where-Object {{ $_.DisplayName -and $_.DisplayName.StartsWith($dnOv) }}) {{
+        $stillThere = $true; break
+    }}
+}}
+if ($stillThere) {{
+    _sfProgress "Uninstall-Override aktiv (winget+ARP haben nicht aufgeraeumt)..."
+    try {{
+        $ovOut = (Invoke-Expression '{safe_override}' 2>&1) -join "`n"
+        _sfProgress ("Override stdout: " + $ovOut)
+        _sfProgress ("Override exit: $LASTEXITCODE")
+    }} catch {{
+        _sfProgress ("Override-Fehler: " + $_)
+    }}
+    Start-Sleep -Seconds 2
+    $afterCount = 0
+    foreach ($k in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*')) {{
+        $afterCount += @(Get-ItemProperty $k -ErrorAction SilentlyContinue | Where-Object {{ $_.DisplayName -and $_.DisplayName.StartsWith($dnOv) }}).Count
+    }}
+    _sfProgress ("ARP nach Override: $afterCount Eintraege uebrig")
+}}
+"""
+
     return f"""$ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 {_PS_FIND_WINGET}
@@ -886,6 +923,7 @@ if ($wingetExe) {{
     $out = (& $wingetExe {winget_args} 2>&1) -join "`n"
     _sfProgress $out
     {uninstall_fallback_block}
+    {uninstall_override_block}
 }}
 """
 
@@ -1696,6 +1734,7 @@ async def dispatch_uninstall_for_agent(
             "uninstall", package_name,
             extra_args=pkg.get("install_args") or "",
             display_name=pkg.get("display_name") or "",
+            uninstall_override=(pkg.get("uninstall_cmd") or "").strip(),
         )
         scope = pkg.get("winget_scope") or "auto"
         job_id = _generate_job_id()
