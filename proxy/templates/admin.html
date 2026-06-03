@@ -7388,9 +7388,9 @@ body.help-active [data-help]:not(.tab)::after {
 <!-- Action Detail Modal -->
 <div class="modal" id="action-detail-modal">
   <div class="modal-card" style="max-width:600px">
-    <div class="modal-head">
+    <div class="modal-head" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
       <h3 class="modal-title">Aktions-Details</h3>
-      <button class="modal-close" onclick="closeActionDetailModal()">&times;</button>
+      <button class="modal-close" onclick="closeActionDetailModal()" title="Schließen" aria-label="Schließen" style="background:transparent;border:0;color:var(--fg-4);font-size:22px;line-height:1;padding:0 2px;margin:-4px -4px 0 0;cursor:pointer;border-radius:6px">&times;</button>
     </div>
     <div class="modal-body" id="action-detail-body"></div>
   </div>
@@ -15695,10 +15695,12 @@ async function alShowDetail(logId) {
     </div>
     ${entry.error_summary ? `<div class="al-error-banner"><strong>Fehler:</strong> ${esc(entry.error_summary)}</div>` : ''}
     ${entry.stdout ? `<details><summary style="cursor:pointer;margin-bottom:8px;font-size:13px;color:var(--fg-3)">Vollstaendiger Output</summary><div class="al-stdout">${esc(entry.stdout)}</div></details>` : ''}
-    ${entry.status === 'error' ? `<div style="margin-top:16px;text-align:right;display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn btn-sm btn-ghost" onclick="alDelete(${entry.id});closeActionDetailModal()">Eintrag löschen</button>
-      <button class="btn btn-sm" style="background:var(--red);color:#fff" onclick="alRetry(${entry.id});closeActionDetailModal()">Nochmal versuchen</button>
-    </div>` : `<div style="margin-top:16px;text-align:right"><button class="btn btn-sm btn-ghost" onclick="alDelete(${entry.id});closeActionDetailModal()">Eintrag löschen</button></div>`}
+    <div style="margin-top:16px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <button class="icon-btn icon-btn-danger" title="Eintrag löschen" aria-label="Eintrag löschen" onclick="alDelete(${entry.id});closeActionDetailModal()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+      </button>
+      ${entry.status === 'error' ? `<button class="btn btn-sm" style="background:var(--red);color:#fff" onclick="alRetry(${entry.id});closeActionDetailModal()">Nochmal versuchen</button>` : ''}
+    </div>
   `;
   document.getElementById('action-detail-modal').classList.add('open');
 }
