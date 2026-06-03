@@ -95,6 +95,20 @@ def _validate_version_label(label: str) -> str:
     return label
 
 
+def _label_from_msi(meta: dict) -> str | None:
+    """ProductVersion aus MSI-Metadaten in ein gueltiges Version-Label umwandeln.
+    Gibt None zurueck wenn keine brauchbare Version vorhanden ist."""
+    if not meta:
+        return None
+    raw = (meta.get("ProductVersion") or "").strip()
+    if not raw:
+        return None
+    cand = raw.replace(" ", "_")[:50]
+    if _VERSION_LABEL_RE.fullmatch(cand):
+        return cand
+    return None
+
+
 def _validate_entry_point(ep: str) -> str:
     ep = ep.strip().replace("\\", "/")
     if not ep:
@@ -4879,7 +4893,9 @@ async def upload_custom_file(
             detection_name=eff_detection or None,
         )
 
-        label = _validate_version_label(version_label) or "v1"
+        label = _validate_version_label(version_label)
+        if not label:
+            label = _label_from_msi(msi_meta) or "v1"
         try:
             version_id = await database.add_package_version(
                 package_name=name,
@@ -4920,10 +4936,14 @@ async def upload_custom_file(
     existing_labels = await database.get_existing_version_labels(name)
     label = _validate_version_label(version_label)
     if not label:
-        n = len(existing_labels) + 1
-        while f"v{n}" in existing_labels:
-            n += 1
-        label = f"v{n}"
+        msi_label = _label_from_msi(msi_meta)
+        if msi_label and msi_label not in existing_labels:
+            label = msi_label
+        else:
+            n = len(existing_labels) + 1
+            while f"v{n}" in existing_labels:
+                n += 1
+            label = f"v{n}"
     if label in existing_labels:
         raise HTTPException(
             status_code=409,
