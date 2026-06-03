@@ -804,6 +804,7 @@ if ($remaining.Count -gt 0) {{
             }}
         }}
         _sfProgress "ARP exec: $($r.DisplayName) -> $cmd"
+        $arpExit = $null
         try {{
             if ($cmd -match '^"([^"]+)"\\s*(.*)$') {{
                 $exe = $Matches[1]; $argStr = $Matches[2].Trim()
@@ -817,9 +818,54 @@ if ($remaining.Count -gt 0) {{
             }} else {{
                 $p = Start-Process -FilePath $exe -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
             }}
-            _sfProgress "ARP exit: $($p.ExitCode)"
+            $arpExit = $p.ExitCode
+            _sfProgress "ARP exit: $arpExit"
         }} catch {{
             _sfProgress "ARP Uninstaller-Fehler: $_"
+        }}
+        # MSI-Exit 1612 = ERROR_INSTALL_SOURCE_ABSENT. Windows-Installer braucht
+        # die originale MSI, hat sie aber nicht mehr im Cache (TeamViewer
+        # raeumt nach Updates auf). Fallback: vendor uninstall.exe via ARP
+        # InstallLocation, oder Package-Cache-MSI von ProgramData.
+        if ($arpExit -eq 1612 -and $isMsi) {{
+            _sfProgress "MSI-Source fehlt (1612), versuche Vendor-Uninstaller..."
+            $vendorExe = $null
+            if ($r.InstallLocation -and (Test-Path $r.InstallLocation)) {{
+                foreach ($cand in 'uninstall.exe','Uninstall.exe','unins000.exe') {{
+                    $full = Join-Path $r.InstallLocation $cand
+                    if (Test-Path $full) {{ $vendorExe = $full; break }}
+                }}
+            }}
+            if ($vendorExe) {{
+                $vendorArgs = if ($vendorExe -match 'unins\\d+\\.exe$') {{ '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' }} else {{ '/S' }}
+                _sfProgress "Vendor exec: $vendorExe $($vendorArgs -join ' ')"
+                try {{
+                    $vp = Start-Process -FilePath $vendorExe -ArgumentList $vendorArgs -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                    _sfProgress "Vendor exit: $($vp.ExitCode)"
+                }} catch {{
+                    _sfProgress "Vendor-Uninstaller-Fehler: $_"
+                }}
+            }} else {{
+                # Package-Cache-Rescue: C:\ProgramData\Package Cache\{{guid}}\*.msi
+                $pc = $r.PSChildName
+                $cacheDir = Join-Path "$env:ProgramData\Package Cache" $pc
+                if (Test-Path $cacheDir) {{
+                    $msiFile = Get-ChildItem $cacheDir -Filter '*.msi' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($msiFile) {{
+                        _sfProgress "Package-Cache-MSI: $($msiFile.FullName)"
+                        try {{
+                            $cp = Start-Process -FilePath 'msiexec.exe' -ArgumentList '/x',('"' + $msiFile.FullName + '"'),'/quiet','/norestart' -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                            _sfProgress "Cache-MSI exit: $($cp.ExitCode)"
+                        }} catch {{
+                            _sfProgress "Cache-MSI-Fehler: $_"
+                        }}
+                    }} else {{
+                        _sfProgress "Kein Vendor-Uninstaller, kein Package-Cache-MSI gefunden"
+                    }}
+                }} else {{
+                    _sfProgress "Kein Vendor-Uninstaller in InstallLocation, kein Package-Cache"
+                }}
+            }}
         }}
     }}
     Start-Sleep -Seconds 2
