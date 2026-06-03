@@ -10560,9 +10560,27 @@ function openEditPanel(name) {
   } else {
     argsField.style.display = 'none';
   }
-  // detection_name/uninstall_cmd bleiben custom-only
+  // detection_name bleibt custom-only
   document.querySelector('[data-edit="detection_name"]').closest('.field').style.display = isCustom ? '' : 'none';
-  document.querySelector('[data-edit="uninstall_cmd"]').closest('.field').style.display = isCustom ? '' : 'none';
+  // uninstall_cmd: custom = Primary-Uninstall, winget = Override-Fallback wenn winget+ARP fehlschlagen
+  const uninstField = document.querySelector('[data-edit="uninstall_cmd"]').closest('.field');
+  const uninstInput = document.querySelector('[data-edit="uninstall_cmd"]');
+  const detectBtn = document.getElementById('detect-uninstall-btn');
+  if (isCustom) {
+    uninstField.style.display = '';
+    uninstField.querySelector('label').textContent = 'Uninstall-Command';
+    uninstInput.placeholder = 'msiexec /x "{ProductCode}" /qn';
+    uninstField.querySelector('.hint').innerHTML = 'Leer lassen wenn kein Uninstall gewuenscht ist. „Aus Tactical holen" scannt die Agents und zieht den Uninstall-String aus der Windows-Registry.';
+    if (detectBtn) detectBtn.style.display = '';
+  } else if (pkg.type === 'winget') {
+    uninstField.style.display = '';
+    uninstField.querySelector('label').textContent = 'Uninstall-Override (optional)';
+    uninstInput.placeholder = '& "C:\\Program Files\\TeamViewer\\uninstall.exe" /S';
+    uninstField.querySelector('.hint').innerHTML = 'Letzte Instanz wenn <code>winget uninstall</code> + ARP-Fallback das Paket nicht losbekommen (z.B. TeamViewer mit MSI-Exit 1612). Wird nur ausgefuehrt wenn nach den anderen Versuchen noch ein ARP-Eintrag passend zum Anzeigenamen existiert. PowerShell-Syntax, Admin-validiert.';
+    if (detectBtn) detectBtn.style.display = 'none';
+  } else {
+    uninstField.style.display = 'none';
+  }
   // install_timeout fuer Plugin nicht relevant (Datei kopieren = Sekunden)
   document.querySelector('[data-edit="install_timeout"]').closest('.field').style.display = isPlugin ? 'none' : '';
   // Entry-Point-Dropdown + Inhalt-verwalten nur bei Archive-Paketen
@@ -11166,10 +11184,11 @@ async function saveEdit() {
         check_reboot: body.check_reboot || 0,
         hide_uninstall: body.hide_uninstall || 0,
       };
-      // install_args + process_check nur fuer winget mitsenden
+      // install_args + process_check + uninstall_cmd nur fuer winget mitsenden
       if (ptype === 'winget') {
         enableBody.install_args = body.install_args || '';
         enableBody.process_check = body.process_check || '';
+        enableBody.uninstall_cmd = body.uninstall_cmd || '';
       }
       await api('PATCH', `/admin/api/enable/${encodeURIComponent(_editingName)}`, enableBody);
     }

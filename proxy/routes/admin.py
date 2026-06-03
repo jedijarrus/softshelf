@@ -992,8 +992,9 @@ class EnableRequest(BaseModel):
     hide_uninstall: int | None = Field(default=None, ge=0, le=1)
     install_args: str | None = Field(default=None, max_length=500)
     process_check: str | None = Field(default=None, max_length=500)
+    uninstall_cmd: str | None = Field(default=None, max_length=500)
 
-    @field_validator("install_args", "process_check")
+    @field_validator("install_args", "process_check", "uninstall_cmd")
     @classmethod
     def _check_no_ctrl_optional(cls, v):
         if v and not _NO_CTRL_RE.fullmatch(v):
@@ -1160,6 +1161,10 @@ async def update_package(name: str, body: EnableRequest):
         updates["install_args"] = body.install_args
     if body.process_check is not None:
         updates["process_check"] = body.process_check
+    # uninstall_cmd nur fuer winget zulassen — custom hat eigenen Upsert-Pfad,
+    # plugin/choco haben kein Konzept dafuer.
+    if body.uninstall_cmd is not None and ptype == "winget":
+        updates["uninstall_cmd"] = body.uninstall_cmd.strip() or None
     if updates:
         async with database._db() as db:
             sets = ", ".join(f"{k} = ?" for k in updates)
