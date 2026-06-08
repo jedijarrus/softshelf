@@ -6690,10 +6690,18 @@ async def pause_workflow_run(run_id: int):
     return {"ok": True}
 
 
+class WorkflowResumeBody(BaseModel):
+    from_step: Optional[int] = Field(default=None, ge=0)
+
+
 @router.post("/admin/api/workflow-runs/{run_id}/resume", dependencies=[Depends(_require_admin)])
-async def resume_workflow_run(run_id: int):
-    """Setzt einen pausierten Workflow-Run fort."""
-    await workflow_engine.resume(run_id)
+async def resume_workflow_run(
+    run_id: int, body: WorkflowResumeBody | None = None
+):
+    """Setzt einen Workflow-Run fort. Akzeptiert paused/failed/timed_out.
+    Optional `from_step` in der Body setzt current_step neu (Skip-forward)."""
+    from_step = body.from_step if body else None
+    await workflow_engine.resume(run_id, from_step=from_step)
     return {"ok": True}
 
 

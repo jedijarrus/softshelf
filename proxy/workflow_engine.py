@@ -313,16 +313,53 @@ async def pause(run_id: int):
     logger.info("workflow run %d paused", run_id)
 
 
-async def resume(run_id: int):
-    """Setzt einen pausierten Workflow-Run fort."""
+_RESUMABLE_STATES = ("paused", "failed", "timed_out")
+
+
+async def resume(run_id: int, from_step: int | None = None):
+    """Setzt einen pausierten/failed/timed_out Run fort.
+
+    Optional from_step setzt current_step neu (Skip-forward bei failed Run).
+    None = retry current_step (z.B. nach Container-Restart-Heilung).
+
+    Vor Re-Dispatch werden alle noch offenen action_log-Eintraege dieses Runs
+    als error markiert. Damit triggert ein evtl. spaet eingetroffener Callback
+    keinen Doppel-Advance und _dispatch_install_step laeuft nicht in einen
+    Doppel-pending-Konflikt.
+    """
     run = await database.get_workflow_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail=f"Workflow-Run {run_id} nicht gefunden")
-    if run["status"] != "paused":
+    if run["status"] not in _RESUMABLE_STATES:
         raise HTTPException(
             status_code=400,
-            detail=f"Workflow-Run {run_id} kann nicht fortgesetzt werden (status={run['status']})",
+            detail=(
+                f"Workflow-Run {run_id} kann nicht fortgesetzt werden "
+                f"(status={run['status']}, erlaubt: {list(_RESUMABLE_STATES)})"
+            ),
         )
+
+    # from_step validieren falls angegeben
+    steps = _parse_json(run.get("step_snapshot"), [])
+    if from_step is not None:
+        if not isinstance(from_step, int) or from_step < 0 or from_step >= len(steps):
+            raise HTTPException(
+                status_code=400,
+                detail=f"from_step muss zwischen 0 und {len(steps) - 1} liegen",
+            )
+        await database.update_workflow_run(
+            run_id, current_step=from_step, step_state="{}",
+        )
+        logger.info("workflow run %d resume: skip-to-step %d", run_id, from_step)
+
+    # Orphane action_logs des Runs cleanen (Container-Restart-Zombies o.ae.)
+    cleaned = await database.abort_orphan_action_logs_for_run(
+        run_id,
+        error_summary="Run wurde fortgesetzt — pending action_log als orphan markiert",
+    )
+    if cleaned:
+        logger.info("workflow run %d resume: %d orphan action_log(s) auf error gesetzt", run_id, cleaned)
+
     await database.update_workflow_run(run_id, status="running")
     logger.info("workflow run %d resumed, dispatching current step", run_id)
     await dispatch_current_step(run_id)
@@ -415,7 +452,21 @@ async def recover_after_restart():
                         continue
                 except Exception as e:
                     logger.warning("recover: deadline parse fuer run %d: %s", run_id, e)
-            # Deadline noch gueltig oder nicht gesetzt — re-dispatch
+            # Deadline noch gueltig oder nicht gesetzt — re-dispatch.
+            # Vorher orphan action_logs cleanen damit Re-Dispatch nicht in
+            # einen Doppel-pending-Konflikt laeuft (Container-Restart hat den
+            # fire-and-forget _deliver_command_bg ggf. gekillt bevor Tactical
+            # den Befehl annahm — Zombie-action_log mit status=running ist die
+            # Folge, der Re-Dispatch wuerde sonst eine Exception werfen).
+            try:
+                cleaned = await database.abort_orphan_action_logs_for_run(
+                    run_id,
+                    error_summary="Container-Restart waehrend Dispatch — orphan action_log",
+                )
+                if cleaned:
+                    logger.info("recover: run %d — %d orphan action_log(s) auf error gesetzt", run_id, cleaned)
+            except Exception as e:
+                logger.warning("recover: orphan-action_log cleanup fuer run %d: %s", run_id, e)
             logger.info("recover: re-dispatche workflow run %d (step=%d)", run_id, run.get("current_step", 0))
             _spawn_bg(dispatch_current_step(run_id))
     except Exception as e:

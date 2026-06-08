@@ -3988,6 +3988,24 @@ async def complete_action_log(
         await db.commit()
 
 
+async def abort_orphan_action_logs_for_run(
+    run_id: int, error_summary: str
+) -> int:
+    """Markiert alle noch offenen action_log Eintraege eines Runs als error.
+    Wird vor Resume/Recover aufgerufen, damit Re-Dispatch nicht in eine
+    Doppel-pending Lage laeuft. Gibt Anzahl der betroffenen Rows zurueck."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET status = 'error', "
+            "error_summary = ?, completed_at = datetime('now') "
+            "WHERE workflow_run_id = ? AND status IN ('pending', 'running') "
+            "AND completed_at IS NULL",
+            (error_summary, run_id),
+        )
+        await db.commit()
+        return cur.rowcount or 0
+
+
 async def create_queued_action_log(
     agent_id: str, hostname: str, package_name: str,
     display_name: str, pkg_type: str, action: str,
