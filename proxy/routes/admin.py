@@ -184,7 +184,12 @@ _ADMIN_ONLY_EXCEPTIONS = (
 
 async def _require_admin(request: Request) -> dict:
     """
-    Auth-Dependency: prueft Session-Cookie + erzwingt Role-based Access.
+    Auth-Dependency: prueft Session-Cookie ODER Bearer-API-Token, dann RBAC.
+
+    Auth-Quellen (Reihenfolge):
+      1. Authorization: Bearer <token>  — admin_api_tokens, Hash-Lookup,
+         Scope (read|full). read = nur GET, full = alles wie Session.
+      2. Session-Cookie                  — klassische Browser-Session.
 
     Rollen:
       admin    — alles
@@ -192,11 +197,23 @@ async def _require_admin(request: Request) -> dict:
                  KEIN whitelist-edit, KEINE users/settings/build
       viewer   — nur GETs, keine state-changing operations
 
-    RBAC wird hier zentral gecheckt anhand method + path. Dadurch muss
-    kein Endpoint einzeln dekoriert werden.
+    RBAC wird hier zentral gecheckt anhand method + path.
     """
-    token = request.cookies.get(admin_auth.SESSION_COOKIE)
-    user = await admin_auth.get_session_user(token)
+    user = None
+    api_scope: str | None = None
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        raw = auth_header[7:].strip()
+        tok_row, scope = await admin_auth.authenticate_bearer(raw)
+        if tok_row:
+            user = tok_row  # contains username/display_name/role via JOIN
+            api_scope = scope
+            request.state.api_token_id = tok_row.get("id")
+
+    if not user:
+        session_token = request.cookies.get(admin_auth.SESSION_COOKIE)
+        user = await admin_auth.get_session_user(session_token)
+
     if not user:
         raise HTTPException(
             status_code=401,
@@ -206,6 +223,24 @@ async def _require_admin(request: Request) -> dict:
     role = user.get("role") or "admin"
     method = request.method.upper()
     path = request.url.path
+
+    # API-Token Scope read = nur GETs (inkl. HEAD/OPTIONS — read-safe).
+    if api_scope == "read" and method not in ("GET", "HEAD", "OPTIONS"):
+        raise HTTPException(
+            status_code=403,
+            detail="Read-Only API-Token darf nur GET-Anfragen ausfuehren.",
+        )
+
+    # API-Token-Endpoints selbst sind NIE via API-Token erreichbar — sonst koennte
+    # ein full-Token sich selbst weitere Tokens anlegen / rotieren.
+    if api_scope is not None and (
+        path == "/admin/api/admin-tokens"
+        or path.startswith("/admin/api/admin-tokens/")
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Token-Verwaltung nur per Browser-Session.",
+        )
 
     # GETs ueberall frei fuer alle Rollen
     if method == "GET":
@@ -585,6 +620,117 @@ async def whoami(user: dict = Depends(_require_admin)):
         "sso_provider": user.get("sso_provider"),
         "role": user.get("role") or "admin",
     }
+
+
+# ── Admin API Tokens ─────────────────────────────────────────────────────────
+
+_VALID_TOKEN_SCOPES = {"read", "full"}
+_TOKEN_LABEL_RE = re.compile(r"^[\w \-._:/+]{1,80}$")
+
+
+class ApiTokenCreateRequest(BaseModel):
+    label: str = Field(default="", max_length=80)
+    scope: str = "read"
+    ttl_hours: Optional[int] = Field(default=24, ge=0, le=24 * 365)
+
+    @field_validator("scope")
+    @classmethod
+    def _check_scope(cls, v: str) -> str:
+        if v not in _VALID_TOKEN_SCOPES:
+            raise ValueError(f"scope muss eine von {sorted(_VALID_TOKEN_SCOPES)} sein")
+        return v
+
+    @field_validator("label")
+    @classmethod
+    def _check_label(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            return ""
+        if not _TOKEN_LABEL_RE.fullmatch(v):
+            raise ValueError("Label: nur Buchstaben, Ziffern, Leerzeichen, .-_:/+ (max 80)")
+        return v
+
+
+def _public_api_token(tok: dict, raw: str | None = None) -> dict:
+    """Wandelt eine DB-Token-Row in die UI-Repraesentation. Raw-Token nur
+    inkludiert wenn explizit uebergeben (= einmal beim Create)."""
+    out = {
+        "id": tok["id"],
+        "user_id": tok["user_id"],
+        "username": tok.get("username"),
+        "display_name": tok.get("display_name"),
+        "label": tok.get("label") or "",
+        "scope": tok.get("scope") or "read",
+        "created_at": tok.get("created_at"),
+        "expires_at": tok.get("expires_at"),
+        "last_used_at": tok.get("last_used_at"),
+        "revoked_at": tok.get("revoked_at"),
+    }
+    if raw is not None:
+        out["token"] = raw
+    return out
+
+
+@router.get("/admin/api/admin-tokens")
+async def list_api_tokens(all: int = 0, user: dict = Depends(_require_admin)):
+    """Listet Tokens des aktuellen Users (oder aller, wenn all=1 + admin-Rolle).
+    Token-Routes sind via _require_admin nur per Session erreichbar."""
+    show_all = bool(all) and (user.get("role") or "admin") == "admin"
+    rows = await database.list_admin_api_tokens(
+        user_id=None if show_all else user["user_id"]
+    )
+    return [_public_api_token(r) for r in rows]
+
+
+@router.post("/admin/api/admin-tokens")
+async def create_api_token(
+    body: ApiTokenCreateRequest, user: dict = Depends(_require_admin)
+):
+    """Erzeugt einen neuen API-Token fuer den eingeloggten User.
+    Token wird nur einmal — in der Response — als Klartext geliefert."""
+    raw, digest = admin_auth.generate_api_token()
+    expires_at = admin_auth.format_api_token_expiry(body.ttl_hours)
+    token_id = await database.create_admin_api_token(
+        user_id=user["user_id"],
+        label=body.label or None,
+        token_hash=digest,
+        scope=body.scope,
+        expires_at=expires_at,
+    )
+    tok = await database.get_admin_api_token_by_id(token_id)
+    return _public_api_token(tok, raw=raw)
+
+
+@router.delete("/admin/api/admin-tokens/{token_id}")
+async def revoke_api_token(
+    token_id: int, user: dict = Depends(_require_admin)
+):
+    """Setzt revoked_at — Token ist sofort ungueltig. Eigene oder, als Admin,
+    fremde Tokens. Antwort identisch fuer nicht-existente Tokens (vermeidet
+    Enumeration ueber 404 vs 403)."""
+    tok = await database.get_admin_api_token_by_id(token_id)
+    if not tok:
+        return {"ok": True}
+    is_admin = (user.get("role") or "admin") == "admin"
+    if tok["user_id"] != user["user_id"] and not is_admin:
+        raise HTTPException(status_code=403, detail="Fremder Token")
+    await database.revoke_admin_api_token(token_id)
+    return {"ok": True}
+
+
+@router.delete("/admin/api/admin-tokens/{token_id}/delete")
+async def delete_api_token(
+    token_id: int, user: dict = Depends(_require_admin)
+):
+    """Hard-Delete eines (idealerweise schon revoked) Tokens — fuer Aufraeumen."""
+    tok = await database.get_admin_api_token_by_id(token_id)
+    if not tok:
+        return {"ok": True}
+    is_admin = (user.get("role") or "admin") == "admin"
+    if tok["user_id"] != user["user_id"] and not is_admin:
+        raise HTTPException(status_code=403, detail="Fremder Token")
+    await database.delete_admin_api_token(token_id)
+    return {"ok": True}
 
 
 # ── Microsoft Entra ID SSO ────────────────────────────────────────────────────

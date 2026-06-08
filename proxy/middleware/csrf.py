@@ -36,6 +36,11 @@ def _needs_csrf(path: str) -> bool:
 
 async def csrf_middleware(request: Request, call_next):
     if request.method in _STATE_CHANGING and _needs_csrf(request.url.path):
+        # Bearer-Auth (API-Token) ist nicht Cookie-gebunden -> kein CSRF-Risiko.
+        # Browser haengen Bearer-Header NICHT auto-magisch cross-origin an.
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            return await call_next(request)
         host = request.headers.get("host", "")
         origin = request.headers.get("origin") or request.headers.get("referer", "")
         xrw = request.headers.get("x-requested-with", "")

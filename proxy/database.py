@@ -243,6 +243,21 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_agent_installations_pkg ON agent_installations(package_name);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_users_sso ON admin_users(sso_provider, sso_subject)
                 WHERE sso_subject IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS admin_api_tokens (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL,
+                label        TEXT,
+                token_hash   TEXT NOT NULL UNIQUE,
+                scope        TEXT NOT NULL DEFAULT 'read',
+                created_at   TEXT DEFAULT (datetime('now')),
+                expires_at   TEXT,
+                last_used_at TEXT,
+                revoked_at   TEXT,
+                FOREIGN KEY (user_id) REFERENCES admin_users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_admin_api_tokens_user ON admin_api_tokens(user_id);
+            CREATE INDEX IF NOT EXISTS idx_admin_api_tokens_hash ON admin_api_tokens(token_hash);
         """)
         # Geplante Jobs (Maintenance-Window-Dispatches)
         await db.execute("""
@@ -2391,6 +2406,113 @@ async def delete_user_sessions(user_id: int):
     async with _db() as db:
         await db.execute("DELETE FROM admin_sessions WHERE user_id = ?", (user_id,))
         await db.commit()
+
+
+# ── Admin API Tokens ──────────────────────────────────────────────────────────
+
+_API_TOKEN_COLS_NO_HASH = (
+    "t.id, t.user_id, t.label, t.scope, t.created_at, t.expires_at, "
+    "t.last_used_at, t.revoked_at, "
+    "u.username, u.display_name, u.is_active AS user_is_active, u.role"
+)
+
+
+async def create_admin_api_token(
+    *,
+    user_id: int,
+    label: str | None,
+    token_hash: str,
+    scope: str,
+    expires_at: str | None,
+) -> int:
+    if scope not in ("read", "full"):
+        raise ValueError(f"Invalid scope: {scope!r}")
+    async with _db() as db:
+        cur = await db.execute(
+            "INSERT INTO admin_api_tokens "
+            "(user_id, label, token_hash, scope, expires_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, label, token_hash, scope, expires_at),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_admin_api_token_by_hash(token_hash: str) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT {_API_TOKEN_COLS_NO_HASH} FROM admin_api_tokens t "
+            "JOIN admin_users u ON u.id = t.user_id "
+            "WHERE t.token_hash = ?",
+            (token_hash,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def touch_admin_api_token(token_id: int):
+    async with _db() as db:
+        await db.execute(
+            "UPDATE admin_api_tokens SET last_used_at = datetime('now') "
+            "WHERE id = ?",
+            (token_id,),
+        )
+        await db.commit()
+
+
+async def list_admin_api_tokens(user_id: int | None = None) -> list[dict]:
+    """Liste der Tokens — ohne Hash, mit User-Info via JOIN.
+    user_id=None liefert alle (Admin-Sicht), sonst nur die des Users."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        if user_id is None:
+            async with db.execute(
+                f"SELECT {_API_TOKEN_COLS_NO_HASH} FROM admin_api_tokens t "
+                "JOIN admin_users u ON u.id = t.user_id "
+                "ORDER BY t.id DESC"
+            ) as cur:
+                return [dict(r) for r in await cur.fetchall()]
+        async with db.execute(
+            f"SELECT {_API_TOKEN_COLS_NO_HASH} FROM admin_api_tokens t "
+            "JOIN admin_users u ON u.id = t.user_id "
+            "WHERE t.user_id = ? ORDER BY t.id DESC",
+            (user_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def revoke_admin_api_token(token_id: int) -> bool:
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE admin_api_tokens SET revoked_at = datetime('now') "
+            "WHERE id = ? AND revoked_at IS NULL",
+            (token_id,),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def delete_admin_api_token(token_id: int) -> bool:
+    async with _db() as db:
+        cur = await db.execute(
+            "DELETE FROM admin_api_tokens WHERE id = ?", (token_id,)
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_admin_api_token_by_id(token_id: int) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT {_API_TOKEN_COLS_NO_HASH} FROM admin_api_tokens t "
+            "JOIN admin_users u ON u.id = t.user_id "
+            "WHERE t.id = ?",
+            (token_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
 
 
 async def cleanup_expired_sessions():
