@@ -6272,6 +6272,17 @@ body.help-active [data-help]:not(.tab)::after {
         <div class="deploy-snippet-hint">Die Agent-ID wird vom Installer automatisch aus der Tactical-Registry gelesen &mdash; kein Parameter n&ouml;tig.</div>
       </div>
     </div>
+
+    <div class="section-head" style="margin-top:48px; margin-bottom:20px">
+      <div>
+        <h2 class="section-title" style="font-size:18px">API-Tokens</h2>
+        <div class="section-sub">Bearer-Tokens fuer programmatischen Zugriff auf <code>/admin/api/*</code> aus Skripten oder CLI. Token wird genau einmal beim Anlegen angezeigt &mdash; danach nur noch widerrufbar. Scope <i>read</i> = nur GET-Anfragen, <i>full</i> = alles was die Browser-Rolle darf. Token-Verwaltung selbst ist nicht ueber Bearer-Auth erreichbar.</div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="openCreateApiTokenModal()">+ Token anlegen</button>
+    </div>
+    <div id="api-tokens-list" class="settings-form">
+      <div class="loading-block"><span class="spinner"></span><span class="loading-label">Tokens werden geladen</span></div>
+    </div>
   </section>
 
   <!-- AUDIT -->
@@ -7385,6 +7396,64 @@ body.help-active [data-help]:not(.tab)::after {
   </div>
 </div>
 
+<!-- API-Token Create Modal -->
+<div class="modal" id="api-token-create-modal">
+  <div class="modal-card" style="max-width:480px">
+    <div class="modal-head" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+      <h3 class="modal-title">API-Token anlegen</h3>
+      <button class="modal-close" onclick="closeApiTokenCreateModal()" title="Schließen" aria-label="Schließen" style="background:transparent;border:0;color:var(--fg-4);font-size:22px;line-height:1;padding:0 2px;margin:-4px -4px 0 0;cursor:pointer;border-radius:6px">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="field" style="margin-bottom:14px">
+        <label>Label</label>
+        <input class="input" type="text" id="api-token-label" placeholder="z. B. ci-deploy" maxlength="80">
+        <div class="hint">Frei wählbar — hilft beim Identifizieren des Tokens.</div>
+      </div>
+      <div class="field" style="margin-bottom:14px">
+        <label>Scope</label>
+        <select class="input" id="api-token-scope">
+          <option value="read" selected>read — nur GET-Anfragen</option>
+          <option value="full">full — alle Methoden (Rolle des Owners begrenzt)</option>
+        </select>
+      </div>
+      <div class="field" style="margin-bottom:14px">
+        <label>Gültigkeit (Stunden)</label>
+        <input class="input" type="number" id="api-token-ttl" value="24" min="0" max="8760">
+        <div class="hint">0 = unbegrenzt (nicht empfohlen). 24 = 1 Tag, 168 = 1 Woche, 720 = 30 Tage.</div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost btn-sm" onclick="closeApiTokenCreateModal()">Abbrechen</button>
+      <button class="btn btn-primary btn-sm" id="api-token-create-btn" onclick="submitCreateApiToken()">Anlegen</button>
+    </div>
+  </div>
+</div>
+
+<!-- API-Token Show Modal (one-time-display nach Create) -->
+<div class="modal" id="api-token-show-modal">
+  <div class="modal-card" style="max-width:560px">
+    <div class="modal-head" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+      <h3 class="modal-title">Token erzeugt</h3>
+      <button class="modal-close" onclick="closeApiTokenShowModal()" title="Schließen" aria-label="Schließen" style="background:transparent;border:0;color:var(--fg-4);font-size:22px;line-height:1;padding:0 2px;margin:-4px -4px 0 0;cursor:pointer;border-radius:6px">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom:12px;color:var(--fg-2);font-size:13px">Dieser Token wird <b>nur einmal angezeigt</b>. Speichere ihn an sicherer Stelle — er ist nach dem Schließen nicht wieder einsehbar.</div>
+      <div style="margin-bottom:6px;font-size:12px;color:var(--fg-3)">Bearer-Token</div>
+      <div style="display:flex;gap:6px;align-items:stretch;margin-bottom:14px">
+        <input class="input" type="text" id="api-token-shown-val" readonly style="font-family:var(--mono);font-size:13px">
+        <button class="btn btn-primary btn-sm" onclick="copyApiTokenShown()">Kopieren</button>
+      </div>
+      <div style="padding:10px 12px;background:var(--bg-3);border-radius:6px;font-size:12px;color:var(--fg-3)">
+        <div style="margin-bottom:4px">curl-Beispiel:</div>
+        <code id="api-token-shown-curl" style="font-family:var(--mono);font-size:11px;word-break:break-all"></code>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary btn-sm" onclick="closeApiTokenShowModal()">Fertig</button>
+    </div>
+  </div>
+</div>
+
 <!-- Action Detail Modal -->
 <div class="modal" id="action-detail-modal">
   <div class="modal-card" style="max-width:600px">
@@ -7619,7 +7688,7 @@ function switchTab(name, btn) {
   if (name === 'actions')      loadActionLog(true);
   if (name === 'health')       loadHealthAll();
   if (name === 'users')        { loadUsers(); loadInvitations(); }
-  if (name === 'settings')     loadSettings();
+  if (name === 'settings')     { loadSettings(); loadApiTokens(); }
   if (name === 'help')         loadHelp();
 }
 
@@ -12258,6 +12327,11 @@ function closeAgentDetailPage() {
     clearTimeout(_agentSoftwarePollTimer);
     _agentSoftwarePollTimer = null;
   }
+  if (_wfRunsPollTimer) {
+    clearTimeout(_wfRunsPollTimer);
+    _wfRunsPollTimer = null;
+  }
+  _wfRunsLastSig = null;
   loadAgents();
 }
 
@@ -12639,6 +12713,8 @@ function _renderSoftwareRow(item) {
 let _agentSoftwareBusy = new Set();
 let _agentSoftwarePollTimer = null;
 let _agentScanSnapshot = null;  // last_scan_at zum Zeitpunkt des Klicks
+let _wfRunsPollTimer = null;
+let _wfRunsLastSig = null;
 
 function _markRowBusy(key) {
   if (key) _agentSoftwareBusy.add(key);
@@ -14352,6 +14428,8 @@ document.addEventListener('keydown', e => {
     closePasswordModal();
     closeBanModal();
     closeActionDetailModal();
+    closeApiTokenCreateModal();
+    closeApiTokenShowModal();
   }
   // Enter im ban-reason-Feld triggert submit
   if (e.key === 'Enter' && e.target && e.target.id === 'ban-reason') {
@@ -15375,6 +15453,145 @@ async function saveSettings() {
   }
 }
 
+// ── API-Tokens ───────────────────────────────────────────────────────────────
+
+async function loadApiTokens() {
+  const el = document.getElementById('api-tokens-list');
+  if (!el) return;
+  try {
+    const tokens = await api('GET', '/admin/api/admin-tokens');
+    renderApiTokens(tokens);
+  } catch (e) {
+    el.innerHTML = '<div class="empty-mini">Konnte Tokens nicht laden.</div>';
+  }
+}
+
+function _apiTokenStatusBadge(tok) {
+  if (tok.revoked_at) return '<span class="badge" style="background:var(--fg-muted);color:#fff">widerrufen</span>';
+  if (tok.expires_at) {
+    const exp = new Date(tok.expires_at.replace(' ', 'T') + 'Z');
+    if (exp < new Date()) return '<span class="badge" style="background:var(--warning);color:#fff">abgelaufen</span>';
+  }
+  return '<span class="badge" style="background:var(--green);color:#fff">aktiv</span>';
+}
+
+function renderApiTokens(tokens) {
+  const el = document.getElementById('api-tokens-list');
+  if (!el) return;
+  if (!tokens.length) {
+    el.innerHTML = '<div class="empty-mini" style="padding:16px;border:1px solid var(--border);border-radius:8px">Noch keine Tokens. Klick &bdquo;+ Token anlegen&ldquo; oben rechts.</div>';
+    return;
+  }
+  el.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:13px">' +
+    '<thead><tr style="border-bottom:1px solid var(--border);text-align:left;color:var(--fg-muted);font-weight:600">' +
+      '<th style="padding:8px 6px">Label</th>' +
+      '<th style="padding:8px 6px">Scope</th>' +
+      '<th style="padding:8px 6px">Status</th>' +
+      '<th style="padding:8px 6px">Erstellt</th>' +
+      '<th style="padding:8px 6px">Läuft ab</th>' +
+      '<th style="padding:8px 6px">Zuletzt benutzt</th>' +
+      '<th style="padding:8px 6px;text-align:right">&nbsp;</th>' +
+    '</tr></thead><tbody>' +
+    tokens.map(t => {
+      const canRevoke = !t.revoked_at;
+      const scopeBadge = t.scope === 'full'
+        ? '<span class="badge" style="background:var(--warning);color:#fff">full</span>'
+        : '<span class="badge" style="background:var(--blue);color:#fff">read</span>';
+      const actions = canRevoke
+        ? '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="revokeApiToken(' + t.id + ', ' + jsStr(t.label || ('#' + t.id)) + ')">Widerrufen</button>'
+        : '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="deleteApiToken(' + t.id + ')">Löschen</button>';
+      return '<tr style="border-bottom:1px solid var(--border)">' +
+        '<td style="padding:8px 6px">' + esc(t.label || '—') + '</td>' +
+        '<td style="padding:8px 6px">' + scopeBadge + '</td>' +
+        '<td style="padding:8px 6px">' + _apiTokenStatusBadge(t) + '</td>' +
+        '<td style="padding:8px 6px;color:var(--fg-3)">' + esc(t.created_at || '—') + '</td>' +
+        '<td style="padding:8px 6px;color:var(--fg-3)">' + esc(t.expires_at || 'nie') + '</td>' +
+        '<td style="padding:8px 6px;color:var(--fg-3)">' + esc(t.last_used_at || 'nie') + '</td>' +
+        '<td style="padding:8px 6px;text-align:right">' + actions + '</td>' +
+      '</tr>';
+    }).join('') + '</tbody></table>';
+}
+
+function openCreateApiTokenModal() {
+  document.getElementById('api-token-label').value = '';
+  document.getElementById('api-token-scope').value = 'read';
+  document.getElementById('api-token-ttl').value = '24';
+  document.getElementById('api-token-create-btn').disabled = false;
+  document.getElementById('api-token-create-modal').classList.add('open');
+  setTimeout(() => document.getElementById('api-token-label').focus(), 50);
+}
+
+function closeApiTokenCreateModal() {
+  document.getElementById('api-token-create-modal').classList.remove('open');
+}
+
+async function submitCreateApiToken() {
+  const label = (document.getElementById('api-token-label').value || '').trim();
+  const scope = document.getElementById('api-token-scope').value;
+  const ttlRaw = parseInt(document.getElementById('api-token-ttl').value, 10);
+  const btn = document.getElementById('api-token-create-btn');
+  btn.disabled = true;
+  try {
+    const tok = await api('POST', '/admin/api/admin-tokens', {
+      label, scope, ttl_hours: isNaN(ttlRaw) ? 24 : ttlRaw
+    });
+    closeApiTokenCreateModal();
+    _showCreatedToken(tok);
+    loadApiTokens();
+  } catch (e) {
+    btn.disabled = false;
+  }
+}
+
+function _showCreatedToken(tok) {
+  const raw = tok.token || '';
+  document.getElementById('api-token-shown-val').value = raw;
+  const origin = location.origin;
+  document.getElementById('api-token-shown-curl').textContent =
+    'curl -H "Authorization: Bearer ' + raw + '" ' + origin + '/admin/api/whoami';
+  document.getElementById('api-token-show-modal').classList.add('open');
+  setTimeout(() => {
+    const el = document.getElementById('api-token-shown-val');
+    el.focus();
+    el.select();
+  }, 50);
+}
+
+function closeApiTokenShowModal() {
+  document.getElementById('api-token-show-modal').classList.remove('open');
+  document.getElementById('api-token-shown-val').value = '';
+  document.getElementById('api-token-shown-curl').textContent = '';
+}
+
+function copyApiTokenShown() {
+  const v = document.getElementById('api-token-shown-val').value;
+  navigator.clipboard.writeText(v).then(() => toast('Kopiert'));
+}
+
+function revokeApiToken(id, label) {
+  showConfirm(
+    'Token widerrufen',
+    'Token "' + label + '" wird sofort ungültig. Bestätigen?',
+    async () => {
+      try {
+        await api('DELETE', '/admin/api/admin-tokens/' + id);
+        toast('Token widerrufen');
+        loadApiTokens();
+      } catch (e) {}
+    },
+    'Widerrufen',
+    'btn-danger'
+  );
+}
+
+async function deleteApiToken(id) {
+  try {
+    await api('DELETE', '/admin/api/admin-tokens/' + id + '/delete');
+    toast('Token gelöscht');
+    loadApiTokens();
+  } catch(e) {}
+}
+
 // ── Build status ─────────────────────────────────────────────────────────────
 
 async function loadBuildStatus() {
@@ -16308,18 +16525,51 @@ async function loadAgentWorkflows(agentId) {
   sel.innerHTML = '<option value="">\u2014 Workflow wählen \u2014</option>' +
     _workflows.map(w => '<option value="' + w.id + '">' + esc(w.name) + '</option>').join('');
 
-  // Load runs
+  // Load runs (reset fingerprint so forced reloads always re-render)
+  _wfRunsLastSig = null;
   try {
     const runs = await api('GET', '/admin/api/agents/' + encodeURIComponent(agentId) + '/workflow-runs');
-    renderAgentWorkflowRuns(runs);
+    renderAgentWorkflowRuns(runs, agentId);
   } catch(e) {
     document.getElementById('agent-wf-runs').innerHTML = '<div class="empty-mini">Fehler beim Laden.</div>';
   }
 }
 
-function renderAgentWorkflowRuns(runs) {
+function _wfRunsSig(runs) {
+  return JSON.stringify(runs.map(r => [r.id, r.status, r.current_step, r.updated_at || r.created_at || '']));
+}
+
+function _scheduleAgentWfPoll(agentId, runs) {
+  if (_wfRunsPollTimer) { clearTimeout(_wfRunsPollTimer); _wfRunsPollTimer = null; }
+  if (!_currentAgent || _currentAgent.agent_id !== agentId) return;
+  const hasActive = runs.some(r => r.status === 'running' || r.status === 'pending' || r.status === 'paused');
+  if (!hasActive) return;
+  _wfRunsPollTimer = setTimeout(() => _refreshAgentWfRuns(agentId), 5000);
+}
+
+async function _refreshAgentWfRuns(agentId) {
+  if (_wfRunsPollTimer) { clearTimeout(_wfRunsPollTimer); _wfRunsPollTimer = null; }
+  if (!_currentAgent || _currentAgent.agent_id !== agentId) return;
+  try {
+    const runs = await api('GET', '/admin/api/agents/' + encodeURIComponent(agentId) + '/workflow-runs');
+    if (!_currentAgent || _currentAgent.agent_id !== agentId) return;
+    const sig = _wfRunsSig(runs);
+    if (sig !== _wfRunsLastSig) {
+      renderAgentWorkflowRuns(runs, agentId);
+    } else {
+      _scheduleAgentWfPoll(agentId, runs);
+    }
+  } catch(e) {
+    if (_currentAgent && _currentAgent.agent_id === agentId) {
+      _wfRunsPollTimer = setTimeout(() => _refreshAgentWfRuns(agentId), 8000);
+    }
+  }
+}
+
+function renderAgentWorkflowRuns(runs, agentId) {
   const el = document.getElementById('agent-wf-runs');
   if (!el) return;
+  _wfRunsLastSig = _wfRunsSig(runs);
   if (!runs.length) {
     el.innerHTML = '<div class="empty-mini">Keine Workflow-Runs.</div>';
     return;
@@ -16369,6 +16619,7 @@ function renderAgentWorkflowRuns(runs) {
       ) +
     '</div>';
   }).join('');
+  if (agentId) _scheduleAgentWfPoll(agentId, runs);
 }
 
 async function startWorkflowOnAgent() {

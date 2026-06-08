@@ -127,6 +127,60 @@ async def revoke_session(token: str):
         await database.delete_admin_session(token)
 
 
+# ── API-Tokens (Bearer-Auth fuer /admin/api/*) ────────────────────────────────
+
+# Token-Layout: 32 zufaellige Bytes -> urlsafe-base64 (~43 chars). Wir speichern
+# nur den SHA-256-Hash, der Raw-Token wird genau einmal beim Anlegen
+# zurueckgegeben. Damit ist die DB auch bei Leak unschuldig.
+
+def _hash_api_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def generate_api_token() -> tuple[str, str]:
+    """Erzeugt einen neuen Raw-Token + seinen SHA-256-Hash."""
+    raw = secrets.token_urlsafe(32)
+    return raw, _hash_api_token(raw)
+
+
+async def authenticate_bearer(raw_token: str) -> tuple[dict | None, str]:
+    """
+    Validiert einen Bearer-Token. Gibt (token_row_with_user, scope) zurueck
+    oder (None, '') bei ungueltig/abgelaufen/widerrufen/inaktiver-User.
+
+    token_row enthaelt via JOIN auch username/display_name/role des Users —
+    kann direkt wie ein Session-User-Dict benutzt werden.
+    """
+    if not raw_token:
+        return None, ""
+    digest = _hash_api_token(raw_token)
+    tok = await database.get_admin_api_token_by_hash(digest)
+    if not tok:
+        return None, ""
+    if tok.get("revoked_at"):
+        return None, ""
+    if not tok.get("user_is_active"):
+        return None, ""
+    if tok.get("expires_at"):
+        try:
+            exp = datetime.strptime(
+                tok["expires_at"], "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=timezone.utc)
+            if exp < _now_utc():
+                return None, ""
+        except Exception:
+            return None, ""
+    await database.touch_admin_api_token(tok["id"])
+    return tok, tok.get("scope") or "read"
+
+
+def format_api_token_expiry(ttl_hours: int | None) -> str | None:
+    """ttl_hours None|<=0 = unbefristet; sonst 'YYYY-MM-DD HH:MM:SS' UTC."""
+    if not ttl_hours or ttl_hours <= 0:
+        return None
+    return _format_dt(_now_utc() + timedelta(hours=ttl_hours))
+
+
 # ── User-Authentifizierung (Login) ────────────────────────────────────────────
 
 async def authenticate_local(username: str, password: str) -> dict | None:
