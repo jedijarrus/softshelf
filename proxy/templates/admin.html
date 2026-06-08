@@ -7396,6 +7396,21 @@ body.help-active [data-help]:not(.tab)::after {
   </div>
 </div>
 
+<!-- Workflow Resume-from-Step Modal -->
+<div class="modal" id="wf-resume-modal">
+  <div class="modal-card" style="max-width:560px">
+    <div class="modal-head" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+      <h3 class="modal-title">Workflow-Run fortsetzen</h3>
+      <button class="modal-close" onclick="closeResumeFromStepModal()" title="Schließen" aria-label="Schließen" style="background:transparent;border:0;color:var(--fg-4);font-size:22px;line-height:1;padding:0 2px;margin:-4px -4px 0 0;cursor:pointer;border-radius:6px">&times;</button>
+    </div>
+    <div class="modal-body" id="wf-resume-modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost btn-sm" onclick="closeResumeFromStepModal()">Abbrechen</button>
+      <button class="btn btn-primary btn-sm" onclick="submitResumeFromStep()">Fortsetzen</button>
+    </div>
+  </div>
+</div>
+
 <!-- API-Token Create Modal -->
 <div class="modal" id="api-token-create-modal">
   <div class="modal-card" style="max-width:480px">
@@ -14430,6 +14445,7 @@ document.addEventListener('keydown', e => {
     closeActionDetailModal();
     closeApiTokenCreateModal();
     closeApiTokenShowModal();
+    closeResumeFromStepModal();
   }
   // Enter im ban-reason-Feld triggert submit
   if (e.key === 'Enter' && e.target && e.target.id === 'ban-reason') {
@@ -16596,6 +16612,11 @@ function renderAgentWorkflowRuns(runs, agentId) {
         '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="cancelWorkflowRun(' + r.id + ')">Abbrechen</button>';
     } else if (r.status === 'pending') {
       actionBtns = '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="cancelWorkflowRun(' + r.id + ')">Abbrechen</button>';
+    } else if (r.status === 'failed' || r.status === 'timed_out') {
+      // Fortsetzen bei failed/timed_out: am current_step (Retry) oder Skip via Modal
+      actionBtns = '<button class="btn btn-primary btn-sm" style="font-size:11px" onclick="resumeWorkflowRun(' + r.id + ')">Fortsetzen</button>' +
+        '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="openResumeFromStep(' + r.id + ')" title="An anderem Step fortsetzen">Skip\u2026</button>' +
+        '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="deleteWorkflowRun(' + r.id + ')">L\u00f6schen</button>';
     } else {
       actionBtns = '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="deleteWorkflowRun(' + r.id + ')">L\u00f6schen</button>';
     }
@@ -16650,12 +16671,56 @@ async function pauseWorkflowRun(runId) {
   } catch(e) {}
 }
 
-async function resumeWorkflowRun(runId) {
+async function resumeWorkflowRun(runId, fromStep) {
+  const body = (typeof fromStep === 'number') ? { from_step: fromStep } : null;
   try {
-    await api('POST', '/admin/api/workflow-runs/' + runId + '/resume');
-    toast('Workflow fortgesetzt');
+    await api('POST', '/admin/api/workflow-runs/' + runId + '/resume', body);
+    toast(typeof fromStep === 'number'
+      ? ('Fortsetzen ab Step ' + (fromStep + 1))
+      : 'Workflow fortgesetzt');
     if (_currentAgent) loadAgentWorkflows(_currentAgent.agent_id);
   } catch(e) {}
+}
+
+async function openResumeFromStep(runId) {
+  if (!_currentAgent) return;
+  // Run-Detail holen damit wir die Steps + current_step kennen
+  let run;
+  try {
+    const runs = await api('GET', '/admin/api/agents/' + encodeURIComponent(_currentAgent.agent_id) + '/workflow-runs');
+    run = runs.find(r => r.id === runId);
+    if (!run) { toast('Run nicht gefunden', true); return; }
+  } catch(e) { return; }
+  const steps = typeof run.step_snapshot === 'string'
+    ? JSON.parse(run.step_snapshot || '[]') : (run.step_snapshot || []);
+  const cur = run.current_step || 0;
+  const opts = steps.map((s, i) => {
+    const lbl = s.label || (s.payload && s.payload.package_name) || s.type;
+    const marker = i === cur ? '   ← Retry (aktueller Step)' : '';
+    return '<option value="' + i + '"' + (i === cur ? ' selected' : '') + '>Step ' + (i + 1) + '/' + steps.length + ': ' + esc(lbl) + marker + '</option>';
+  }).join('');
+  const body =
+    '<div style="margin-bottom:12px;color:var(--fg-2);font-size:13px">An welchem Step soll der Run fortgesetzt werden? Aktueller Step (= Retry) ist vorausgewählt. Steps davor werden nicht erneut ausgeführt.</div>' +
+    '<div class="field">' +
+      '<label>Step</label>' +
+      '<select class="input" id="wf-resume-step">' + opts + '</select>' +
+    '</div>';
+  document.getElementById('wf-resume-modal-body').innerHTML = body;
+  document.getElementById('wf-resume-modal').dataset.runId = String(runId);
+  document.getElementById('wf-resume-modal').classList.add('open');
+}
+
+function closeResumeFromStepModal() {
+  document.getElementById('wf-resume-modal').classList.remove('open');
+}
+
+async function submitResumeFromStep() {
+  const m = document.getElementById('wf-resume-modal');
+  const runId = parseInt(m.dataset.runId, 10);
+  const step = parseInt(document.getElementById('wf-resume-step').value, 10);
+  if (isNaN(runId) || isNaN(step)) return;
+  closeResumeFromStepModal();
+  await resumeWorkflowRun(runId, step);
 }
 
 async function deleteWorkflowRun(runId) {
