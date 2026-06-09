@@ -143,9 +143,13 @@ def _ps_registry_check(detection_name: str) -> str:
     """PS-Snippet (kompakt): setzt $sfInstalled und $sfInstalledVersion."""
     # PS -like Wildcards escapen: [ ] ? sind Meta-Chars
     det = _ps_quote(detection_name).replace("[", "``[").replace("]", "``]").replace("?", "``?")
+    # HKCU mitscannen: per-user MSIs landen dort. Wenn das Skript als SYSTEM
+    # laeuft, gehoert HKCU zu SYSTEM (idR leer) — kein Schaden. Wenn das
+    # Skript als User laeuft (run_as_user=True), zeigt HKCU dessen Hive und
+    # findet per-user installs.
     return (
         "$sfInstalled=$false;$sfInstalledVersion=$null\n"
-        "foreach($rp in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*')){\n"
+        "foreach($rp in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*')){\n"
         "  $f=Get-ItemProperty $rp -EA SilentlyContinue|?{$_.DisplayName -like '*" + det + "*'}\n"
         "  if($f){$sfInstalled=$true;$sfInstalledVersion=$f[0].DisplayVersion;break}\n"
         "}\n"
@@ -1668,9 +1672,13 @@ async def dispatch_install_for_agent(
             pkg_type="custom", action="install", job_id=job_id,
             workflow_run_id=workflow_run_id, triggered_by=triggered_by,
         )
+        # run_as_user: per-user MSIs (MSIINSTALLPERUSER=1, ADDLOCAL=Studio,Robot
+        # etc.) muessen im User-Kontext laufen — als SYSTEM kennt msiexec
+        # weder den User-Profile-Pfad noch HKCU und stirbt mit 1603.
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
             cmd, "install", "custom", log_id=log_id,
+            run_as_user=bool(pkg.get("run_as_user")),
         ))
         action = "install"
 
@@ -1811,9 +1819,13 @@ async def dispatch_uninstall_for_agent(
             package_name=package_name, display_name=pkg["display_name"],
             pkg_type="custom", action="uninstall", job_id=job_id, triggered_by=triggered_by,
         )
+        # run_as_user analog zum Install: per-user MSIs muessen auch im
+        # User-Kontext deinstalliert werden, sonst findet msiexec den
+        # HKCU-Eintrag nicht.
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
             ps_cmd, "uninstall", "custom", log_id=log_id,
+            run_as_user=bool(pkg.get("run_as_user")),
         ))
 
     else:

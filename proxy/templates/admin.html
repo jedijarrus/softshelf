@@ -6735,6 +6735,12 @@ body.help-active [data-help]:not(.tab)::after {
       </div>
       <div class="field">
         <label class="check-label">
+          <input type="checkbox" data-edit="run_as_user"> <span data-help-block="Installiert/Deinstalliert im Kontext des eingeloggten Users statt SYSTEM">Als angemeldeter User ausführen</span>
+        </label>
+        <div class="hint">Für per-user Installer (UiPath Studio mit <code>MSIINSTALLPERUSER=1</code>, Postman, Spotify, Discord). MSI in den User-Profile-Pfad und HKCU-ARP, Dienst-Robot vermieden. Voraussetzung: ein User ist eingeloggt — sonst kann Tactical nicht in dessen Session spawnen.</div>
+      </div>
+      <div class="field">
+        <label class="check-label">
           <input type="checkbox" data-edit="hide_uninstall"> <span data-help-block="Im Kiosk-Client wird kein Deinstallieren-Button angezeigt">Deinstallation ausblenden</span>
         </label>
         <div class="hint">Im Kiosk-Client wird kein Deinstallieren-Button angezeigt. Sinnvoll bei Pflicht-Software.</div>
@@ -10629,6 +10635,7 @@ function openEditPanel(name) {
   document.querySelector('[data-edit="uninstall_cmd"]').value  = pkg.uninstall_cmd || '';
   document.querySelector('[data-edit="install_timeout"]').value = pkg.install_timeout || 120;
   document.querySelector('[data-edit="uninstall_timeout"]').value = pkg.uninstall_timeout || '';
+  document.querySelector('[data-edit="run_as_user"]').checked = !!pkg.run_as_user;
   document.querySelector('[data-edit="check_reboot"]').checked = !!pkg.check_reboot;
   document.querySelector('[data-edit="hide_uninstall"]').checked = !!pkg.hide_uninstall;
   document.querySelector('[data-edit="process_check"]').value  = pkg.process_check || '';
@@ -10674,6 +10681,10 @@ function openEditPanel(name) {
   // install_timeout + uninstall_timeout fuer Plugin nicht relevant (Datei kopieren = Sekunden)
   document.querySelector('[data-edit="install_timeout"]').closest('.field').style.display = isPlugin ? 'none' : '';
   document.querySelector('[data-edit="uninstall_timeout"]').closest('.field').style.display = isPlugin ? 'none' : '';
+  // run_as_user: nur fuer custom relevant. winget hat eigene run_as_user-Logik
+  // (msstore-IDs auto), choco laeuft immer als SYSTEM (kein User-Choco-Pattern),
+  // plugin verteilt nur eine Datei.
+  document.querySelector('[data-edit="run_as_user"]').closest('.field').style.display = pkg.type === 'custom' ? '' : 'none';
   // Entry-Point-Dropdown + Inhalt-verwalten nur bei Archive-Paketen
   document.getElementById('edit-entry-field').style.display = isArchive ? '' : 'none';
   document.getElementById('edit-contents-field').style.display = isArchive ? '' : 'none';
@@ -11267,6 +11278,8 @@ async function saveEdit() {
       // uninstall_timeout: leerer String → null (Backend erwartet int|None)
       const _utRawC = (body.uninstall_timeout || '').toString().trim();
       body.uninstall_timeout = _utRawC ? parseInt(_utRawC) : null;
+      // run_as_user: checkbox-Wert (0/1)
+      body.run_as_user = body.run_as_user || 0;
       await api('PATCH', `/admin/api/custom/${encodeURIComponent(_editingName)}`, body);
     } else {
       // Choco/Winget: PATCH enable endpoint mit allen relevanten Feldern
