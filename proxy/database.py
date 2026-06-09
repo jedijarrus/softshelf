@@ -1659,19 +1659,23 @@ async def get_package_agents_version_split(
         ) as cur:
             all_agents = [dict(r) for r in await cur.fetchall()]
 
-        # Installed-Version pro Agent fuer dieses Paket
+        # Installed-Version pro Agent fuer dieses Paket.
+        # Choco-CLI persistiert IDs in lowercase, der Admin kann den
+        # packages.name aber in beliebigem Case anlegen (Office365Business vs
+        # office365business). COLLATE NOCASE entkoppelt den Vergleich vom Case
+        # damit Rollout-Engine + Paket-Detail-Sicht den Match finden.
         installed_map: dict[str, str | None] = {}
         if pkg_type == "winget":
             async with db.execute(
                 "SELECT agent_id, installed_version FROM agent_winget_state "
-                "WHERE winget_id = ?", (pkg_name,),
+                "WHERE winget_id = ? COLLATE NOCASE", (pkg_name,),
             ) as cur:
                 for r in await cur.fetchall():
                     installed_map[r["agent_id"]] = r["installed_version"]
         elif pkg_type == "choco":
             async with db.execute(
                 "SELECT agent_id, installed_version FROM agent_choco_state "
-                "WHERE choco_name = ?", (pkg_name,),
+                "WHERE choco_name = ? COLLATE NOCASE", (pkg_name,),
             ) as cur:
                 for r in await cur.fetchall():
                     installed_map[r["agent_id"]] = r["installed_version"]
@@ -2661,13 +2665,15 @@ async def get_compliance_overview() -> dict:
             installed_ids: set[str] = set()
             if ptype == "winget":
                 async with db.execute(
-                    "SELECT agent_id FROM agent_winget_state WHERE winget_id = ?",
+                    "SELECT agent_id FROM agent_winget_state "
+                    "WHERE winget_id = ? COLLATE NOCASE",
                     (pkg["name"],),
                 ) as cur:
                     installed_ids = {r["agent_id"] for r in await cur.fetchall()}
             elif ptype == "choco":
                 async with db.execute(
-                    "SELECT agent_id FROM agent_choco_state WHERE choco_name = ?",
+                    "SELECT agent_id FROM agent_choco_state "
+                    "WHERE choco_name = ? COLLATE NOCASE",
                     (pkg["name"],),
                 ) as cur:
                     installed_ids = {r["agent_id"] for r in await cur.fetchall()}
@@ -2751,10 +2757,10 @@ async def get_choco_known_versions(choco_name: str) -> list[str]:
     async with _db() as db:
         async with db.execute(
             "SELECT DISTINCT installed_version FROM agent_choco_state "
-            "WHERE choco_name = ? AND installed_version IS NOT NULL "
+            "WHERE choco_name = ? COLLATE NOCASE AND installed_version IS NOT NULL "
             "UNION "
             "SELECT DISTINCT available_version FROM agent_choco_state "
-            "WHERE choco_name = ? AND available_version IS NOT NULL",
+            "WHERE choco_name = ? COLLATE NOCASE AND available_version IS NOT NULL",
             (choco_name, choco_name),
         ) as cur:
             rows = await cur.fetchall()
@@ -3042,7 +3048,7 @@ async def get_fleet_stats() -> dict:
             outdated_winget = (await cur.fetchone())["n"]
         async with db.execute(
             "SELECT COUNT(*) AS n FROM agent_choco_state acs "
-            "JOIN packages p ON p.name = acs.choco_name "
+            "JOIN packages p ON p.name = acs.choco_name COLLATE NOCASE "
             "JOIN agents a ON a.agent_id = acs.agent_id "
             "WHERE acs.available_version IS NOT NULL"
         ) as cur:
@@ -3335,7 +3341,7 @@ async def get_top_outdated_packages(limit: int = 10) -> list[dict]:
         async with db.execute(
             "SELECT s.choco_name AS name, p.display_name, 'choco' AS type, COUNT(*) AS outdated "
             "FROM agent_choco_state s "
-            "JOIN packages p ON p.name = s.choco_name "
+            "JOIN packages p ON p.name = s.choco_name COLLATE NOCASE "
             "WHERE s.available_version IS NOT NULL "
             "GROUP BY s.choco_name, p.display_name "
             "ORDER BY outdated DESC LIMIT ?",
@@ -3524,7 +3530,8 @@ async def cleanup_winget_state_for_package(package_name: str):
     aber sauber."""
     async with _db() as db:
         await db.execute(
-            "DELETE FROM agent_winget_state WHERE winget_id = ?", (package_name,)
+            "DELETE FROM agent_winget_state WHERE winget_id = ? COLLATE NOCASE",
+            (package_name,),
         )
         await db.commit()
 
@@ -3579,7 +3586,8 @@ async def cleanup_choco_state_for_package(package_name: str):
     im DB liegen und kommt beim nächsten Scan wieder."""
     async with _db() as db:
         await db.execute(
-            "DELETE FROM agent_choco_state WHERE choco_name = ?", (package_name,)
+            "DELETE FROM agent_choco_state WHERE choco_name = ? COLLATE NOCASE",
+            (package_name,),
         )
         await db.commit()
 
@@ -3594,7 +3602,7 @@ async def get_agents_with_winget_package(winget_id: str) -> list[dict]:
             "       s.installed_version, s.available_version, s.scanned_at "
             "FROM agent_winget_state s "
             "JOIN agents a ON a.agent_id = s.agent_id "
-            "WHERE s.winget_id = ? "
+            "WHERE s.winget_id = ? COLLATE NOCASE "
             "ORDER BY a.hostname",
             (winget_id,),
         ) as cur:
@@ -3611,7 +3619,7 @@ async def get_agents_with_choco_package(choco_name: str) -> list[dict]:
             "       s.installed_version, s.available_version, s.scanned_at "
             "FROM agent_choco_state s "
             "JOIN agents a ON a.agent_id = s.agent_id "
-            "WHERE s.choco_name = ? "
+            "WHERE s.choco_name = ? COLLATE NOCASE "
             "ORDER BY a.hostname",
             (choco_name,),
         ) as cur:
