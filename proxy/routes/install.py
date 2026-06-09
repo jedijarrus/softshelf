@@ -694,6 +694,7 @@ def _build_winget_command(
     process_check: str = "",
     display_name: str = "",
     uninstall_override: str = "",
+    force: bool = False,
 ) -> str:
     """
     Baut den PowerShell-Wrapper für winget install/upgrade/uninstall.
@@ -743,10 +744,14 @@ def _build_winget_command(
             scope_arg = ""
         else:
             scope_arg = "--scope machine " if include_scope_machine else ""
+        # --force = Reinstall ueber bestehende Installation (winget brichts
+        # sonst mit exit -1978335212 „already installed" ab). Wird vom
+        # Reinstall-Button im Admin-UI gesetzt.
+        force_arg = "--force " if force else ""
         winget_args = (
             f"{action} --id '{safe_id}' --source {source_name} {scope_arg}--silent "
             f"--accept-package-agreements --accept-source-agreements "
-            f"--disable-interactivity -h "
+            f"--disable-interactivity -h {force_arg}"
             f"{version_arg}{safe_extra}"
         ).strip()
 
@@ -1145,7 +1150,10 @@ _WINGET_NO_APPLICABLE_INSTALLER = -1978335216
 _CHOCO_VERSION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-+]{0,49}$")
 
 
-def _build_choco_command(action: str, package_name: str, version: str | None = None) -> str:
+def _build_choco_command(
+    action: str, package_name: str, version: str | None = None,
+    force: bool = False,
+) -> str:
     """
     Baut den PowerShell-Wrapper für `choco install/uninstall <name>`. Wird
     via Tactical run_command als SYSTEM ausgeführt, output kommt zurück
@@ -1163,7 +1171,10 @@ def _build_choco_command(action: str, package_name: str, version: str | None = N
     safe = package_name  # regex-validiert, keine Escapes nötig
     if action == "install":
         ver_arg = f" --version='{version}'" if version else ""
-        choco_args = f"install '{safe}' -y --no-progress --limit-output{ver_arg}"
+        # --force = Reinstall (choco skipped sonst bereits installierte
+        # Pakete mit „already installed"); gesetzt vom Reinstall-Button.
+        force_arg = " --force" if force else ""
+        choco_args = f"install '{safe}' -y --no-progress --limit-output{force_arg}{ver_arg}"
     else:
         # --remove-dependencies (-x) entfernt zusätzlich alle Sub-Pakete die
         # NUR von diesem Paket benötigt wurden. Wichtig für Metapakete wie
@@ -1427,7 +1438,8 @@ async def uninstall_package(
             )
         inner_cmd = _build_uninstall_command(
             uninstall_cmd,
-            timeout_s=pkg.get("install_timeout") or 120,
+            timeout_s=(pkg.get("uninstall_timeout")
+                       or pkg.get("install_timeout") or 120),
             detection_name=pkg.get("detection_name") or pkg.get("display_name") or "",
         )
         job_id = _generate_job_id()
@@ -1538,6 +1550,7 @@ async def dispatch_install_for_agent(
     existing_log_id: int | None = None,
     queue_if_offline: bool = False,
     triggered_by: str | None = None,
+    force: bool = False,
 ) -> dict:
     """Spawned einen install (oder upgrade fuer winget) für genau ein
     (Agent, Paket)-Pair und logged in install_log.
@@ -1585,7 +1598,12 @@ async def dispatch_install_for_agent(
         _check_winget_id(package_name)
         state = await database.get_agent_winget_state(agent_id)
         st = state.get(package_name)
-        if st and st.get("installed_version") and st.get("available_version"):
+        # Reinstall (force=True): immer install, nie upgrade. Bei
+        # bereits aktueller Version wuerde upgrade als no-op zurueck-
+        # kommen — gewollt ist eine echte Re-Installation.
+        if force:
+            action = "install"
+        elif st and st.get("installed_version") and st.get("available_version"):
             action = "upgrade"
         else:
             action = "install"
@@ -1598,6 +1616,7 @@ async def dispatch_install_for_agent(
             include_scope_machine=include_scope_machine,
             extra_args=extra,
             process_check=pkg.get("process_check") or "",
+            force=force,
         )
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -1658,7 +1677,11 @@ async def dispatch_install_for_agent(
     else:
         if not _is_safe_package_name(package_name):
             raise HTTPException(status_code=400, detail="Ungültiger Paketname")
-        inner_cmd = _build_choco_command("install", package_name, version=version_pin or pkg.get("version_pin"))
+        inner_cmd = _build_choco_command(
+            "install", package_name,
+            version=version_pin or pkg.get("version_pin"),
+            force=force,
+        )
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await _register_or_reuse_log(
@@ -1777,7 +1800,8 @@ async def dispatch_uninstall_for_agent(
             )
         inner_cmd = _build_uninstall_command(
             uninstall_cmd,
-            timeout_s=pkg.get("install_timeout") or 120,
+            timeout_s=(pkg.get("uninstall_timeout")
+                       or pkg.get("install_timeout") or 120),
             detection_name=pkg.get("detection_name") or pkg.get("display_name") or "",
         )
         job_id = _generate_job_id()
