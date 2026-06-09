@@ -6723,6 +6723,11 @@ body.help-active [data-help]:not(.tab)::after {
         <div class="hint">Wie lange der Installer maximal laufen darf bevor er abgebrochen wird. Standard: 120s. Grosse Pakete (Office, SAP): 600-900s.</div>
       </div>
       <div class="field">
+        <label data-help-block="Separater Timeout für Deinstallation. Leer = nutzt Install-Timeout.">Uninstall-Timeout (Sekunden, optional)</label>
+        <input class="input" data-edit="uninstall_timeout" type="number" min="30" max="3600" placeholder="leer = Install-Timeout">
+        <div class="hint">Leer lassen wenn kein separater Wert nötig ist. Pakete die schnell installieren aber lange deinstallieren (UiPath, SAP) profitieren von einem höheren Wert hier.</div>
+      </div>
+      <div class="field">
         <label class="check-label">
           <input type="checkbox" data-edit="check_reboot"> <span data-help-block="Verhindert Installation wenn ein Neustart aussteht">Reboot-Check vor Installation</span>
         </label>
@@ -10623,6 +10628,7 @@ function openEditPanel(name) {
   document.querySelector('[data-edit="detection_name"]').value = pkg.detection_name || '';
   document.querySelector('[data-edit="uninstall_cmd"]').value  = pkg.uninstall_cmd || '';
   document.querySelector('[data-edit="install_timeout"]').value = pkg.install_timeout || 120;
+  document.querySelector('[data-edit="uninstall_timeout"]').value = pkg.uninstall_timeout || '';
   document.querySelector('[data-edit="check_reboot"]').checked = !!pkg.check_reboot;
   document.querySelector('[data-edit="hide_uninstall"]').checked = !!pkg.hide_uninstall;
   document.querySelector('[data-edit="process_check"]').value  = pkg.process_check || '';
@@ -10665,8 +10671,9 @@ function openEditPanel(name) {
   } else {
     uninstField.style.display = 'none';
   }
-  // install_timeout fuer Plugin nicht relevant (Datei kopieren = Sekunden)
+  // install_timeout + uninstall_timeout fuer Plugin nicht relevant (Datei kopieren = Sekunden)
   document.querySelector('[data-edit="install_timeout"]').closest('.field').style.display = isPlugin ? 'none' : '';
+  document.querySelector('[data-edit="uninstall_timeout"]').closest('.field').style.display = isPlugin ? 'none' : '';
   // Entry-Point-Dropdown + Inhalt-verwalten nur bei Archive-Paketen
   document.getElementById('edit-entry-field').style.display = isArchive ? '' : 'none';
   document.getElementById('edit-contents-field').style.display = isArchive ? '' : 'none';
@@ -11257,14 +11264,19 @@ async function saveEdit() {
     const ptype = (pkg && pkg.type) || 'choco';
     const isCustom = ptype === 'custom';
     if (isCustom) {
+      // uninstall_timeout: leerer String → null (Backend erwartet int|None)
+      const _utRawC = (body.uninstall_timeout || '').toString().trim();
+      body.uninstall_timeout = _utRawC ? parseInt(_utRawC) : null;
       await api('PATCH', `/admin/api/custom/${encodeURIComponent(_editingName)}`, body);
     } else {
       // Choco/Winget: PATCH enable endpoint mit allen relevanten Feldern
+      const _utRaw = (body.uninstall_timeout || '').toString().trim();
       const enableBody = {
         name: _editingName,
         display_name: body.display_name,
         category: body.category,
         install_timeout: parseInt(body.install_timeout) || 120,
+        uninstall_timeout: _utRaw ? parseInt(_utRaw) : null,
         check_reboot: body.check_reboot || 0,
         hide_uninstall: body.hide_uninstall || 0,
       };
@@ -12693,6 +12705,7 @@ function _renderSoftwareRow(item) {
     actions.push(`<button class="sw-action sw-action-update" onclick="agentSoftwareInstall(${jsStr(item.package_name)},${jsStr(item.name)})" title="Updaten">Updaten</button>`);
   }
   if (item.managed) {
+    actions.push(`<button class="sw-action" onclick="agentSoftwareReinstall(${jsStr(item.package_name)},${jsStr(item.name)})" title="Reinstall — gleiche Version forciert neu installieren">Reinstall</button>`);
     actions.push(`<button class="sw-action sw-action-uninstall" onclick="agentSoftwareUninstall(${jsStr(item.package_name)},${jsStr(item.name)})" title="Deinstallieren">Deinstallieren</button>`);
   } else if (item.can_activate && wid) {
     // Unverwaltetes winget-Paket: aktivieren in die Whitelist UND/ODER direkt
@@ -12826,6 +12839,30 @@ async function agentSoftwareInstall(packageName, displayName) {
   } catch (e) {
     _agentSoftwareBusy.delete(packageName);
   }
+}
+
+function agentSoftwareReinstall(packageName, displayName) {
+  if (!_currentAgent || !packageName) return;
+  const a = _currentAgent;
+  showConfirm(
+    `„${displayName}" reinstallieren`,
+    `Forciert die gleiche Version auf ${a.hostname} nochmal zu installieren. Für winget/choco wird --force gesetzt; für eigene Pakete läuft die normale Install-Aktion (MSI als Repair). Anwendungen werden während der Installation eventuell beendet.`,
+    async () => {
+      const snapshot = await _captureScanSnapshot();
+      try {
+        _markRowBusy(packageName);
+        const _resp = await api('POST', `/admin/api/agents/${encodeURIComponent(a.agent_id)}/install/${encodeURIComponent(packageName)}?force=1`);
+        const _r = await handleDispatchResponse(_resp, () => {
+          toast(`Reinstall von „${displayName}" gestartet`);
+          _pollUntilScanned(snapshot, displayName);
+        });
+        if (_r !== 'dispatched') _agentSoftwareBusy.delete(packageName);
+      } catch (e) {
+        _agentSoftwareBusy.delete(packageName);
+      }
+    },
+    'Reinstall', 'btn-primary'
+  );
 }
 
 function agentSoftwareUninstall(packageName, displayName) {

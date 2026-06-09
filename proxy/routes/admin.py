@@ -1115,6 +1115,7 @@ class EnabledPackage(BaseModel):
     hidden_in_kiosk: int = 0
     auto_advance: int = 0
     install_timeout: int = 120
+    uninstall_timeout: int | None = None
     check_reboot: int = 0
     hide_uninstall: int = 0
     process_check: str = ""
@@ -1134,6 +1135,7 @@ class EnableRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=80)
     category: str = Field(default="Allgemein", min_length=1, max_length=40)
     install_timeout: int | None = Field(default=None, ge=30, le=3600)
+    uninstall_timeout: int | None = Field(default=None, ge=30, le=3600)
     check_reboot: int | None = Field(default=None, ge=0, le=1)
     hide_uninstall: int | None = Field(default=None, ge=0, le=1)
     install_args: str | None = Field(default=None, max_length=500)
@@ -1299,6 +1301,8 @@ async def update_package(name: str, body: EnableRequest):
     updates = {}
     if body.install_timeout is not None:
         updates["install_timeout"] = body.install_timeout
+    if body.uninstall_timeout is not None:
+        updates["uninstall_timeout"] = body.uninstall_timeout or None
     if body.check_reboot is not None:
         updates["check_reboot"] = body.check_reboot
     if body.hide_uninstall is not None:
@@ -1328,6 +1332,7 @@ class CustomUpdateRequest(BaseModel):
     detection_name: str = Field(default="", max_length=200)
     entry_point: str = Field(default="", max_length=500)  # nur für archive
     install_timeout: int = Field(default=120, ge=30, le=3600)
+    uninstall_timeout: int | None = Field(default=None, ge=30, le=3600)
     check_reboot: int = Field(default=0, ge=0, le=1)
 
     @field_validator("display_name", "category")
@@ -1464,11 +1469,12 @@ async def update_custom_package(name: str, body: CustomUpdateRequest):
         archive_type=archive_type,
         entry_point=eff_entry,
     )
-    # install_timeout + check_reboot separat updaten
+    # install_timeout + uninstall_timeout + check_reboot separat updaten
     async with database._db() as db:
         await db.execute(
-            "UPDATE packages SET install_timeout = ?, check_reboot = ? WHERE name = ?",
-            (body.install_timeout, body.check_reboot, name),
+            "UPDATE packages SET install_timeout = ?, uninstall_timeout = ?, "
+            "check_reboot = ? WHERE name = ?",
+            (body.install_timeout, body.uninstall_timeout, body.check_reboot, name),
         )
         await db.commit()
     return {"ok": True}
@@ -3695,12 +3701,18 @@ def _queueable_payload(
 
 @router.post("/admin/api/agents/{agent_id}/install/{package_name}")
 async def admin_install_on_agent(
-    agent_id: str, package_name: str, admin: dict = Depends(_require_admin),
+    agent_id: str, package_name: str,
+    force: int = 0,
+    admin: dict = Depends(_require_admin),
 ):
     """Admin-getriggerter Install (oder Upgrade bei winget) eines whitelisted
     Pakets auf einem einzelnen Agent. Dispatch nach packages.type — die ganze
     Logik sitzt im shared `dispatch_install_for_agent` Helper damit Profile-
-    Apply und Bulk-Install denselben Pfad benutzen koennen."""
+    Apply und Bulk-Install denselben Pfad benutzen koennen.
+
+    Query: `?force=1` triggert einen Reinstall (winget/choco --force, fuer
+    custom MSI ist die Install-Aktion ohnehin als Repair idempotent).
+    """
     from routes.install import dispatch_install_for_agent
 
     if not _AGENT_ID_RE.fullmatch(agent_id):
@@ -3715,7 +3727,7 @@ async def admin_install_on_agent(
     if not online:
         return _queueable_payload(agent_id, agent["hostname"], pkg, "install", reason)
     result = await dispatch_install_for_agent(
-        agent_id, agent["hostname"], pkg, triggered_by=trig,
+        agent_id, agent["hostname"], pkg, triggered_by=trig, force=bool(force),
     )
     return {"ok": True, "agent": agent["hostname"], **result}
 

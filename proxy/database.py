@@ -567,6 +567,7 @@ async def init_db():
             ("hidden_in_kiosk",    "INTEGER NOT NULL DEFAULT 0"),
             ("auto_advance",       "INTEGER NOT NULL DEFAULT 0"),
             ("install_timeout",    "INTEGER NOT NULL DEFAULT 120"),
+            ("uninstall_timeout",  "INTEGER"),
             ("check_reboot",       "INTEGER NOT NULL DEFAULT 0"),
             ("hide_uninstall",     "INTEGER NOT NULL DEFAULT 0"),
             ("process_check",      "TEXT NOT NULL DEFAULT ''"),
@@ -793,8 +794,8 @@ _PKG_COLS = (
     "install_args, uninstall_cmd, detection_name, current_version_id, "
     "archive_type, entry_point, version_pin, winget_publisher, winget_scope, "
     "required, notes, staged_rollout, hidden_in_kiosk, auto_advance, "
-    "install_timeout, check_reboot, hide_uninstall, process_check, "
-    "plugin_host, plugin_folder"
+    "install_timeout, uninstall_timeout, check_reboot, hide_uninstall, "
+    "process_check, plugin_host, plugin_folder"
 )
 
 
