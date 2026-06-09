@@ -3553,32 +3553,29 @@ async def get_distributions(
                 cv = await database.get_package_version(pkg["current_version_id"])
                 if cv:
                     current_label = cv.get("version_label")
-        elif ptype == "winget":
-            raw = await database.get_agents_with_winget_package(pkg["name"])
-            total = len(raw)
-            _all_v = set()
-            for r in raw:
-                iv = r.get("installed_version"); av = r.get("available_version")
-                if not iv: unknown += 1
-                elif av:   outdated += 1
-                else:      current += 1
-                if iv: _all_v.add(iv)
-                if av: _all_v.add(av)
-            if pkg.get("version_pin"):
-                current_label = pkg["version_pin"]
-            elif _all_v:
-                current_label = max(_all_v)
+        elif ptype in ("winget", "choco"):
+            # Outdated-Zaehlung muss die gleiche Heuristik nutzen wie die
+            # Detail-Sicht (list_package_agents): Scanner-available_version
+            # ODER installed_version semver-kleiner als target_version. Nur
+            # auf Scanner zu vertrauen verfehlt Agents deren Scan-Cache
+            # keinen av-Hint hat — dominanter Fall bei choco, weil
+            # `choco outdated` nur das Repo befragt, nicht die admin-gesetzte
+            # version_pin.
+            if ptype == "winget":
+                raw = await database.get_agents_with_winget_package(pkg["name"])
             else:
-                current_label = "kein Pin"
-        else:  # choco
-            raw = await database.get_agents_with_choco_package(pkg["name"])
+                raw = await database.get_agents_with_choco_package(pkg["name"])
             total = len(raw)
+            target_version = await resolve_target_version(pkg)
             _all_v = set()
             for r in raw:
                 iv = r.get("installed_version"); av = r.get("available_version")
-                if not iv: unknown += 1
-                elif av:   outdated += 1
-                else:      current += 1
+                if not iv:
+                    unknown += 1
+                elif av or winget_catalog.is_outdated(iv, target_version):
+                    outdated += 1
+                else:
+                    current += 1
                 if iv: _all_v.add(iv)
                 if av: _all_v.add(av)
             if pkg.get("version_pin"):
