@@ -3774,6 +3774,24 @@ def _alnum_haystack(name: str) -> str:
     return _SOFTWARE_NON_ALNUM_RE.sub("", _normalize_software_name(name))
 
 
+# MSI ProductCode (GUID in geschweiften Klammern). Tactical's software-Endpoint
+# liefert die UninstallString — bei MSI typischerweise „MsiExec.exe /X{GUID}".
+# Unser packages.uninstall_cmd folgt dem gleichen Schema. Match beide gegen-
+# einander = deterministische Paket-Identifikation, robuster als Display-Name-
+# Heuristik bei Mehrfach-MSIs mit gleichem Namen.
+_PRODUCT_CODE_RE = re.compile(
+    r"\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}"
+)
+
+
+def _extract_product_code(s: str | None) -> str | None:
+    if not s:
+        return None
+    m = _PRODUCT_CODE_RE.search(s)
+    return m.group(0).upper() if m else None
+
+
 # Generische Architektur-/Edition-Tokens die KEIN sinnvoller Match-Anker sind.
 # Wenn z. B. das letzte Segment einer winget-ID '64-bit' ist, würde
 # 'Adobe.Acrobat.Reader.64-bit' sonst gegen 'SAP GUI 64bit' matchen — totaler
@@ -3895,20 +3913,42 @@ async def get_agent_software(agent_id: str):
     # available_version pro choco-Paket, deterministisch.
     choco_state = await database.get_agent_choco_state(agent_id)
 
-    # Whitelist nach Typ aufteilen
+    # Whitelist nach Typ aufteilen + ProductCode-Index für deterministischen Match
     pkg_rows = await database.get_packages()
     winget_whitelist: dict[str, dict] = {}
     other_whitelist: list[dict] = []
+    pkg_by_product_code: dict[str, dict] = {}
     for pkg in pkg_rows:
         ptype = pkg.get("type") or "choco"
         if ptype == "winget":
             winget_whitelist[pkg["name"]] = pkg
         else:
             other_whitelist.append(pkg)
+            pc = _extract_product_code(pkg.get("uninstall_cmd"))
+            if pc:
+                pkg_by_product_code[pc] = pkg
 
-    def _find_other_match(display_name: str) -> dict | None:
-        # Alphanumerisch-stripped Match (Hyphen, Spaces, Camelcase, Versions-
-        # Suffixe spielen keine Rolle):
+    # Canonical Softshelf-Tracker fuer custom/plugin Installs. Wir holen den
+    # hier vorne damit Pass 1 ihn zur Match-Plausibilisierung nutzen kann
+    # (verhindert falsche Managed-Markierung wenn der Tactical-Software-Cache
+    # nach einem Uninstall noch nicht refreshed ist, oder wenn zwei Pakete
+    # in der Whitelist den gleichen Display-Name haben).
+    tracked = await database.get_agent_installations(agent_id)
+    tracked_pkg_names = {t["package_name"] for t in tracked}
+
+    def _find_other_match(
+        display_name: str, tactical_uninstall: str | None,
+    ) -> dict | None:
+        # Strategie 1: ProductCode-Match. MSI ProductCodes sind weltweit
+        # eindeutig — wenn beide bekannt + identisch ist die Zuordnung
+        # deterministisch. Loest Mehrfach-MSI-Verwechslungen wie
+        # UiPathStudioCloud vs UiPathStudioCloud-2.
+        tactical_pc = _extract_product_code(tactical_uninstall)
+        if tactical_pc and tactical_pc in pkg_by_product_code:
+            return pkg_by_product_code[tactical_pc]
+
+        # Strategie 2: Alphanum-Substring-Heuristik (Fallback fuer Nicht-MSI
+        # bzw. Pakete ohne hinterlegten uninstall_cmd-PC).
         #   'StarfaceUCC' (whitelist) ↔ 'STARFACE UCC Client v6.7.3.81' (tactical)
         #   beide → 'starfaceucc...' → starfaceucc Substring-Match findet
         #   sich im längeren String.
@@ -3927,6 +3967,15 @@ async def get_agent_software(agent_id: str):
                 if not ln_alnum or len(ln_alnum) < 3:
                     continue
                 if ln_alnum in nl_alnum or nl_alnum in ln_alnum:
+                    # Heuristik-Match fuer custom/plugin: nur akzeptieren wenn
+                    # canonical Softshelf-Tracker das Paket auch kennt.
+                    # Damit verschwinden (a) stale Tactical-Cache-Hits nach
+                    # Uninstall, und (b) Verwechslungen wenn mehrere Pakete
+                    # den gleichen Display-Name in ARP haben.
+                    ptype = pkg.get("type") or "choco"
+                    if ptype in ("custom", "plugin"):
+                        if pkg["name"] not in tracked_pkg_names:
+                            continue
                     return pkg
         return None
 
@@ -3979,8 +4028,11 @@ async def get_agent_software(agent_id: str):
             })
             continue
 
-        # Tactical-only: gegen choco/custom whitelist matchen
-        wpkg = _find_other_match(name)
+        # Tactical-only: gegen choco/custom whitelist matchen.
+        # Wir uebergeben die Tactical-UninstallString damit ein MSI
+        # ProductCode-Match (eindeutig) der Display-Name-Heuristik
+        # vorgezogen wird.
+        wpkg = _find_other_match(name, item.get("uninstall"))
         items.append({
             "name":              name,
             "winget_id":         None,
@@ -4032,7 +4084,7 @@ async def get_agent_software(agent_id: str):
         i["package_name"] for i in items
         if i.get("package_name") and i.get("managed")
     }
-    tracked = await database.get_agent_installations(agent_id)
+    # tracked wurde bereits oben geladen (fuer _find_other_match Plausibilisierung)
     for t in tracked:
         pkg_name = t["package_name"]
         if pkg_name in already_managed_pkgs:
