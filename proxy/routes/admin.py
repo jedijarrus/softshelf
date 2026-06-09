@@ -3561,13 +3561,33 @@ async def get_distributions(
             # keinen av-Hint hat — dominanter Fall bei choco, weil
             # `choco outdated` nur das Repo befragt, nicht die admin-gesetzte
             # version_pin.
+            #
+            # Performance: bewusst NICHT resolve_target_version() rufen — das
+            # macht pro Paket einen extra DB-Hit (winget: catalog-detail-query)
+            # und in der Distributions-Liste laufen wir ueber 100+ Pakete
+            # seriell. Stattdessen target_version aus den Daten ableiten die
+            # wir ohnehin schon laden: version_pin > latest(available_version
+            # im Fleet). Das deckt 100% der choco-Faelle ab (kein lokaler
+            # Catalog) und 99% der winget-Faelle (Fleet sieht den av zuerst).
+            # Pakete ohne Pin UND ohne av im Fleet bleiben am Scanner-Signal
+            # haengen — das war das Vor-Fix-Verhalten und ist hier akzeptabel,
+            # weil ohne Ziel auch kein „outdated"-Vergleich moeglich ist.
             if ptype == "winget":
                 raw = await database.get_agents_with_winget_package(pkg["name"])
             else:
                 raw = await database.get_agents_with_choco_package(pkg["name"])
             total = len(raw)
-            target_version = await resolve_target_version(pkg)
             _all_v = set()
+            _avs = []
+            for r in raw:
+                iv = r.get("installed_version"); av = r.get("available_version")
+                if iv: _all_v.add(iv)
+                if av:
+                    _all_v.add(av)
+                    _avs.append(av)
+            target_version = pkg.get("version_pin")
+            if not target_version and _avs:
+                target_version = winget_catalog.latest_version(_avs)
             for r in raw:
                 iv = r.get("installed_version"); av = r.get("available_version")
                 if not iv:
@@ -3576,8 +3596,6 @@ async def get_distributions(
                     outdated += 1
                 else:
                     current += 1
-                if iv: _all_v.add(iv)
-                if av: _all_v.add(av)
             if pkg.get("version_pin"):
                 current_label = pkg["version_pin"]
             elif _all_v:
