@@ -11851,7 +11851,14 @@ function renderDistAgents(data) {
   }
   list.innerHTML = agents.map(a => {
     const ver = a.installed_version || 'unbekannt';
-    const av = a.available_version ? ` → ${esc(a.available_version)}` : '';
+    // Pfeil zeigen wenn Scanner ein Upgrade kennt ODER der Agent gegen die
+    // Paket-target_version outdated ist (admin-gesetzter version_pin den
+    // der Scanner-Feed noch nicht kennt — typischer Choco-Fall).
+    const target = a.available_version
+      || (a.outdated && a.installed_version && pkg.target_version
+          && pkg.target_version !== a.installed_version
+          ? pkg.target_version : '');
+    const av = target ? ` → ${esc(target)}` : '';
     const updateBtn = a.outdated
       ? `<button class="update" onclick="installOnAgent(${jsStr(a.agent_id)},${jsStr(pkg.name)},${jsStr(a.hostname || '')}, this)">Update</button>`
       : '';
