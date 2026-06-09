@@ -816,7 +816,18 @@ if ($remaining.Count -gt 0) {{
         _sfProgress "ARP exec: $($r.DisplayName) -> $cmd"
         $arpExit = $null
         try {{
+            # UninstallString-Parser. Drei Faelle:
+            #  1) Quoted: "C:\Path with space\app.exe" /args
+            #  2) Unquoted mit .exe im Pfad: C:\Path with space\app.exe /args
+            #     → klassisch bei NSIS (Firefox helper.exe, IntelliJ Uninstall.exe).
+            #     `\S+` aus der naiven Variante haette nur bis zum ersten
+            #     Space gegriffen ("C:\Program") und Start-Process haette
+            #     „Datei nicht gefunden" geworfen. Greedy-non-greedy bis zur
+            #     ersten .exe deckt Pfade mit Leerzeichen sauber ab.
+            #  3) Fallback ohne .exe: alles bis zum ersten Space als Pfad.
             if ($cmd -match '^"([^"]+)"\\s*(.*)$') {{
+                $exe = $Matches[1]; $argStr = $Matches[2].Trim()
+            }} elseif ($cmd -match '(?i)^(.+?\\.exe)\\s*(.*)$') {{
                 $exe = $Matches[1]; $argStr = $Matches[2].Trim()
             }} elseif ($cmd -match '^(\\S+)\\s*(.*)$') {{
                 $exe = $Matches[1]; $argStr = $Matches[2].Trim()
@@ -918,6 +929,27 @@ if ($stillThere) {{
 }}
 """
 
+    # Finaler ARP-Recheck NUR fuer uninstall: wenn nach winget + ARP-Fallback
+    # + Override-Block noch ein ARP-Eintrag zum display_name uebrig ist, war
+    # der Uninstall nicht erfolgreich — winget hat ggf. nur false-success
+    # gemeldet (NSIS unter SYSTEM ohne durchgereichten /S Switch, klassischer
+    # Firefox/IntelliJ-Case). Mit non-zero exit verhindern wir dass die
+    # action_log als success geloggt wird, obwohl die Software noch da ist.
+    final_uninstall_check = ""
+    if action == "uninstall" and display_name:
+        safe_dn3 = display_name.replace("'", "''")[:120]
+        final_uninstall_check = f"""
+$dnFinal = '{safe_dn3}'
+$restCount = 0
+foreach ($k in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*')) {{
+    $restCount += @(Get-ItemProperty $k -ErrorAction SilentlyContinue | Where-Object {{ $_.DisplayName -and $_.DisplayName.StartsWith($dnFinal) }}).Count
+}}
+if ($restCount -gt 0) {{
+    _sfProgress "FEHLER: Uninstall unvollstaendig, $restCount ARP-Eintrag(e) noch vorhanden (winget false-success?)"
+    cmd /c "exit 1603"
+}}
+"""
+
     return f"""$ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 {_PS_FIND_WINGET}
@@ -933,6 +965,7 @@ if ($wingetExe) {{
     _sfProgress $out
     {uninstall_fallback_block}
     {uninstall_override_block}
+    {final_uninstall_check}
 }}
 """
 
