@@ -1116,6 +1116,7 @@ class EnabledPackage(BaseModel):
     auto_advance: int = 0
     install_timeout: int = 120
     uninstall_timeout: int | None = None
+    run_as_user: int = 0
     check_reboot: int = 0
     hide_uninstall: int = 0
     process_check: str = ""
@@ -1136,6 +1137,7 @@ class EnableRequest(BaseModel):
     category: str = Field(default="Allgemein", min_length=1, max_length=40)
     install_timeout: int | None = Field(default=None, ge=30, le=3600)
     uninstall_timeout: int | None = Field(default=None, ge=30, le=3600)
+    run_as_user: int | None = Field(default=None, ge=0, le=1)
     check_reboot: int | None = Field(default=None, ge=0, le=1)
     hide_uninstall: int | None = Field(default=None, ge=0, le=1)
     install_args: str | None = Field(default=None, max_length=500)
@@ -1303,6 +1305,8 @@ async def update_package(name: str, body: EnableRequest):
         updates["install_timeout"] = body.install_timeout
     if body.uninstall_timeout is not None:
         updates["uninstall_timeout"] = body.uninstall_timeout or None
+    if body.run_as_user is not None:
+        updates["run_as_user"] = body.run_as_user
     if body.check_reboot is not None:
         updates["check_reboot"] = body.check_reboot
     if body.hide_uninstall is not None:
@@ -1333,6 +1337,7 @@ class CustomUpdateRequest(BaseModel):
     entry_point: str = Field(default="", max_length=500)  # nur für archive
     install_timeout: int = Field(default=120, ge=30, le=3600)
     uninstall_timeout: int | None = Field(default=None, ge=30, le=3600)
+    run_as_user: int = Field(default=0, ge=0, le=1)
     check_reboot: int = Field(default=0, ge=0, le=1)
 
     @field_validator("display_name", "category")
@@ -1469,12 +1474,15 @@ async def update_custom_package(name: str, body: CustomUpdateRequest):
         archive_type=archive_type,
         entry_point=eff_entry,
     )
-    # install_timeout + uninstall_timeout + check_reboot separat updaten
+    # install_timeout + uninstall_timeout + run_as_user + check_reboot separat updaten
     async with database._db() as db:
         await db.execute(
             "UPDATE packages SET install_timeout = ?, uninstall_timeout = ?, "
-            "check_reboot = ? WHERE name = ?",
-            (body.install_timeout, body.uninstall_timeout, body.check_reboot, name),
+            "run_as_user = ?, check_reboot = ? WHERE name = ?",
+            (
+                body.install_timeout, body.uninstall_timeout,
+                body.run_as_user, body.check_reboot, name,
+            ),
         )
         await db.commit()
     return {"ok": True}
