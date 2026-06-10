@@ -6250,6 +6250,7 @@ exit $p.ExitCode
 @router.post("/admin/api/agents/{agent_id}/update-client")
 async def update_client_for_agent(
     agent_id: str, admin: dict = Depends(_require_admin),
+    triggered_by: str | None = None,
 ):
     """Pushed das aktuelle Setup.exe auf einen Agent via run_command.
 
@@ -6272,7 +6273,15 @@ async def update_client_for_agent(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent nicht gefunden")
 
-    trig = f"admin:{(admin or {}).get('username') or 'admin'}"
+    # Bei direktem (internen) Aufruf aus bulk_update_client ist `admin` das
+    # rohe Depends-Objekt, kein dict — `.get()` darauf warf AttributeError
+    # und liess jeden Bulk-Sweep VOR dem action_log-Create scheitern.
+    if triggered_by:
+        trig = triggered_by
+    elif isinstance(admin, dict):
+        trig = f"admin:{admin.get('username') or 'admin'}"
+    else:
+        trig = "admin:bulk"
     online, reason = await _agent_online_check(agent_id)
     if not online:
         current = await database.get_current_build()
@@ -6341,7 +6350,9 @@ async def bulk_update_client(body: BulkUpdateClientBody):
             skipped += 1
             continue
         try:
-            r = await update_client_for_agent(a["agent_id"])
+            r = await update_client_for_agent(
+                a["agent_id"], triggered_by="admin:bulk-update",
+            )
             if isinstance(r, dict) and r.get("queueable"):
                 queued += 1
             else:
