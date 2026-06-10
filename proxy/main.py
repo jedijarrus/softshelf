@@ -811,42 +811,37 @@ async def health(request: Request):
         "build_at": BUILD_AT,
         "git_sha": GIT_SHA,
     }
-    # Optional: wenn ein gueltiges Bearer-Token mitkommt, pending_actions mitsenden
+    # Optional: wenn ein gueltiges Bearer-Token mitkommt, pending_actions mitsenden.
+    # Ueber _verified_agent_from_bearer — gebannte/widerrufene Geraete bekommen
+    # nur den Public-Health-Status, keine pending_actions, kein Telemetrie-Write.
     try:
-        auth_header = request.headers.get("authorization", "")
-        if auth_header.startswith("Bearer "):
-            import jwt as _jwt
-            from config import get_settings as _get_settings
-            token = auth_header[7:]
-            cfg = _get_settings()
-            payload = _jwt.decode(token, cfg.secret_key, algorithms=["HS256"])
-            agent_id = payload.get("agent_id")
-            if agent_id:
-                pending = await database.get_pending_actions_for_agent(agent_id)
-                if pending:
-                    result["pending_actions"] = pending
-                # Windows-User aus Header speichern (sanitized)
-                win_user = request.headers.get("x-softshelf-user", "").strip()[:60]
-                if win_user and re.fullmatch(r'[^\x00-\x1f\x7f<>"\'`]{1,60}', win_user):
-                    await database.update_agent_user(agent_id, win_user)
+        agent_id = await _verified_agent_from_bearer(request)
+        if agent_id:
+            pending = await database.get_pending_actions_for_agent(agent_id)
+            if pending:
+                result["pending_actions"] = pending
+            # Windows-User aus Header speichern (sanitized)
+            win_user = request.headers.get("x-softshelf-user", "").strip()[:60]
+            if win_user and re.fullmatch(r'[^\x00-\x1f\x7f<>"\'`]{1,60}', win_user):
+                await database.update_agent_user(agent_id, win_user)
 
-                # Tray-Telemetrie via Header (v2.4). Leise schlucken bei
-                # Validierungsfehlern damit das Health-Polling nicht bricht.
-                try:
-                    cv = request.headers.get("x-softshelf-client-version", "").strip()
-                    ov = request.headers.get("x-softshelf-os-version", "").strip()
-                    tu = request.headers.get("x-softshelf-tray-uptime", "").strip()
-                    update_kwargs: dict = {}
-                    if cv and _TEL_VERSION_RE.fullmatch(cv):
-                        update_kwargs["client_version"] = cv
-                    if ov and _TEL_OS_RE.fullmatch(ov):
-                        update_kwargs["os_version"] = ov
-                    if tu and tu.isdigit() and 0 <= int(tu) <= 31_536_000:  # max 1y
-                        update_kwargs["tray_uptime_s"] = int(tu)
-                    if update_kwargs:
-                        await database.update_agent_telemetry(agent_id, **update_kwargs)
-                except Exception:
-                    pass
+            # Tray-Telemetrie via Header (v2.4). Leise schlucken bei
+            # Validierungsfehlern damit das Health-Polling nicht bricht.
+            try:
+                cv = request.headers.get("x-softshelf-client-version", "").strip()
+                ov = request.headers.get("x-softshelf-os-version", "").strip()
+                tu = request.headers.get("x-softshelf-tray-uptime", "").strip()
+                update_kwargs: dict = {}
+                if cv and _TEL_VERSION_RE.fullmatch(cv):
+                    update_kwargs["client_version"] = cv
+                if ov and _TEL_OS_RE.fullmatch(ov):
+                    update_kwargs["os_version"] = ov
+                if tu and tu.isdigit() and 0 <= int(tu) <= 31_536_000:  # max 1y
+                    update_kwargs["tray_uptime_s"] = int(tu)
+                if update_kwargs:
+                    await database.update_agent_telemetry(agent_id, **update_kwargs)
+            except Exception:
+                pass
     except Exception:
         pass  # kein gueltiges Token — kein pending_actions, das ist ok
     return result
@@ -1178,27 +1173,42 @@ async def download_custom_file(sha256: str, token: str = Query(...)):
 # Workflow-Client-Endpoints (Bearer-Auth, kein Admin-Session)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _extract_agent_from_bearer(request: Request) -> str | None:
-    """Extrahiert agent_id aus Bearer-Token ohne FastAPI-Dependency-Stack.
-    Gibt None zurueck wenn kein gueltiges Token vorhanden (statt Exception)."""
+async def _verified_agent_from_bearer(request: Request) -> str | None:
+    """Extrahiert agent_id aus Machine-JWT inkl. Ban- und token_version-Check.
+
+    Gibt None zurueck wenn kein/ungueltiges/gebanntes/widerrufenes Token —
+    Caller entscheidet ob das 401 oder Soft-Degradation bedeutet. Die Checks
+    muessen denen von auth.verify_machine_token entsprechen, sonst behalten
+    gesperrte Geraete ueber diese Endpoints Teilzugriff.
+    """
     auth_header = request.headers.get("authorization", "")
     if not auth_header.startswith("Bearer "):
         return None
     try:
         import jwt as _jwt
         from config import get_settings as _get_settings
-        token = auth_header[7:]
-        cfg = _get_settings()
-        payload = _jwt.decode(token, cfg.secret_key, algorithms=["HS256"])
-        return payload.get("agent_id")
+        payload = _jwt.decode(
+            auth_header[7:], _get_settings().secret_key, algorithms=["HS256"],
+        )
     except Exception:
         return None
+    agent_id = payload.get("agent_id")
+    if not agent_id:
+        return None
+    try:
+        if await database.is_agent_banned(agent_id):
+            return None
+        if payload.get("tv", 0) != await database.get_token_version(agent_id):
+            return None
+    except Exception:
+        return None
+    return agent_id
 
 
 @app.post("/api/v1/workflow/reboot-now/{run_id}")
 async def workflow_reboot_now(run_id: int, request: Request):
     """Client bestaetigt sofortigen Reboot. Triggert shutdown auf Agent via Tactical."""
-    agent_id = _extract_agent_from_bearer(request)
+    agent_id = await _verified_agent_from_bearer(request)
     if not agent_id:
         raise HTTPException(status_code=401, detail="Authentifizierung erforderlich")
     run = await database.get_workflow_run(run_id)
@@ -1224,7 +1234,7 @@ async def workflow_reboot_now(run_id: int, request: Request):
 @app.post("/api/v1/workflow/defer/{run_id}")
 async def workflow_defer_reboot(run_id: int, request: Request):
     """Client verschiebt den Reboot. Inkrementiert Deferral-Zaehler im Run-State."""
-    agent_id = _extract_agent_from_bearer(request)
+    agent_id = await _verified_agent_from_bearer(request)
     if not agent_id:
         raise HTTPException(status_code=401, detail="Authentifizierung erforderlich")
     run = await database.get_workflow_run(run_id)
