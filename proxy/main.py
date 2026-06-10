@@ -1160,7 +1160,10 @@ async def download_custom_file(sha256: str, token: str = Query(...)):
     if not pkg:
         raise HTTPException(status_code=404, detail="Paket nicht gefunden")
 
-    path = file_uploads.find_file_path(sha256)
+    # to_thread: find_file_path zippt einen Programmordner notfalls
+    # on-demand (zip_folder_background ist trotz Namens synchron) — das
+    # darf den Event-Loop nicht fuer Sekunden/Minuten blockieren.
+    path = await asyncio.to_thread(file_uploads.find_file_path, sha256)
     if not path:
         raise HTTPException(status_code=404, detail="Datei nicht im Storage")
 

@@ -2948,20 +2948,28 @@ async def get_compliance():
         if p.get("missing") and p.get("type") in ("custom", "choco")
     ]
     if required_with_detection:
-        # Pro Agent einmal Tactical-Scan holen (gecached fuer alle Pakete)
+        # Pro Agent einmal Tactical-Scan holen (gecached fuer alle Pakete).
+        # Parallel mit Semaphore statt seriell — 30 Agents x 200-500ms
+        # Tactical-Latenz waren sonst 6-15s pro Aufruf des Compliance-Tabs.
         all_agents = await database.get_agents()
         tactical = get_rmm_client()
         agent_software_cache: dict[str, list[str]] = {}
-        for a in all_agents:
-            aid = a["agent_id"]
-            try:
-                sw = await tactical.get_installed_software(aid)
-                # DisplayNames normalisiert cachen
-                agent_software_cache[aid] = [
-                    (s.get("name") or "").lower() for s in sw
-                ]
-            except Exception:
-                agent_software_cache[aid] = []
+        _sem = asyncio.Semaphore(8)
+
+        async def _fetch_sw(aid: str):
+            async with _sem:
+                try:
+                    sw = await tactical.get_installed_software(aid)
+                    agent_software_cache[aid] = [
+                        (s.get("name") or "").lower() for s in sw
+                    ]
+                except Exception:
+                    agent_software_cache[aid] = []
+
+        await asyncio.gather(
+            *(_fetch_sw(a["agent_id"]) for a in all_agents),
+            return_exceptions=True,
+        )
 
         # Pakete mit detection_name gegen Tactical-Scan matchen
         for p in required_with_detection:
@@ -3584,9 +3592,18 @@ async def get_distributions(
             or needle in (p.get("display_name") or "").lower()
         ]
 
-    # Summary-Zaehler holen (pro Paket ein leichter DB-Call, aber kein
-    # Tactical-Round-Trip — nur agent_*_state Tabellen).
+    # Summary-Zaehler: BULK statt N+1. Vorher pro Paket 1-2 DB-Calls
+    # (jede _db()-Connection = eigener Thread + PRAGMA-Roundtrips) — bei
+    # 100+ Paketen 150-250 Connection-Spawns pro Request, Pagination
+    # griff erst nach Vollberechnung. Jetzt: 4 Queries fuer alles.
     failed_counts = await database.get_package_failed_counts()
+    custom_summaries = await database.get_agent_installation_summaries()
+    winget_states = await database.get_all_winget_state_versions()
+    choco_states = await database.get_all_choco_state_versions()
+    version_labels = await database.get_version_labels(
+        [p.get("current_version_id") for p in packages
+         if (p.get("type") or "choco") in ("custom", "plugin")]
+    )
     items = []
     for pkg in packages:
         ptype = pkg.get("type") or "choco"
@@ -3594,15 +3611,13 @@ async def get_distributions(
         current_label = None
 
         if ptype == "custom":
-            summary = await database.get_agent_installation_summary(pkg["name"])
+            summary = custom_summaries.get(pkg["name"], {})
             total    = summary.get("total", 0)
             current  = summary.get("current", 0)
             outdated = summary.get("outdated", 0)
             unknown  = summary.get("unknown", 0)
             if pkg.get("current_version_id"):
-                cv = await database.get_package_version(pkg["current_version_id"])
-                if cv:
-                    current_label = cv.get("version_label")
+                current_label = version_labels.get(pkg["current_version_id"])
         elif ptype in ("winget", "choco"):
             # Outdated-Zaehlung muss die gleiche Heuristik nutzen wie die
             # Detail-Sicht (list_package_agents): Scanner-available_version
@@ -3623,9 +3638,9 @@ async def get_distributions(
             # haengen — das war das Vor-Fix-Verhalten und ist hier akzeptabel,
             # weil ohne Ziel auch kein „outdated"-Vergleich moeglich ist.
             if ptype == "winget":
-                raw = await database.get_agents_with_winget_package(pkg["name"])
+                raw = winget_states.get(pkg["name"].lower(), [])
             else:
-                raw = await database.get_agents_with_choco_package(pkg["name"])
+                raw = choco_states.get(pkg["name"].lower(), [])
             total = len(raw)
             _all_v = set()
             _avs = []

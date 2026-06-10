@@ -134,23 +134,31 @@ async def refresh_cache(force: bool = False) -> bool:
         except httpx.HTTPError as e:
             logger.warning("winget source download failed: %s", e)
             return False
-        try:
+        # Extract + Write in den Thread-Pool: das Deflate ueber das
+        # mehrere-hundert-MB-MSIX lief sonst synchron im Event-Loop —
+        # und _ensure_cache() feuert auch inline bei Admin-Suchen wenn
+        # der Cache >24h alt ist. In dem Moment standen ALLE Requests
+        # (Kiosk-Polls, Agent-Callbacks) fuer Sekunden.
+        def _extract_and_write() -> int:
             with zipfile.ZipFile(io.BytesIO(msix_bytes)) as z:
                 db_bytes = z.read("Public/index.db")
+            _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            tmp_path = _CACHE_DB.with_suffix(".db.tmp")
+            tmp_path.write_bytes(db_bytes)
+            tmp_path.replace(_CACHE_DB)
+            return len(db_bytes)
+
+        try:
+            db_size = await asyncio.to_thread(_extract_and_write)
         except (zipfile.BadZipFile, KeyError) as e:
             logger.warning("winget source extract failed: %s", e)
             return False
-        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        tmp_path = _CACHE_DB.with_suffix(".db.tmp")
-        try:
-            tmp_path.write_bytes(db_bytes)
-            tmp_path.replace(_CACHE_DB)
         except OSError as e:
             logger.warning("winget cache write failed: %s", e)
             return False
         logger.info(
             "winget source cached: %d bytes (msix), %d bytes (db)",
-            len(msix_bytes), len(db_bytes),
+            len(msix_bytes), db_size,
         )
         return True
 
@@ -359,18 +367,23 @@ def _query_details(package_id: str) -> dict[str, Any] | None:
     conn = sqlite3.connect(str(_CACHE_DB))
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
+        # Fast-Path exakte ID (nutzt den Index der Microsoft-index.db) —
+        # LOWER(i.id) war ein Full-Scan ueber ~400k Manifest-Zeilen und lief
+        # im staged-overview pro Paket pro Request. IDs in der Whitelist
+        # stammen aus genau diesem Catalog, Case stimmt praktisch immer.
+        _sql = """
             SELECT i.id, n.name, v.version
             FROM manifest m
             JOIN ids   i ON i.rowid = m.id
             JOIN names n ON n.rowid = m.name
             JOIN versions v ON v.rowid = m.version
-            WHERE LOWER(i.id) = LOWER(?)
-            """,
-            (pid,),
-        )
+            WHERE {where}
+            """
+        cur.execute(_sql.format(where="i.id = ?"), (pid,))
         rows = cur.fetchall()
+        if not rows:
+            cur.execute(_sql.format(where="LOWER(i.id) = LOWER(?)"), (pid,))
+            rows = cur.fetchall()
     finally:
         conn.close()
     if not rows:
@@ -417,17 +430,19 @@ def _query_versions(package_id: str) -> list[str]:
     conn = sqlite3.connect(str(_CACHE_DB))
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
+        # Fast-Path exakte ID, Fallback case-insensitiv (siehe _query_details)
+        _sql = """
             SELECT DISTINCT v.version
             FROM manifest m
             JOIN ids i ON i.rowid = m.id
             JOIN versions v ON v.rowid = m.version
-            WHERE LOWER(i.id) = LOWER(?)
-            """,
-            (package_id,),
-        )
+            WHERE {where}
+            """
+        cur.execute(_sql.format(where="i.id = ?"), (package_id,))
         versions = [r[0] for r in cur.fetchall() if r[0]]
+        if not versions:
+            cur.execute(_sql.format(where="LOWER(i.id) = LOWER(?)"), (package_id,))
+            versions = [r[0] for r in cur.fetchall() if r[0]]
     finally:
         conn.close()
     try:

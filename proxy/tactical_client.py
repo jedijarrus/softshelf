@@ -55,6 +55,49 @@ def _agents_cache_get() -> list | None:
 def _agents_cache_put(agents: list) -> None:
     _agents_list_cache["all"] = (_time.time(), agents)
 
+# Shared httpx.AsyncClient mit Connection-Pooling. Vorher wurde pro
+# Tactical-Call ein neuer Client gebaut = neuer TCP+TLS-Handshake
+# (~50-150ms Overhead, 30+ parallele Handshakes beim Nightly-Scan).
+_shared_http_client: httpx.AsyncClient | None = None
+
+
+def _get_shared_client() -> httpx.AsyncClient:
+    global _shared_http_client
+    if _shared_http_client is None or _shared_http_client.is_closed:
+        _shared_http_client = httpx.AsyncClient(
+            timeout=30,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+    return _shared_http_client
+
+
+class _PooledClient:
+    """Async-CM-Wrapper um den shared AsyncClient: schliesst beim Exit NICHT
+    (Pooling bleibt erhalten), reicht get/post mit per-Call-Headern und
+    -Timeout durch. Drop-in fuer das bisherige `async with self._client(...)`."""
+
+    def __init__(self, client: httpx.AsyncClient, headers: dict, timeout: float):
+        self._c = client
+        self._h = headers
+        self._t = timeout
+
+    async def __aenter__(self) -> "_PooledClient":
+        return self
+
+    async def __aexit__(self, *exc) -> bool:
+        return False
+
+    def get(self, url, **kw):
+        kw.setdefault("headers", self._h)
+        kw.setdefault("timeout", self._t)
+        return self._c.get(url, **kw)
+
+    def post(self, url, **kw):
+        kw.setdefault("headers", self._h)
+        kw.setdefault("timeout", self._t)
+        return self._c.post(url, **kw)
+
+
 # Queue-Tracking: was laeuft, was wartet
 _active_commands: list[dict] = []   # [{agent_id, hostname, action, started_at}]
 _waiting_count: int = 0
@@ -138,8 +181,8 @@ class TacticalClient:
         headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
         return base, headers
 
-    def _client(self, headers: dict) -> httpx.AsyncClient:
-        return httpx.AsyncClient(headers=headers, timeout=30)
+    def _client(self, headers: dict, timeout: float = 30) -> _PooledClient:
+        return _PooledClient(_get_shared_client(), headers, timeout)
 
     async def _list_agents_cached(self) -> list | None:
         """Liefert /agents/ — gecachet 60s. None bei API-Fehler."""
@@ -360,9 +403,9 @@ class TacticalClient:
             "run_as_user": False,
         }
         try:
-            # Eigener Client mit 60s-Timeout statt self._client (Default 30s):
-            # Tactical kann unter Last laenger zum acken brauchen.
-            async with httpx.AsyncClient(headers=headers, timeout=60) as c:
+            # 60s-Timeout statt Default 30s: Tactical kann unter Last
+            # laenger zum acken brauchen.
+            async with self._client(headers, timeout=60) as c:
                 r = await c.post(url, json=payload)
                 if r.status_code >= 400:
                     return {"ok": False, "status": f"http_{r.status_code}", "body": r.text[:300]}
@@ -414,7 +457,7 @@ class TacticalClient:
         }
 
         async with _tracked_semaphore(agent_id=agent_id, action=cmd[:80]):
-            async with httpx.AsyncClient(headers=headers, timeout=timeout + 15) as c:
+            async with self._client(headers, timeout=timeout + 15) as c:
                 try:
                     r = await c.post(url, json=payload)
                     if r.status_code in _RETRYABLE_STATUS:
