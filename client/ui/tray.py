@@ -58,10 +58,18 @@ class KioskTray:
         self._stop_health = threading.Event()
         self._health_thread: threading.Thread | None = None
         self._shown_reboot_runs: set = set()
+        # Lock: Health-Thread (add) und Reboot-Dialog-Callback (discard)
+        # teilen sich das Set.
+        self._reboot_runs_lock = threading.Lock()
 
     def start(self):
-        """Start pystray in background thread (does NOT block)."""
-        self._load_custom_icon()
+        """Start pystray in background thread (does NOT block).
+
+        Icon erscheint SOFORT mit Fallback-Grafik — das Branding-Icon vom
+        Server laedt ein Background-Thread nach (vorher blockierte der
+        HTTP-Call mit bis zu ~30s Timeout+Retry den kompletten Tray-Start
+        bei nicht erreichbarem Server, bei jedem Login).
+        """
         menu = pystray.Menu(
             pystray.MenuItem(self._app_name, self._on_open, default=True),
             pystray.Menu.SEPARATOR,
@@ -74,14 +82,39 @@ class KioskTray:
             menu=menu,
         )
         self._icon.run_detached()
+        self._load_custom_icon_async()
         self._start_health_monitor()
 
-    def _load_custom_icon(self):
-        """Try to load branding icon from server (best-effort)."""
+    def _load_custom_icon_async(self):
+        """Branding-Icon vom Server nachladen (best-effort, non-blocking)."""
+        def job():
+            try:
+                data = self._api.get_icon()
+                if data:
+                    self._custom_icon = Image.open(io.BytesIO(data)).convert("RGBA")
+                    if self._icon:
+                        self._icon.icon = self._get_icon_image(
+                            offline=(self._is_online is False),
+                        )
+            except Exception:
+                pass
+        threading.Thread(target=job, daemon=True, name="KioskIconLoad").start()
+
+    def update_app_name(self, name: str):
+        """App-Name nachtraeglich setzen (kommt async vom Server)."""
+        if not name or name == self._app_name:
+            return
+        self._app_name = name
+        if not self._icon:
+            return
         try:
-            data = self._api.get_icon()
-            if data:
-                self._custom_icon = Image.open(io.BytesIO(data)).convert("RGBA")
+            self._icon.title = f"{name}  v{__version__}"
+            self._icon.menu = pystray.Menu(
+                pystray.MenuItem(name, self._on_open, default=True),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Beenden", self._on_quit),
+            )
+            self._icon.update_menu()
         except Exception:
             pass
 
@@ -114,11 +147,14 @@ class KioskTray:
                     if action.get("type") != "reboot":
                         continue
                     rid = action.get("run_id")
-                    if not rid or rid in self._shown_reboot_runs:
+                    with self._reboot_runs_lock:
+                        already = not rid or rid in self._shown_reboot_runs
+                    if already:
                         continue
                     try:
                         self._handle_reboot_request(action)
-                        self._shown_reboot_runs.add(rid)
+                        with self._reboot_runs_lock:
+                            self._shown_reboot_runs.add(rid)
                     except Exception:
                         # Dialog konnte nicht erstellt werden — nicht zur
                         # shown-Liste hinzufuegen, damit der naechste Poll
@@ -172,7 +208,8 @@ class KioskTray:
             # Bei defer, rejected oder close: run_id freigeben damit
             # Dialog beim naechsten Poll wieder erscheinen kann
             if result in ("defer", "rejected", "closed"):
-                self._shown_reboot_runs.discard(run_id)
+                with self._reboot_runs_lock:
+                    self._shown_reboot_runs.discard(run_id)
 
         show_reboot_dialog(
             api_client=self._api,

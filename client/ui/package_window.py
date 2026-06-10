@@ -1007,7 +1007,23 @@ if (window.pywebview) {{ _initApp(); }}
 else {{ window.addEventListener('pywebviewready', _initApp); }}
 
 async function loadPackages() {{
-  showLoading();
+  // Stale-while-revalidate: letzte bekannte Liste sofort rendern (Fenster
+  // fuehlt sich instant an), frische Daten laufen im Hintergrund nach.
+  // Mit einem choco/custom-Paket in der Whitelist macht der Server pro
+  // Abruf einen Tactical-Roundtrip — das dauerte sonst sichtbar.
+  let hadContent = Array.isArray(packages) && packages.length > 0;
+  if (!hadContent) {{
+    try {{
+      const cached = await pywebview.api.get_cached_packages();
+      if (cached && cached.length) {{
+        packages = cached;
+        hadContent = true;
+        updateCounts();
+        renderPackages();
+      }}
+    }} catch (e) {{}}
+  }}
+  if (!hadContent) showLoading();
   try {{
     const result = await pywebview.api.get_packages();
     packages = result;
@@ -1020,7 +1036,8 @@ async function loadPackages() {{
       showRevokedOverlay();
       return;
     }}
-    showError(msg);
+    // Cache sichtbar lassen wenn vorhanden — nur Offline-Banner zeigen
+    if (!hadContent) showError(msg);
     setOnlineState(false);
   }}
 }}
@@ -1268,13 +1285,13 @@ function showProcessRunningDialog(displayName, runningNames) {{
   return new Promise(resolve => {{
     const ov = document.createElement('div');
     ov.className = 'proc-modal-overlay';
-    const list = runningNames.map(n => '<li><code>' + n + '.exe</code></li>').join('');
+    const list = runningNames.map(n => '<li><code>' + escHtml(n) + '.exe</code></li>').join('');
     ov.innerHTML = `
       <div class="proc-modal">
         <div class="proc-modal-icon">!</div>
-        <div class="proc-modal-title">${{displayName}} ist ge\\u00f6ffnet</div>
+        <div class="proc-modal-title">${{escHtml(displayName)}} ist ge\\u00f6ffnet</div>
         <div class="proc-modal-body">
-          Bitte <strong>${{displayName}}</strong> erst schlie\\u00dfen, sonst kann
+          Bitte <strong>${{escHtml(displayName)}}</strong> erst schlie\\u00dfen, sonst kann
           die Installation/das Update nicht abgeschlossen werden.
           <ul>${{list}}</ul>
         </div>
@@ -1292,7 +1309,7 @@ function showProcessRunningDialog(displayName, runningNames) {{
         const still = await pywebview.api.check_running_processes(runningNames.join(','));
         if (still && still.length > 0) {{
           ov.querySelector('.proc-modal-title').textContent = displayName + ' ist immer noch ge\\u00f6ffnet';
-          ov.querySelector('.proc-modal-body ul').innerHTML = still.map(n => '<li><code>' + n + '.exe</code></li>').join('');
+          ov.querySelector('.proc-modal-body ul').innerHTML = still.map(n => '<li><code>' + escHtml(n) + '.exe</code></li>').join('');
           return;
         }}
       }} catch(e) {{}}
@@ -1545,19 +1562,30 @@ def _format_http_error(e: Exception) -> str:
     return str(e)
 
 
+# Letzte erfolgreich geladene Paketliste — modul-global damit sie
+# Fenster-Schliessen ueberlebt. Stale-while-revalidate: beim Oeffnen sofort
+# rendern, frische Daten kommen im Hintergrund nach.
+_PKG_CACHE: list[dict] | None = None
+
+
 class PackageApi:
     """JS-to-Python bridge exposed via pywebview js_api."""
 
     def __init__(self, api_client: KioskApiClient):
         self._api = api_client
 
+    def get_cached_packages(self):
+        """Letzte bekannte Paketliste (oder None) — rein lokal, kein Netz."""
+        return _PKG_CACHE
+
     def get_packages(self) -> list[dict]:
         """Returns package list as list of dicts for JS consumption.
         Bei 401 wird `__TOKEN_REVOKED__` geraised damit das Frontend
         das Overlay statt eines Toasts zeigt."""
+        global _PKG_CACHE
         try:
             pkgs = self._api.get_packages()
-            return [
+            result = [
                 {
                     "name": p.name,
                     "display_name": p.display_name,
@@ -1576,6 +1604,8 @@ class PackageApi:
                 }
                 for p in pkgs
             ]
+            _PKG_CACHE = result
+            return result
         except Exception as e:
             raise Exception(_format_http_error(e))
 

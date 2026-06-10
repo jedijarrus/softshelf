@@ -79,6 +79,30 @@ class Package:
     plugin_host_label: str | None = None
 
 
+class _PooledHttp:
+    """Context-Manager-Wrapper um den shared httpx.Client: schliesst beim
+    Exit NICHT (Pooling bleibt), injiziert die per-Call-Header. Drop-in
+    fuer das bisherige `with self._client() as c:`."""
+
+    def __init__(self, client: httpx.Client, headers: dict):
+        self._c = client
+        self._h = headers
+
+    def __enter__(self) -> "_PooledHttp":
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+    def get(self, url, **kw):
+        kw.setdefault("headers", self._h)
+        return self._c.get(url, **kw)
+
+    def post(self, url, **kw):
+        kw.setdefault("headers", self._h)
+        return self._c.post(url, **kw)
+
+
 def _get_windows_user() -> str:
     """Aktuell eingeloggter Windows-User (DOMAIN\\User oder User)."""
     import os
@@ -102,12 +126,19 @@ class KioskApiClient:
             "X-Softshelf-Client-Version": self._build_version,
             "X-Softshelf-Os-Version": self._os_version,
         }
+        # Shared HTTP-Client (httpx.Client ist thread-safe; Health-Thread und
+        # webview-Worker teilen sich den Connection-Pool).
+        self._http: httpx.Client | None = None
 
-    def _client(self) -> httpx.Client:
-        # Per-call Uptime-Header damit der Server lange Tray-Sessions sieht
+    def _client(self) -> "_PooledHttp":
+        # Per-call Uptime-Header damit der Server lange Tray-Sessions sieht.
+        # Shared httpx.Client mit Connection-Pooling: vorher baute jeder
+        # API-Call TCP+TLS neu auf — spuerbare Latenz bei jedem Klick.
         headers = dict(self._headers)
         headers["X-Softshelf-Tray-Uptime"] = str(int(time.time() - _TRAY_START_TS))
-        return httpx.Client(headers=headers, timeout=15, verify=True)
+        if self._http is None or self._http.is_closed:
+            self._http = httpx.Client(timeout=15, verify=True)
+        return _PooledHttp(self._http, headers)
 
     def get_packages(self) -> list[Package]:
         with self._client() as c:

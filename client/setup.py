@@ -197,12 +197,55 @@ def step_register(proxy_url: str, reg_secret: str, agent_id: str) -> str:
     return token
 
 
+def _harden_config_key_acl():
+    """Restriktive ACL auf HKLM\\SOFTWARE\\<slug>: SYSTEM+Administratoren
+    Vollzugriff, INTERACTIVE nur Lesen, Vererbung aus.
+
+    Ohne das erbt der Key BUILTIN\\Users-Read von HKLM\\SOFTWARE — jeder
+    Prozess (auch Netzwerk-Logon/Remote-Registry/Service-Kontexte) konnte
+    das MachineToken im Klartext auslesen. INTERACTIVE-Read bleibt noetig,
+    weil der Tray im Kontext des angemeldeten Users laeuft.
+    """
+    try:
+        advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        # D:PAI = DACL protected (keine Vererbung), Auto-Inherit
+        # KA = KEY_ALL_ACCESS, KR = KEY_READ; SY/BA/IU = SYSTEM/Admins/Interactive
+        sddl = "D:PAI(A;CI;KA;;;SY)(A;CI;KA;;;BA)(A;CI;KR;;;IU)"
+        sd = ctypes.c_void_p()
+        if not advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            ctypes.c_wchar_p(sddl), 1, ctypes.byref(sd), None,
+        ):
+            return
+        try:
+            present = ctypes.c_int(0)
+            defaulted = ctypes.c_int(0)
+            dacl = ctypes.c_void_p()
+            if not advapi.GetSecurityDescriptorDacl(
+                sd, ctypes.byref(present), ctypes.byref(dacl),
+                ctypes.byref(defaulted),
+            ):
+                return
+            SE_REGISTRY_KEY = 4
+            DACL_INFO = 0x00000004 | 0x80000000  # DACL + PROTECTED_DACL
+            advapi.SetNamedSecurityInfoW(
+                ctypes.c_wchar_p(rf"MACHINE\{REG_PATH}"),
+                SE_REGISTRY_KEY, ctypes.c_ulong(DACL_INFO),
+                None, None, dacl, None,
+            )
+        finally:
+            kernel32.LocalFree(sd)
+    except Exception:
+        pass  # best-effort — Installation darf daran nicht scheitern
+
+
 def step_save_config(proxy_url: str, token: str):
     with winreg.CreateKeyEx(
         winreg.HKEY_LOCAL_MACHINE, REG_PATH, access=winreg.KEY_SET_VALUE
     ) as k:
         winreg.SetValueEx(k, "ProxyUrl",     0, winreg.REG_SZ, proxy_url)
         winreg.SetValueEx(k, "MachineToken", 0, winreg.REG_SZ, token)
+    _harden_config_key_acl()
 
     with winreg.OpenKey(
         winreg.HKEY_LOCAL_MACHINE,
