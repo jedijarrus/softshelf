@@ -43,7 +43,37 @@ def _running_in_session_0() -> bool:
         return False
 
 
+# Handle modulglobal halten — sonst raeumt der GC den Mutex weg
+_instance_mutex = None
+
+
+def _another_instance_running() -> bool:
+    """Single-Instance-Guard via benannten Mutex (pro Session).
+
+    Ohne den liefen bei Doppelstart (Autostart + manueller Klick) zwei
+    Tray-Icons mit zwei Health-Threads parallel. 'Local\\' = Session-
+    Namespace: bei RDP/Multi-User darf jede Session ihren eigenen Tray haben.
+    """
+    global _instance_mutex
+    try:
+        try:
+            from _build_config import PRODUCT_SLUG as _slug
+        except Exception:
+            _slug = "Softshelf"
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        _instance_mutex = kernel32.CreateMutexW(
+            None, False, f"Local\\{_slug}TrayInstance",
+        )
+        ERROR_ALREADY_EXISTS = 183
+        return ctypes.get_last_error() == ERROR_ALREADY_EXISTS
+    except Exception:
+        return False
+
+
 def main():
+    if _another_instance_running():
+        sys.exit(0)
     if _running_in_session_0():
         try:
             try:
@@ -73,13 +103,24 @@ def main():
 
     api = KioskApiClient(config)
 
-    # Client-Titel vom Proxy holen (Runtime-Setting).
-    meta = api.get_client_config()
-    app_name = meta.get("app_name") or config.app_name
-
-    # Tray starten (eigener Thread via run_detached)
-    tray = KioskTray(api, app_name=app_name)
+    # Tray SOFORT mit dem lokalen Default starten — der Client-Titel vom
+    # Proxy (Runtime-Setting) kommt async nach. Vorher blockierte der
+    # HTTP-Call (timeout 3s + Retry ≈ 8s bei Server-down) den Tray-Start
+    # bei jedem Login.
+    tray = KioskTray(api, app_name=config.app_name)
     tray.start()
+
+    def _late_client_meta():
+        try:
+            meta = api.get_client_config()
+            name = meta.get("app_name")
+            if name:
+                tray.update_app_name(name)
+        except Exception:
+            pass
+    threading.Thread(
+        target=_late_client_meta, daemon=True, name="KioskClientMeta",
+    ).start()
 
     # pywebview braucht mindestens ein Fenster vor start().
     # Erstelle ein verstecktes Dummy-Fenster das offen bleibt solange die App laeuft.
