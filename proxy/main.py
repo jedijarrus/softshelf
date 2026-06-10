@@ -145,15 +145,19 @@ async def _action_log_cleanup_job():
             logger.info("Script cleanup: %d stale files removed", len(stale))
     except Exception as e:
         logger.warning("Script cleanup failed: %s", e)
-    # Stuck entries: pending/running laenger als 4 Stunden → error
+    # Stuck entries: pending/running laenger als 4 Stunden → error.
+    # Workflow-Eintraege ausnehmen: Reboot-Steps stehen designbedingt
+    # stundenlang auf running (Deadline = force_after_hours, Callback kommt
+    # erst nach dem Reboot) — die raeumt check_timeouts/recover_after_restart.
     try:
         async with database._db() as db:
             res = await db.execute(
                 "UPDATE action_log SET status = 'error', "
-                "error_summary = 'Keine Rueckmeldung vom Agent (Timeout nach 30min)', "
+                "error_summary = 'Keine Rueckmeldung vom Agent (Timeout nach 4h)', "
                 "completed_at = datetime('now') "
                 "WHERE status IN ('pending', 'running') "
-                "AND created_at < datetime('now', '-30 minutes')"
+                "AND workflow_run_id IS NULL "
+                "AND created_at < datetime('now', '-4 hours')"
             )
             if res.rowcount:
                 logger.info("action_log stuck cleanup: %d Eintraege als error markiert", res.rowcount)
@@ -485,13 +489,18 @@ async def _queued_actions_tick():
                 # Race: anderer Tick / manueller Cancel hat den Eintrag schon angefasst
                 continue
             try:
+                # allow_duplicate: der Dedup-Check wuerde sonst den soeben
+                # promoteten Eintrag SELBST finden (pending < 30min) und mit
+                # 409 abbrechen. Dedup ist durch den queued-Eintrag erledigt.
                 if entry["action"] == "uninstall":
                     await dispatch_uninstall_for_agent(
                         agent_id, entry["hostname"], pkg, existing_log_id=entry["id"],
+                        allow_duplicate=True,
                     )
                 else:
                     await dispatch_install_for_agent(
                         agent_id, entry["hostname"], pkg, existing_log_id=entry["id"],
+                        allow_duplicate=True,
                     )
                 logger.info(
                     "queue-tick: dispatched action_log %s (%s %s) agent=%s",
