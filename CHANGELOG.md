@@ -7,6 +7,78 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.7.0] – 2026-06-10
+
+Hardening-Release: Komplett-Review ueber Code, Logik, Security und Performance —
+2 kritische, 8 hohe und 18 mittlere Findings behoben. Keine neuen Features,
+dafuer deutlich robusteres State-Handling, dichtere Zugriffskontrolle und
+spuerbar schnelleres Admin-UI.
+
+### Fixed
+
+- **Installation-Tracking** haengt am final berechneten Status statt am rohen
+  success-Flag — fehlgeschlagene Installs registrierten sich vorher als
+  "installiert" und blockierten Profile-Auto-Update/Compliance dauerhaft;
+  False-Success-Uninstalls loeschten Tracking trotz vorhandener Software.
+- **Offline-Queue**: der Queue-Tick deduplizierte gegen den soeben promoteten
+  Eintrag selbst (409) — queued Aktionen endeten als error statt zu laufen.
+- **Workflow-Zuverlaessigkeit**: taeglicher Stuck-Cleanup killt keine
+  laufenden Workflow-Steps mehr (Reboot-Steps stehen designbedingt stundenlang
+  auf running); choco-Auto-Retry setzt jetzt retry_scheduled; Retry-Zaehler
+  inkrementiert per Compare-and-Swap (parallele Error-Callbacks beerdigten
+  sonst den laufenden Retry); Delivery-Fehler werten sofort die
+  on_failure-Policy aus statt bis zum Step-Timeout zu warten; Script-Steps
+  transportieren User-Code Base64-codiert (Heredoc brach an `'@`-Zeilen).
+- **Reboot-Verschieben** verschiebt jetzt wirklich: step_deadline_at wandert
+  mit, max_deferrals wird serverseitig durchgesetzt.
+- **Rollouts**: Phase-Dispatch nutzt dasselbe Outdated-Praedikat wie der
+  Auto-Start (keine endlosen leeren Rollouts bei per-user-Installs mehr) und
+  pinnt die eingefrorene target_version — alle Ringe bekommen dieselbe
+  Version; harte Fehler erzeugen jetzt Fleet-Error-Banner, damit das
+  Auto-Advance-Fehler-Gate sie sieht.
+- **Versionsvergleich** in _is_package_satisfied via versions_equivalent statt
+  String-Gleichheit (nightly Re-Install-Schleifen bei Locale-Suffixen).
+- **Kiosk-Paritaet**: custom-Pakete respektieren run_as_user auch aus dem
+  Tray, winget-Uninstall nutzt den hinterlegten Override, Agent-Detail-
+  Uninstall behandelt msstore-IDs korrekt.
+- **Admin-UI**: Stale-Response-Guards (Agent-Detail-Wechsel, Suchen, Filter),
+  api()-Fehlerpfad las den Body doppelt (TypeError statt Toast bei
+  502-HTML), Build-Poll uebersteht transiente Fehler, native confirm()
+  durch Modals ersetzt, tote Funktionen entfernt.
+
+### Security
+
+- **Secrets nur fuer Admin-Browser-Sessions**: der Reveal-Endpoint und das
+  Registration-Secret in der Hilfe waren ueber den pauschalen GET-Freibrief
+  auch fuer viewer-Rollen und read-scope-API-Tokens lesbar — ein geleaktes
+  Read-Token war damit voller Tactical-SYSTEM-Zugriff.
+- **Machine-Token-Haertung**: health/reboot-now/defer pruefen jetzt Ban und
+  token_version (gesperrte Geraete behielten sonst Teilzugriff); Rate-Limiter
+  nimmt das letzte statt erste X-Forwarded-For-Element (Spoofing hebelte das
+  Login-Brute-Force-Limit aus).
+- **Client**: HKLM-Config-Key bekommt eine restriktive DACL (vorher konnte
+  jeder lokale Prozess das MachineToken lesen); Prozess-Dialog escaped
+  Server-Daten; Single-Instance-Mutex.
+- **Builder-Auth**: POST /build und /selftest verlangen einen aus SECRET_KEY
+  abgeleiteten Shared-Secret-Header — Docker-Netz-Isolation war vorher die
+  einzige Huerde; fail-closed ohne Secret.
+- **Deploy-Integritaet**: deploy_via_trmm.ps1 verifiziert die Setup-EXE per
+  SHA256 (Parameter oder Proxy-API) bevor sie als SYSTEM laeuft, Download in
+  zufaelliges Temp-Unterverzeichnis.
+
+### Changed
+
+- **Performance**: Distributions-Endpoint mit 4 Bulk-Queries statt 150+
+  Einzel-Connections; NOCASE-Indizes auf den Scan-State-Tabellen (vorher
+  Full-Scans); winget-Catalog-Lookups mit Index-Fast-Path; Compliance-Tab
+  parallelisiert (vorher 6-15s seriell); MSIX-Extract und On-Demand-ZIP
+  blockieren den Event-Loop nicht mehr; shared HTTP-Connection-Pools fuer
+  Tactical (Proxy) und Proxy (Tray); PRAGMA synchronous=NORMAL.
+- **Tray-Start** erscheint sofort: Branding-Icon und App-Name laden im
+  Hintergrund nach; Paketfenster rendert die letzte bekannte Liste instant
+  und aktualisiert im Hintergrund (stale-while-revalidate).
+
+
 ## [2.6.0] – 2026-05-27
 
 Kiosk-Workflows: End-User koennen freigegebene Workflows aus dem Tray-Kiosk
