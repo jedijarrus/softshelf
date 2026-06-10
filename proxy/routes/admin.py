@@ -273,6 +273,20 @@ async def _require_admin(request: Request) -> dict:
     return user
 
 
+def _is_admin_browser_session(request: Request, user: dict) -> bool:
+    """True wenn admin-Rolle UND Browser-Session (kein API-Token).
+
+    Fuer Endpoints die Klartext-Secrets liefern: der pauschale GET-Freibrief
+    in _require_admin gilt dort nicht — viewer-Rollen und read-scope-Tokens
+    duerfen keine Secrets sehen (ein geleaktes read-Token waere sonst voller
+    Tactical-SYSTEM-Zugriff).
+    """
+    return (
+        (user.get("role") or "admin") == "admin"
+        and getattr(request.state, "api_token_id", None) is None
+    )
+
+
 async def _portal_title_html() -> str:
     """
     Liest den admin_portal_title aus den Runtime-Settings und HTML-escaped ihn.
@@ -297,9 +311,8 @@ async def admin_page(request: Request):
     return HTMLResponse(page)
 
 
-@router.get("/admin/api/help", response_class=HTMLResponse,
-            dependencies=[Depends(_require_admin)])
-async def admin_help():
+@router.get("/admin/api/help", response_class=HTMLResponse)
+async def admin_help(request: Request, user: dict = Depends(_require_admin)):
     """HTML-Fragment mit der Admin-Dokumentation. Wird vom Hilfe-Tab lazy geladen.
 
     Ersetzt {{SF_*}}-Platzhalter durch die aktuellen Runtime-Werte (Proxy-URL,
@@ -312,7 +325,12 @@ async def admin_help():
         page = f.read()
 
     proxy_url = (await runtime_value("proxy_public_url") or "").rstrip("/")
-    secret    = await runtime_value("registration_secret") or ""
+    # Secret nur fuer Admin-Browser-Sessions einbetten — viewer-Rollen und
+    # API-Tokens bekommen die Hilfe mit maskiertem Platzhalter.
+    if _is_admin_browser_session(request, user):
+        secret = await runtime_value("registration_secret") or ""
+    else:
+        secret = "<nur fuer Admins sichtbar>"
     slug      = await runtime_value("product_slug") or "Softshelf"
     brand     = await runtime_value("admin_portal_title") or "Softshelf"
     setup_url = f"{proxy_url}/download/{slug}-setup.exe" if proxy_url else ""
@@ -5674,12 +5692,18 @@ async def rotate_registration_secret():
     return {"ok": True, "new_secret": new_secret}
 
 
-@router.get("/admin/api/settings/{key}/reveal", dependencies=[Depends(_require_admin)])
-async def reveal_setting(key: str):
+@router.get("/admin/api/settings/{key}/reveal")
+async def reveal_setting(key: str, request: Request, user: dict = Depends(_require_admin)):
     """
     Gibt den echten Wert eines Secret-Settings zurueck (fuer den Anzeigen-Button
     im Admin-UI). Non-secrets werden über den normalen GET /settings geliefert.
+    Nur Admin-Browser-Session — kein viewer, kein API-Token (auch kein full-scope).
     """
+    if not _is_admin_browser_session(request, user):
+        raise HTTPException(
+            status_code=403,
+            detail="Secrets sind nur fuer Admins per Browser-Session sichtbar.",
+        )
     if key not in RUNTIME_KEYS:
         raise HTTPException(status_code=404, detail="Unbekannter Key")
     meta = RUNTIME_KEYS[key]

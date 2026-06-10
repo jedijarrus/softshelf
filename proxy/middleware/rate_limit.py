@@ -93,13 +93,20 @@ _request_counter = 0
 
 
 def _client_ip(request: Request) -> str:
-    """Echte Client-IP ermitteln. Trust X-Forwarded-For nur von loopback."""
+    """Echte Client-IP ermitteln. Trust X-Forwarded-For nur von Trusted-Proxies.
+
+    Wichtig: das LETZTE XFF-Element nehmen, nicht das erste. Front-Proxies
+    (HAProxy option forwardfor, Caddy) HAENGEN die echte Client-IP an einen
+    ggf. mitgeschickten XFF-Header AN — das linkeste Element ist damit
+    angreiferkontrolliert und wuerde das Login-Rate-Limit aushebeln
+    (pro Request neue Fake-IP = neuer Bucket). Bei genau einem Trusted-Hop
+    ist das rechteste Element die vom Proxy gesehene echte Peer-IP.
+    """
     peer = request.client.host if request.client else "unknown"
     if peer in _TRUSTED_PROXIES:
         xff = request.headers.get("x-forwarded-for", "")
         if xff:
-            # Erstes Element ist der ursprüngliche Client
-            return xff.split(",")[0].strip() or peer
+            return xff.split(",")[-1].strip() or peer
     return peer
 
 
