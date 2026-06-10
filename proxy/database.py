@@ -23,10 +23,18 @@ _JSON_LEGACY = os.path.join(os.path.dirname(__file__), "packages.json")
 
 @asynccontextmanager
 async def _db():
-    """aiosqlite-Connection mit aktivierten Foreign Keys."""
+    """aiosqlite-Connection mit aktivierten Foreign Keys.
+
+    synchronous=NORMAL: WAL-Mode ist persistent gesetzt (init_db), aber
+    synchronous ist ein Per-Connection-Pragma. Default FULL fsynct jeden
+    Commit — bei Health-Poll-Writes alle paar Sekunden unnoetig teuer.
+    NORMAL ist die fuer WAL empfohlene Stufe (kein Datenverlust bei
+    App-Crash, nur bei OS/Power-Crash maximal die letzte Transaktion).
+    """
     async with aiosqlite.connect(DB_PATH) as conn:
         await conn.execute("PRAGMA foreign_keys = ON")
         await conn.execute("PRAGMA busy_timeout = 15000")
+        await conn.execute("PRAGMA synchronous = NORMAL")
         yield conn
 
 
@@ -234,6 +242,12 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_agent_winget_avail ON agent_winget_state(available_version) WHERE available_version IS NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_agent_choco_name   ON agent_choco_state(choco_name);
             CREATE INDEX IF NOT EXISTS idx_agent_choco_avail  ON agent_choco_state(available_version) WHERE available_version IS NOT NULL;
+            -- NOCASE-Varianten: die Lookup-Queries vergleichen mit
+            -- "= ? COLLATE NOCASE" (case-insensitive choco/winget-Namen,
+            -- v2.6.x) — die BINARY-Indizes oben greifen dafuer NICHT,
+            -- jede Query war ein Full-Scan ueber die State-Tabelle.
+            CREATE INDEX IF NOT EXISTS idx_agent_winget_id_nc  ON agent_winget_state(winget_id COLLATE NOCASE);
+            CREATE INDEX IF NOT EXISTS idx_agent_choco_name_nc ON agent_choco_state(choco_name COLLATE NOCASE);
             CREATE INDEX IF NOT EXISTS idx_audit_log_ts       ON audit_log(ts);
             CREATE INDEX IF NOT EXISTS idx_build_log_ts      ON build_log(started_at DESC);
             CREATE INDEX IF NOT EXISTS idx_admin_sessions_user ON admin_sessions(user_id);
@@ -346,6 +360,10 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_action_log_status "
             "ON action_log(status)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_action_log_pkg "
+            "ON action_log(package_name, agent_id, id)"
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_action_log_created "
@@ -1349,6 +1367,104 @@ async def get_outdated_agents_for_package(package_name: str) -> list[dict]:
             (package_name,),
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_agent_installation_summaries() -> dict[str, dict]:
+    """Bulk-Variante von get_agent_installation_summary fuer die
+    Distributions-Liste: EINE Query statt eine pro custom/plugin-Paket.
+    Map package_name → {total, current, outdated, unknown}."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT i.package_name, "
+            "COUNT(*) AS total, "
+            "SUM(CASE "
+            "      WHEN p.type = 'plugin' THEN "
+            "        (CASE WHEN i.installed_sha IS NULL THEN 1 ELSE 0 END) "
+            "      ELSE "
+            "        (CASE WHEN i.version_id IS NULL THEN 1 ELSE 0 END) "
+            "    END) AS unknown, "
+            "SUM(CASE "
+            "      WHEN p.type = 'plugin' THEN "
+            "        (CASE WHEN i.installed_sha IS NOT NULL "
+            "                   AND p.sha256 IS NOT NULL "
+            "                   AND i.installed_sha = p.sha256 "
+            "              THEN 1 ELSE 0 END) "
+            "      ELSE "
+            "        (CASE WHEN i.version_id IS NOT NULL "
+            "                   AND i.version_id = p.current_version_id "
+            "              THEN 1 ELSE 0 END) "
+            "    END) AS current, "
+            "SUM(CASE "
+            "      WHEN p.type = 'plugin' THEN "
+            "        (CASE WHEN i.installed_sha IS NOT NULL "
+            "                   AND p.sha256 IS NOT NULL "
+            "                   AND i.installed_sha != p.sha256 "
+            "              THEN 1 ELSE 0 END) "
+            "      ELSE "
+            "        (CASE WHEN i.version_id IS NOT NULL "
+            "                   AND p.current_version_id IS NOT NULL "
+            "                   AND i.version_id != p.current_version_id "
+            "              THEN 1 ELSE 0 END) "
+            "    END) AS outdated "
+            "FROM agent_installations i "
+            "JOIN packages p ON p.name = i.package_name "
+            "GROUP BY i.package_name",
+        ) as cur:
+            return {
+                r["package_name"]: {
+                    "total": r["total"] or 0,
+                    "current": r["current"] or 0,
+                    "outdated": r["outdated"] or 0,
+                    "unknown": r["unknown"] or 0,
+                }
+                for r in await cur.fetchall()
+            }
+
+
+async def get_all_winget_state_versions() -> dict[str, list[dict]]:
+    """Alle agent_winget_state-Zeilen als Map lower(winget_id) → Zeilen.
+    Bulk-Quelle fuer die Distributions-Zaehler (eine Query statt N)."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT winget_id, installed_version, available_version "
+            "FROM agent_winget_state"
+        ) as cur:
+            out: dict[str, list[dict]] = {}
+            for r in await cur.fetchall():
+                out.setdefault((r["winget_id"] or "").lower(), []).append(dict(r))
+            return out
+
+
+async def get_all_choco_state_versions() -> dict[str, list[dict]]:
+    """Analog get_all_winget_state_versions fuer agent_choco_state."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT choco_name, installed_version, available_version "
+            "FROM agent_choco_state"
+        ) as cur:
+            out: dict[str, list[dict]] = {}
+            for r in await cur.fetchall():
+                out.setdefault((r["choco_name"] or "").lower(), []).append(dict(r))
+            return out
+
+
+async def get_version_labels(version_ids: list[int]) -> dict[int, str]:
+    """Map version_id → version_label fuer eine Liste von IDs (eine Query)."""
+    ids = [v for v in version_ids if v]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT id, version_label FROM package_versions "
+            f"WHERE id IN ({placeholders})",
+            ids,
+        ) as cur:
+            return {r["id"]: r["version_label"] for r in await cur.fetchall()}
 
 
 async def get_agent_installation_summary(package_name: str) -> dict:
