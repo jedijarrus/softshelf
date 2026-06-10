@@ -8017,16 +8017,6 @@ function removePackageFromProfileEditor(pkgName) {
   renderProfilePicker();
 }
 
-function moveProfileEditorPkg(pkgName, dir) {
-  const idx = _profileEditorPackages.findIndex(p => p.package_name === pkgName);
-  if (idx < 0) return;
-  const newIdx = idx + dir;
-  if (newIdx < 0 || newIdx >= _profileEditorPackages.length) return;
-  const tmp = _profileEditorPackages[idx];
-  _profileEditorPackages[idx] = _profileEditorPackages[newIdx];
-  _profileEditorPackages[newIdx] = tmp;
-  renderProfileEditorPackages();
-}
 
 // Drag & Drop fuer Profil-Paket-Reihenfolge
 let _pfDragIdx = -1;
@@ -8695,7 +8685,7 @@ function renderPackages() {
       <div class="pkg-row pkg-data" data-pkg="${esc(pkg.name)}">
         <div class="pc-type"><span class="pkg-type-pill ${typeClass}">${typeLabel}</span></div>
         <div class="pc-name">
-          <input class="pkg-name-inline" value="${esc(pkg.display_name)}" onchange="renamePkg('${esc(pkg.name)}', this.value)" title="Name bearbeiten (Enter zum Speichern)">
+          <input class="pkg-name-inline" value="${esc(pkg.display_name)}" onchange="renamePkg(${jsStr(pkg.name)}, this.value)" title="Name bearbeiten (Enter zum Speichern)">
           <div class="pkg-sub">${subText}</div>
         </div>
         <div class="pc-cat">
@@ -9049,19 +9039,6 @@ async function ackAgentErrorFromDetail(btn) {
   }
 }
 
-async function ackAgentError(agentId, btn) {
-  btn.disabled = true;
-  const orig = btn.innerHTML;
-  btn.innerHTML = '…';
-  try {
-    await api('POST', `/admin/api/agents/${encodeURIComponent(agentId)}/ack-error`);
-    toast('Fehler bestätigt');
-    loadFleetErrors();
-  } catch (e) {
-    btn.disabled = false;
-    btn.innerHTML = orig;
-  }
-}
 
 function renderFleetErrors(errors) {
   const el = document.getElementById('main-errors');
@@ -9132,9 +9109,6 @@ async function retryErrorRow(logId, agentId, pkgName, action, btn) {
 }
 
 // Backward-compat fuer alten Code-Pfad
-function retryErrorFromList(agentId, pkgName, action, btn) {
-  return retryErrorRow(null, agentId, pkgName, action, btn);
-}
 
 // ── Compliance ──────────────────────────────────────────────────────────────
 async function loadCompliance() {
@@ -11128,19 +11102,27 @@ async function saveContents() {
   if (_contentsState.removed.size === 0 && _contentsState.staged.length === 0) return;
 
   // Sanity-check: würde der Entry-Point gelöscht und nichts ersetzt es?
+  // Modal statt confirm() (Projekt-Regel: kein natives prompt/confirm).
   if (_contentsState.removed.has(_contentsState.entry_point)) {
     const stagedNames = _contentsState.staged.map(f =>
       ((document.getElementById('contents-add-prefix').value.trim().replace(/^\/|\/$/g, '')) + '/' + f.name).replace(/^\//, '')
     );
     if (!stagedNames.some(n => n === _contentsState.entry_point)) {
-      const ok = confirm(
+      showConfirm(
+        'Entry-Point wird gelöscht',
         'Du löschst die aktuelle Entry-Point-Datei. Der Server wird automatisch eine andere ' +
-        'aus den verbleibenden .exe/.msi/.bat wählen. OK?'
+        'aus den verbleibenden .exe/.msi/.bat wählen. Fortfahren?',
+        () => { _saveContentsCommit(); },
+        'Fortfahren', 'btn-danger'
       );
-      if (!ok) return;
+      return;
     }
   }
+  await _saveContentsCommit();
+}
 
+async function _saveContentsCommit() {
+  if (!_contentsState) return;
   const fd = new FormData();
   for (const f of _contentsState.staged) {
     fd.append('files', f, f.name);
@@ -11622,7 +11604,9 @@ function _onDistFilterInput() {
   }, 220);  // debounce für Server-Filter
 }
 
+let _distLoadSeq = 0;
 async function loadDistributions() {
+  const seq = ++_distLoadSeq;
   const btn = document.getElementById('distribution-refresh-btn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Lädt';
@@ -11644,16 +11628,20 @@ async function loadDistributions() {
       offset: distState.offset, limit: distState.limit,
     });
     const r = await api('GET', '/admin/api/distributions?' + params.toString());
+    if (seq !== _distLoadSeq) return;
     distState.items = r.items || [];
     distState.total = r.total || 0;
     document.getElementById('distribution-ts').innerHTML = `${distState.total} Pakete · <b>${nowStamp()}</b>`;
     renderDistTable();
     updateBulkBar();
   } catch (e) {
+    if (seq !== _distLoadSeq) return;
     body.innerHTML = `<div class="empty"><h3>Fehler beim Laden</h3><p>${esc(e.message)}</p></div>`;
   } finally {
-    btn.disabled = false; btn.innerHTML = 'Aktualisieren';
-    distState.loading = false;
+    if (seq === _distLoadSeq) {
+      btn.disabled = false; btn.innerHTML = 'Aktualisieren';
+      distState.loading = false;
+    }
   }
 }
 
@@ -11850,8 +11838,10 @@ function _onDistAgentFilterInput() {
   _distAgentsFilterTimer = setTimeout(loadDistAgents, 180);
 }
 
+let _distAgentsSeq = 0;
 async function loadDistAgents() {
   if (!_distAgentsPkg) return;
+  const seq = ++_distAgentsSeq;
   const list = document.getElementById('dist-agents-list');
   list.innerHTML = '<div class="loading-block"><span class="spinner"></span><span class="loading-label">Lade</span></div>';
   const q = document.getElementById('dist-agents-filter').value || '';
@@ -11860,8 +11850,10 @@ async function loadDistAgents() {
   try {
     const r = await api('GET',
       `/admin/api/packages/${encodeURIComponent(_distAgentsPkg)}/agents?${params.toString()}`);
+    if (seq !== _distAgentsSeq) return;
     renderDistAgents(r);
   } catch (e) {
+    if (seq !== _distAgentsSeq) return;
     list.innerHTML = `<div class="panel-error">Fehler: ${esc(e.message)}</div>`;
   }
 }
@@ -11899,25 +11891,6 @@ function renderDistAgents(data) {
   }).join('');
 }
 
-function pushFromDistribution(pkgName) {
-  const p = cachedDistributions.find(x => x.name === pkgName);
-  if (!p) return;
-  const out = p.summary?.outdated || 0;
-  if (out === 0) return;
-  showConfirm(
-    'Update pushen',
-    `Auf ${out} Gerät${out===1?'':'en'} wird die aktuelle Version (${p.current_version_label || ''}) installiert. Reinstall — der Installer entscheidet wie er mit der existierenden Version umgeht.`,
-    async () => {
-      try {
-        const r = await api('POST',
-          `/admin/api/packages/${encodeURIComponent(pkgName)}/push-update`);
-        toast(`${r.dispatched} Installationen gestartet — kann einige Minuten dauern`);
-        setTimeout(loadDistributions, 3000);
-      } catch (e) {}
-    },
-    'Pushen', 'push-update-btn'
-  );
-}
 
 async function installOnAgent(agentId, pkgName, hostname, btnEl) {
   const orig = btnEl.innerHTML;
@@ -11963,15 +11936,6 @@ function uninstallOnAgent(agentId, pkgName, hostname, displayName, btnEl) {
 }
 
 // Tab-Wechsel zu Pakete + Edit-Panel öffnen
-async function openEditPanelByName(name) {
-  const tabBtn = document.querySelector('.tab[data-tab="packages"]');
-  if (tabBtn) switchTab('packages', tabBtn);
-  // init() läuft beim Tab-Wechsel; wir warten kurz und öffnen dann das Panel
-  setTimeout(() => {
-    if (store[name]) openEditPanel(name);
-    else toast('Paket nicht in Whitelist gefunden', true);
-  }, 250);
-}
 
 // ── Agents ───────────────────────────────────────────────────────────────────
 async function loadAgents() {
@@ -12329,9 +12293,14 @@ async function openAgentDetail(agentId, hostname) {
       api('GET', `/admin/api/agents/${encodeURIComponent(agentId)}/installs`).catch(() => []),
       api('GET', `/admin/api/agents/${encodeURIComponent(agentId)}/profiles`).catch(() => ({profiles: []})),
     ]);
+    // Stale-Guard: ist der Admin waehrend des (Tactical-behafteten) Loads
+    // schon auf einen anderen Agent gewechselt, NICHT mehr rendern — sonst
+    // zeigt Bs Detail-View As Software und die Action-Buttons feuern auf B.
+    if (!_currentAgent || _currentAgent.agent_id !== agentId) return;
     _currentAgent.profiles = profResp.profiles || [];
     renderAgentDetail(softwareData, log);
   } catch (e) {
+    if (!_currentAgent || _currentAgent.agent_id !== agentId) return;
     document.getElementById('agents-detail-body').innerHTML =
       `<div class="panel-error">Fehler: ${esc(e.message)}</div>`;
   }
@@ -12513,7 +12482,7 @@ function renderAgentDetail(softwareData, log) {
 
   const f = _agentSoftwareFilter.mode;
   const chip = (mode, label, count) =>
-    `<button class="sw-chip${f===mode?' active':''}" type="button" data-mode="${esc(mode)}" onclick="_setSoftwareFilterMode('${esc(mode)}')">${label} <span class="sw-chip-count">${count}</span></button>`;
+    `<button class="sw-chip${f===mode?' active':''}" type="button" data-mode="${esc(mode)}" onclick="_setSoftwareFilterMode(${jsStr(mode)})">${label} <span class="sw-chip-count">${count}</span></button>`;
 
   const filterBar = `
     <div class="sw-filter-bar">
@@ -12554,7 +12523,7 @@ function renderAgentDetail(softwareData, log) {
         ? `<div style="font-size:11px;color:var(--red);margin-top:2px">${esc(e.error_summary.substring(0, 120))}</div>`
         : '';
       return `${groupHeader}<div class="install-row${hidden}${e.status === 'error' ? ' al-error' : ''}"${hidden ? ' style="display:none"' : ''}${e.id ? ` onclick="alShowDetail(${e.id})" style="cursor:pointer${hidden ? ';display:none' : ''}"` : ''}>
-        <span class="install-badge ${e.action}">${{install:'Install',upgrade:'Upgrade',uninstall:'Uninstall',reboot:'Reboot',run:'Script'}[e.action] || e.action}</span>
+        <span class="install-badge ${esc(e.action)}">${{install:'Install',upgrade:'Upgrade',uninstall:'Uninstall',reboot:'Reboot',run:'Script'}[e.action] || esc(e.action)}</span>
         <div>
           <div class="install-pkg">${esc(e.display_name)}${statusBadge}</div>
           <div class="install-name">${esc(e.package_name)}${errHint}</div>
@@ -12792,14 +12761,20 @@ function _scanMetaFingerprint(scanMeta) {
   return a > b ? a : b;
 }
 
+let _agentSoftwarePollGen = 0;
 async function _pollUntilScanned(snapshotIso, displayName) {
   if (!_currentAgent) return;
   const a = _currentAgent;
   const startedAt = Date.now();
   const maxMs = 6 * 60 * 1000; // 6 Minuten Hartstop
   if (_agentSoftwarePollTimer) clearTimeout(_agentSoftwarePollTimer);
+  // Generation-Counter: clearTimeout verfehlt einen Loop der gerade in
+  // await api() haengt — zwei schnelle Installs liefen sonst als parallele
+  // Loops weiter (doppelte Polls + doppelte Toasts).
+  const gen = ++_agentSoftwarePollGen;
 
   async function tick() {
+    if (gen !== _agentSoftwarePollGen) return;
     if (!_currentAgent || _currentAgent.agent_id !== a.agent_id) return;
     if (Date.now() - startedAt > maxMs) {
       toast(`„${displayName}" — kein Status-Update nach 6 Minuten. Versuche „Neu scannen".`, true);
@@ -14236,11 +14211,19 @@ function onSearch(q) {
   searchTimer = setTimeout(() => doSearch(q), 280);
 }
 
+// Sequenz-Guard gegen Stale-Responses: eine langsame aeltere Antwort darf
+// eine schnellere neuere nicht ueberschreiben (Debounce verhindert nur
+// Request-Flut, keine Out-of-Order-Antworten).
+let _searchSeq = 0;
 async function doSearch(q) {
+  const seq = ++_searchSeq;
   try {
-    lastResults = await api('GET', `/admin/api/search?q=${encodeURIComponent(q)}`);
+    const res = await api('GET', `/admin/api/search?q=${encodeURIComponent(q)}`);
+    if (seq !== _searchSeq) return;
+    lastResults = res;
     renderSearchResults();
   } catch (e) {
+    if (seq !== _searchSeq) return;
     document.getElementById('search-results').innerHTML =
       `<div class="panel-error">Fehler: ${esc(e.message)}</div>`;
   }
@@ -14288,11 +14271,16 @@ function onWingetSearch(q) {
   wingetSearchTimer = setTimeout(() => doWingetSearch(q), 320);
 }
 
+let _wingetSearchSeq = 0;
 async function doWingetSearch(q) {
+  const seq = ++_wingetSearchSeq;
   try {
-    wingetLastResults = await api('GET', `/admin/api/winget/search?q=${encodeURIComponent(q)}`);
+    const res = await api('GET', `/admin/api/winget/search?q=${encodeURIComponent(q)}`);
+    if (seq !== _wingetSearchSeq) return;
+    wingetLastResults = res;
     renderWingetSearchResults();
   } catch (e) {
+    if (seq !== _wingetSearchSeq) return;
     document.getElementById('winget-search-results').innerHTML =
       `<div class="panel-error">Fehler: ${esc(e.message)}</div>`;
   }
@@ -14553,8 +14541,14 @@ async function api(method, path, body, options) {
   }
   if (!r.ok) {
     let detail = '';
+    // Body genau EINMAL lesen (als Text), dann JSON.parse versuchen.
+    // r.json() im try + r.text() im catch wirft "body stream already read"
+    // bei jeder Nicht-JSON-Fehlerantwort (z.B. 502-HTML vom Front-Proxy)
+    // — der Toast wurde nie erreicht, der Caller bekam einen TypeError.
+    let rawBody = '';
+    try { rawBody = await r.text(); } catch { rawBody = ''; }
     try {
-      const errBody = await r.json();
+      const errBody = JSON.parse(rawBody);
       const d = errBody.detail;
       if (Array.isArray(d)) {
         // Pydantic v2 validation errors: list of {loc, msg, type, input?}
@@ -14567,7 +14561,7 @@ async function api(method, path, body, options) {
       } else {
         detail = d || '';
       }
-    } catch { detail = await r.text(); }
+    } catch { detail = rawBody.slice(0, 300); }
     const msg = detail || `HTTP ${r.status}`;
     toast(msg, true);
     const err = new Error(msg);
@@ -14744,14 +14738,14 @@ async function doChangePassword() {
     if (!r.ok) {
       let detail = '';
       try { detail = (await r.json()).detail || ''; } catch {}
-      _showPwError(detail || `Fehler (HTTP ${r.status})`);
+      _showPwError(esc(detail) || `Fehler (HTTP ${r.status})`);
       return;
     }
     closePasswordModal();
     toast('Passwort geändert. Du wirst abgemeldet …');
     setTimeout(doLogout, 1500);
   } catch (e) {
-    _showPwError('Netzwerkfehler: ' + e.message);
+    _showPwError('Netzwerkfehler: ' + esc(e.message));
   } finally {
     btn.disabled = false;
     btn.textContent = 'Passwort ändern';
@@ -15477,17 +15471,23 @@ async function toggleReveal(btn) {
   }
 }
 
-async function rotateRegSecret() {
-  if (!confirm('Wirklich ein neues Registration-Secret generieren? Das alte wird sofort ungültig.')) return;
-  try {
-    const r = await api('POST', '/admin/api/settings/rotate-registration-secret', {});
-    toast('Neues Registration-Secret erzeugt');
-    const input = document.querySelector(`.setting-field input[data-key="registration_secret"]`);
-    if (input) {
-      input.type = 'text';
-      input.value = r.new_secret;
-    }
-  } catch (e) {}
+function rotateRegSecret() {
+  showConfirm(
+    'Registration-Secret rotieren',
+    'Wirklich ein neues Registration-Secret generieren? Das alte wird sofort ungültig.',
+    async () => {
+      try {
+        const r = await api('POST', '/admin/api/settings/rotate-registration-secret', {});
+        toast('Neues Registration-Secret erzeugt');
+        const input = document.querySelector(`.setting-field input[data-key="registration_secret"]`);
+        if (input) {
+          input.type = 'text';
+          input.value = r.new_secret;
+        }
+      } catch (e) {}
+    },
+    'Generieren', 'btn-danger'
+  );
 }
 
 async function saveSettings() {
@@ -15776,12 +15776,16 @@ async function triggerBuild() {
     const body = override ? { version_override: override } : {};
     const r = await api('POST', '/admin/api/build', body, {timeoutMs: 600000});
     toast('Build gestartet (dauert ~1-2 min)');
-    // Poll build-status alle 5s
+    // Poll build-status alle 5s. Transiente Fehler (Netz-Blip, Proxy-
+    // Rebuild — passiert beim Build-Workflow real) NICHT sofort abbrechen,
+    // sonst bleibt der Button bis zum Reload im Lade-Zustand haengen.
     let attempts = 0;
+    let pollErrors = 0;
     const pollId = setInterval(async () => {
       attempts++;
       try {
         const detail = await api('GET', `/admin/api/build/${r.build_id}`);
+        pollErrors = 0;
         if (detail.status !== 'running' || attempts > 60) {
           clearInterval(pollId);
           btn.disabled = false;
@@ -15789,7 +15793,15 @@ async function triggerBuild() {
           loadBuildStatus();
           toast(detail.status === 'success' ? 'Build erfolgreich' : 'Build fehlgeschlagen', detail.status !== 'success');
         }
-      } catch { clearInterval(pollId); }
+      } catch {
+        pollErrors++;
+        if (pollErrors >= 4 || attempts > 60) {
+          clearInterval(pollId);
+          btn.disabled = false;
+          btn.textContent = 'EXEs bauen';
+          toast('Build-Status nicht abrufbar — bitte Seite neu laden', true);
+        }
+      }
     }, 5000);
   } catch (e) {
     btn.disabled = false;
@@ -15919,11 +15931,14 @@ async function loadActionLog(reset) {
   if (ag) params.set('q', ag);
   params.set('limit', AL_PAGE_SIZE);
   params.set('offset', alPage * AL_PAGE_SIZE);
+  const seq = ++_alLoadSeq;
   try {
     const data = await api('GET', '/admin/api/action-log?' + params);
+    if (seq !== _alLoadSeq) return;
     renderActionLog(data);
   } catch (e) { /* api() already toasts */ }
 }
+let _alLoadSeq = 0;
 
 function renderActionLog(entries) {
   const el = document.getElementById('action-log-list');
@@ -16054,35 +16069,6 @@ async function alDeleteAllErrors() {
 
 /* ── Install-Polling (ersetzt den simplen 3s-setTimeout) ── */
 
-async function pollActionResult(logId, displayName) {
-  let polls = 0;
-  const maxPolls = 100;
-  const toastEl = _createPersistentToast(`Installation von ${displayName} laeuft...`);
-
-  const iv = setInterval(async () => {
-    polls++;
-    if (polls > maxPolls) {
-      clearInterval(iv);
-      _updatePersistentToast(toastEl, `Keine Rueckmeldung fuer ${displayName} nach 5 Minuten`, true);
-      return;
-    }
-    try {
-      const e = await api('GET', '/admin/api/action-log/' + logId);
-      if (e.status === 'success') {
-        clearInterval(iv);
-        const dur = _alDuration(e.created_at, e.completed_at);
-        _updatePersistentToast(toastEl,
-          `${esc(e.display_name)} erfolgreich` + (dur ? ` (${dur})` : ''),
-          false);
-      } else if (e.status === 'error') {
-        clearInterval(iv);
-        _updatePersistentToast(toastEl,
-          `${esc(e.display_name)} fehlgeschlagen: ${esc(e.error_summary || 'Unbekannter Fehler')}`,
-          true);
-      }
-    } catch { /* weiter pollen */ }
-  }, 3000);
-}
 
 // ── Workflows ───────────────────────────────────────────────────────────
 let _workflows = [];
@@ -16788,31 +16774,7 @@ async function deleteWorkflowRun(runId) {
   } catch(e) {}
 }
 
-function _createPersistentToast(msg) {
-  let stack = document.getElementById('toast-stack');
-  if (!stack) {
-    stack = document.createElement('div');
-    stack.id = 'toast-stack';
-    document.body.appendChild(stack);
-  }
-  const el = document.createElement('div');
-  el.className = 'toast-item persistent show';
-  el.innerHTML = `<span class="toast-spinner"></span>${esc(msg)}`;
-  stack.appendChild(el);
-  return el;
-}
 
-function _updatePersistentToast(el, msg, isError) {
-  if (!el || !el.parentNode) { toast(msg, isError); return; }
-  el.classList.toggle('error', isError);
-  el.classList.remove('persistent');
-  el.innerHTML = msg;
-  setTimeout(() => {
-    el.classList.remove('show');
-    el.addEventListener('transitionend', () => el.remove(), {once: true});
-    setTimeout(() => el.remove(), 600);
-  }, 5000);
-}
 </script>
 </body>
 </html>
