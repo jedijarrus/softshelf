@@ -1984,17 +1984,24 @@ async def receive_callback(job_id: str, body: CallbackPayload):
         )
 
     # ── Error-Banner in scan_meta ──────────────────────────────────
+    # Auch harte Fehler (success=False, Exit-Code-Reklassifikation) muessen
+    # einen Banner erzeugen — sonst ist das Fehler-Gate vom Rollout-Auto-
+    # Advance blind und der Admin sieht nur Soft-Errors.
     try:
         await database.upsert_action_result(
             entry["agent_id"], entry["package_name"],
-            soft_err if status == "error" else None,
+            (soft_err or error_summary or "Aktion fehlgeschlagen")
+            if status == "error" else None,
             full_output=body.output or "(kein Output)", action=entry["action"],
         )
     except Exception as e:
         logger.warning("upsert_action_result in callback: %s", e)
 
     # ── Installation-Tracking ──────────────────────────────────────
-    if body.success is True and not soft_err:
+    # Am FINALEN status haengen, nicht an body.success: die Wrapper-Skripte
+    # werfen nie, harte Fehler kommen als success=True + non-zero ExitCode
+    # an und werden oben erst reklassifiziert.
+    if status == "success":
         if entry["action"] in ("install", "upgrade"):
             # current_version_id aus Paket holen damit Update-Tracking funktioniert
             # Plus: sha256 fuer Plugin-Update-Detection (kein package_versions
@@ -2018,6 +2025,12 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                 entry["agent_id"], entry["package_name"]
             )
 
+    # Wenn ein Retry dispatched wird (choco .install / winget per-user),
+    # soll der Workflow NICHT auf den ersten Fehler advancen — sonst wird
+    # der Run als failed markiert obwohl der Retry noch laeuft. Der Retry-
+    # Callback advanced dann selbst (haengt am gleichen workflow_run_id).
+    retry_scheduled = False
+
     # ── Choco .install Retry ───────────────────────────────────────
     if (status == "error"
         and pkg_type == "choco"
@@ -2040,12 +2053,9 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                 entry["display_name"], retry_cmd, "uninstall", "choco",
                 log_id=retry_lid,
             ))
+            retry_scheduled = True
 
     # ── Winget per-user Retry ──────────────────────────────────────
-    # Wenn der Retry dispatched wird, soll der Workflow NICHT auf den
-    # ersten Fehler advancen — sonst wird der Run als failed markiert
-    # obwohl der Retry noch laeuft. Wir tracken das mit retry_scheduled.
-    retry_scheduled = False
     if (status == "error"
         and pkg_type == "winget"
         and body.exit_code == _WINGET_NO_APPLICABLE_INSTALLER
@@ -2088,15 +2098,6 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                 logger.warning("winget per-user retry failed: %s", e)
                 await database.complete_action_log(retry_lid, "error", error_summary=str(e)[:300])
 
-    # ── Targeted Re-Scan ───────────────────────────────────────────
-    try:
-        if pkg_type == "winget":
-            await winget_scanner.scan_agent(entry["agent_id"])
-        elif pkg_type == "choco":
-            await choco_scanner.scan_agent(entry["agent_id"])
-    except Exception as e:
-        logger.warning("post-callback rescan failed for %s: %s", entry["agent_id"], e)
-
     # Script-File aufraumen
     script_path = _os.path.join(_SCRIPTS_DIR, f"{job_id}.ps1")
     try:
@@ -2111,10 +2112,10 @@ async def receive_callback(job_id: str, body: CallbackPayload):
     )
 
     # ── Workflow advancement ────────────────────────────────────────
-    # Wenn ein Retry dispatched wurde, NICHT advancen — sonst kippt der
-    # Run auf failed obwohl der Retry vermutlich gleich Erfolg meldet.
-    # Der Retry-Callback advanced dann selbst (sein action_log haengt am
-    # gleichen workflow_run_id).
+    # VOR dem Re-Scan: advance darf nicht hinter einem minutenlangen
+    # Tactical-Roundtrip haengen (Agent-POST hat nur 10s Timeout — wenn
+    # die Middleware den Request bei Client-Disconnect cancelt, ginge
+    # das advance sonst verloren).
     if entry.get("workflow_run_id") and not retry_scheduled:
         try:
             import workflow_engine
@@ -2124,7 +2125,23 @@ async def receive_callback(job_id: str, body: CallbackPayload):
         except Exception:
             logger.exception("workflow advance failed for run %s", entry.get("workflow_run_id"))
 
+    # ── Targeted Re-Scan (fire-and-forget) ─────────────────────────
+    # Nicht inline: blockiert sonst den Callback-Response bis zu 120s
+    # und frisst Slots des Tactical-Semaphors bei Bulk-Aktionen.
+    _spawn_bg(_post_callback_rescan(entry["agent_id"], pkg_type))
+
     return {"ok": True}
+
+
+async def _post_callback_rescan(agent_id: str, pkg_type: str):
+    """Targeted Re-Scan nach finalem Callback, laeuft als Background-Task."""
+    try:
+        if pkg_type == "winget":
+            await winget_scanner.scan_agent(agent_id)
+        elif pkg_type == "choco":
+            await choco_scanner.scan_agent(agent_id)
+    except Exception as e:
+        logger.warning("post-callback rescan failed for %s: %s", agent_id, e)
 
 
 @router.api_route("/script/{job_id}", methods=["GET", "HEAD"])
