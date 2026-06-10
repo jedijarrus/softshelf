@@ -247,9 +247,19 @@ async def advance(run_id: int, action_log_id: int | None, status: str):
         if retry_count < max_retries:
             new_state = dict(step_state)
             new_state["retry_count"] = retry_count + 1
-            await database.update_workflow_run(
-                run_id, step_state=json.dumps(new_state)
+            # CAS statt blindem Update: zwei parallele Error-Callbacks
+            # (Agent re-POSTet bei Timeout) wuerden sonst beide retry_count
+            # inkrementieren und beide dispatchen — der zweite Dispatch
+            # laeuft in den Dedup-409 und beerdigt den laufenden Retry.
+            swapped = await database.cas_workflow_step_state(
+                run_id, run.get("step_state"), json.dumps(new_state),
             )
+            if not swapped:
+                logger.info(
+                    "workflow run %d step %d: Retry bereits von parallelem "
+                    "Callback gezogen — ignoriert", run_id, idx,
+                )
+                return
             logger.info(
                 "workflow run %d step %d: Retry %d/%d",
                 run_id, idx, retry_count + 1, max_retries,
@@ -536,6 +546,16 @@ async def _dispatch_install_step(
             run_id, result.get("type"), package_name, result.get("action"),
         )
     except Exception as e:
+        # 409 = es laeuft bereits eine Aktion fuer dieses Paket auf dem Agent
+        # (z.B. ein noch laufender Retry) — das ist KEIN fataler Step-Fehler,
+        # der laufende Vorgang advanced den Run selbst per Callback.
+        from fastapi import HTTPException as _HTTPExc
+        if isinstance(e, _HTTPExc) and e.status_code == 409:
+            logger.info(
+                "workflow run %d install-step %r: Aktion laeuft bereits (409) "
+                "— kein Re-Dispatch, Run bleibt running", run_id, package_name,
+            )
+            return
         logger.exception(
             "workflow run %d install-step fuer %r fehlgeschlagen: %s",
             run_id, package_name, e,
@@ -557,12 +577,17 @@ async def _dispatch_script_step(
     # User-Code als temp .ps1 schreiben und via powershell.exe -File
     # ausfuehren. Damit beendet 'exit N' nur den inneren Prozess und
     # der aeussere (Callback-Wrapper) kann den exit code melden.
-    # Heredoc-Marker wird unique gemacht damit User-Code ihn nicht
-    # versehentlich enthaelt.
-    marker = f"__WF{run_id}END__"
+    # Base64-Transport statt Heredoc: ein @'…'@-Literal bricht, sobald der
+    # User-Code selbst eine Zeile hat die mit '@ beginnt (oder ein eigenes
+    # Here-String enthaelt) — der Rest liefe dann im Wrapper-Kontext.
+    import base64 as _b64
+    code_b64 = _b64.b64encode(raw_code.encode("utf-8")).decode("ascii")
     code = (
         f"$_wfTmp = [System.IO.Path]::Combine($env:TEMP, 'softshelf-wf-{run_id}.ps1')\n"
-        f"@'\n{raw_code}\n'@ | Set-Content -Path $_wfTmp -Encoding UTF8\n"
+        # UTF-8-BOM voranstellen: powershell.exe -File liest BOM-loses UTF-8
+        # als ANSI — Umlaute im User-Script waeren sonst kaputt.
+        f"[System.IO.File]::WriteAllBytes($_wfTmp, "
+        f"[byte[]](0xEF,0xBB,0xBF) + [Convert]::FromBase64String('{code_b64}'))\n"
         f"& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $_wfTmp 2>&1\n"
         f"$global:LASTEXITCODE = $LASTEXITCODE\n"
         f"Remove-Item $_wfTmp -Force -ErrorAction SilentlyContinue\n"
