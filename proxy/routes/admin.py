@@ -2069,22 +2069,16 @@ async def push_update(name: str, stage: str = "all"):
         if not outdated:
             return {"ok": True, "dispatched": 0, "message": "Keine outdated Agents in dieser Stage."}
 
-        current_vid = pkg.get("current_version_id")
+        # Ueber den Shared-Helper wie alle anderen Typen — der manuelle
+        # Dispatch hier hatte Dedup (has_pending_action), run_as_user und
+        # triggered_by umgangen: Doppelklick = Doppel-Install auf dem Agent.
         dispatched = 0
         failed: list[str] = []
         for ag in outdated:
             try:
-                inner_cmd = await _build_install_command(pkg, ag["agent_id"])
-                job_id = _generate_job_id()
-                cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-                log_id = await database.create_action_log(
-                    ag["agent_id"], ag["hostname"], name,
-                    pkg["display_name"], "custom", "install", job_id=job_id,
+                await dispatch_upgrade_for_agent(
+                    ag["agent_id"], ag.get("hostname") or "", pkg,
                 )
-                _spawn_bg(_deliver_command_bg(
-                    ag["agent_id"], ag["hostname"], name, pkg["display_name"],
-                    cmd, "install", "custom", log_id=log_id,
-                ))
                 dispatched += 1
             except Exception as e:
                 failed.append(f"{ag.get('hostname')}: {e}")
@@ -2335,8 +2329,19 @@ class StartRolloutBody(BaseModel):
         return v
 
 
-async def _dispatch_rollout_phase(pkg: dict, phase: int) -> dict:
-    """Dispatched die aktuelle Phase eines Rollouts an die passenden Agents."""
+async def _dispatch_rollout_phase(
+    pkg: dict, phase: int, target_version: str | None = None,
+) -> dict:
+    """Dispatched die aktuelle Phase eines Rollouts an die passenden Agents.
+
+    target_version = die beim Rollout-Start eingefrorene Version. Zwei Jobs:
+    1. Target-Auswahl mit demselben Praedikat wie der Auto-Start-Tick
+       (available_version ODER is_outdated gegen target) — sonst startet der
+       Tick Rollouts fuer Agents, die der Dispatch nie targeted (endlose
+       leere Rollouts bei per-user-Installs).
+    2. Als version_pin durchreichen — sonst installiert Phase 3 was auch
+       immer der Catalog GERADE als latest hat, nicht was Ring 1 bekam.
+    """
     from routes.install import dispatch_install_for_agent, dispatch_upgrade_for_agent
     stage = _PHASE_TO_STAGE.get(phase)
     if not stage:
@@ -2351,12 +2356,23 @@ async def _dispatch_rollout_phase(pkg: dict, phase: int) -> dict:
         raw = await database.get_agents_with_choco_package(pkg["name"])
     else:
         raw = []  # custom hat eigenen push-update-Pfad, kein Rollout-Support
-    targets = [r for r in raw if r.get("available_version") and r["agent_id"] in allowed]
+    targets = [
+        r for r in raw
+        if r["agent_id"] in allowed
+        and (
+            r.get("available_version")
+            or (target_version
+                and winget_catalog.is_outdated(r.get("installed_version"), target_version))
+        )
+    ]
     dispatched = 0
     failed: list[str] = []
     for ag in targets:
         try:
-            await dispatch_upgrade_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg)
+            await dispatch_upgrade_for_agent(
+                ag["agent_id"], ag.get("hostname") or "", pkg,
+                version_pin=target_version,
+            )
             dispatched += 1
         except Exception as e:
             failed.append(f"{ag.get('hostname')}: {e}")
@@ -2383,7 +2399,7 @@ async def start_rollout(name: str, body: StartRolloutBody, user: dict = Depends(
             status_code=409,
             detail="Fuer dieses Paket laeuft bereits ein Rollout — bitte abbrechen oder abwarten.",
         )
-    result = await _dispatch_rollout_phase(pkg, 1)
+    result = await _dispatch_rollout_phase(pkg, 1, target_version)
     return {"ok": True, "rollout_id": rollout_id, "phase": 1, **result}
 
 
@@ -2413,7 +2429,9 @@ async def advance_rollout_endpoint(rollout_id: int):
         )
     if updated["status"] == "done":
         return {"ok": True, "rollout": updated, "dispatched": 0, "message": "Rollout abgeschlossen"}
-    result = await _dispatch_rollout_phase(pkg, updated["current_phase"])
+    result = await _dispatch_rollout_phase(
+        pkg, updated["current_phase"], rollout.get("target_version"),
+    )
     return {"ok": True, "rollout": updated, **result}
 
 
@@ -4402,9 +4420,12 @@ def _is_package_satisfied(
         if st:
             inst = (st.get("installed_version") or "").strip()
             avail = (st.get("available_version") or "").strip()
+            # versions_equivalent statt String-== : trailing-zero/locale-Suffix
+            # tolerant ("11.0.27.0 (de_de)" == "11.0.27"), sonst dispatcht der
+            # Profile-Apply das Paket jede Nacht neu (False-Outdated).
             if version_pin:
-                return inst == version_pin
-            if inst and (not avail or inst == avail):
+                return winget_catalog.versions_equivalent(inst, version_pin)
+            if inst and (not avail or winget_catalog.versions_equivalent(inst, avail)):
                 return True
             return False
         if name in tracked:
@@ -4415,9 +4436,12 @@ def _is_package_satisfied(
         if st:
             inst = (st.get("installed_version") or "").strip()
             avail = (st.get("available_version") or "").strip()
+            # versions_equivalent statt String-== : trailing-zero/locale-Suffix
+            # tolerant ("11.0.27.0 (de_de)" == "11.0.27"), sonst dispatcht der
+            # Profile-Apply das Paket jede Nacht neu (False-Outdated).
             if version_pin:
-                return inst == version_pin
-            if inst and (not avail or inst == avail):
+                return winget_catalog.versions_equivalent(inst, version_pin)
+            if inst and (not avail or winget_catalog.versions_equivalent(inst, avail)):
                 return True
             return False
         if name in tracked:
@@ -6565,7 +6589,10 @@ async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentR
     benutzt um unerwünschte Software via `winget uninstall --id <ID>` direkt
     aufzuräumen.
     """
-    from routes.install import _build_winget_command, _deliver_command_bg, _build_script_and_bootstrap, _generate_job_id
+    from routes.install import (
+        _build_winget_command, _deliver_command_bg,
+        _build_script_and_bootstrap, _generate_job_id, _is_msstore_id,
+    )
 
     if not _AGENT_ID_RE.fullmatch(agent_id):
         raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
@@ -6574,7 +6601,12 @@ async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentR
     wid = body.winget_id
     pkg = await database.get_package(wid)
     display_name = pkg["display_name"] if pkg else wid
-    inner_cmd = _build_winget_command("uninstall", wid, display_name=display_name)
+    # Paritaet zu dispatch_uninstall_for_agent: hinterlegter Override greift
+    # auch hier, msstore-IDs brauchen --source msstore + User-Kontext.
+    inner_cmd = _build_winget_command(
+        "uninstall", wid, display_name=display_name,
+        uninstall_override=((pkg or {}).get("uninstall_cmd") or "").strip(),
+    )
     job_id = _generate_job_id()
     cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
     log_id = await database.create_action_log(
@@ -6584,6 +6616,7 @@ async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentR
     _spawn_bg(_deliver_command_bg(
         agent_id, agent["hostname"], wid, display_name,
         cmd, "uninstall", "winget", log_id=log_id,
+        run_as_user=_is_msstore_id(wid),
     ))
     return {"ok": True, "agent": agent["hostname"]}
 

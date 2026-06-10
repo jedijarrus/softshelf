@@ -75,13 +75,13 @@ async def _deliver_command_bg(
             error_msg = f"Agent existiert nicht in Tactical (Status: {status['status']})"
             logger.warning("%s %s pre-flight failed: %s — %s", pkg_type, action, display_name, error_msg)
             if log_id:
-                await database.complete_action_log(log_id, "error", error_summary=error_msg)
+                await _fail_delivery_log(log_id, error_msg)
             return
         if status["status"] == "offline":
             error_msg = "Agent ist offline — Command kann nicht zugestellt werden"
             logger.warning("%s %s pre-flight: agent offline — %s", pkg_type, action, display_name)
             if log_id:
-                await database.complete_action_log(log_id, "error", error_summary=error_msg)
+                await _fail_delivery_log(log_id, error_msg)
             return
     except Exception as e:
         logger.warning("pre-flight check failed, proceeding anyway: %s", e)
@@ -101,10 +101,31 @@ async def _deliver_command_bg(
         error_msg = str(e)[:300]
         logger.warning("%s %s delivery failed: %s auf %s — %s", pkg_type, action, display_name, hostname, error_msg)
         if log_id:
-            try:
-                await database.complete_action_log(log_id, "error", error_summary=error_msg)
-            except Exception:
-                pass
+            await _fail_delivery_log(log_id, error_msg)
+
+
+async def _fail_delivery_log(log_id: int, error_msg: str):
+    """Schliesst ein action_log als error ab und advanced einen ggf.
+    angehaengten Workflow-Run sofort.
+
+    Ohne das wartet ein Workflow-Step, dessen Delivery scheiterte (Agent
+    offline, Tactical-Fehler), bis zum Step-Timeout statt direkt die
+    on_failure-Policy (abort/skip/retry) auszuwerten — bei Install-Steps
+    mit Office-Timeout verliert man so 15+ Minuten pro Step.
+    """
+    try:
+        await database.complete_action_log(log_id, "error", error_summary=error_msg)
+    except Exception:
+        logger.exception("complete_action_log failed for log %s", log_id)
+        return
+    try:
+        entry = await database.get_action_log_detail(log_id)
+        run_id = (entry or {}).get("workflow_run_id")
+        if run_id:
+            import workflow_engine
+            await workflow_engine.advance(run_id, log_id, "error")
+    except Exception:
+        logger.exception("delivery-fail advance failed for log %s", log_id)
 
 
 class SoftwareRequest(BaseModel):
@@ -1365,6 +1386,7 @@ async def install_package(
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
             cmd, "install", "custom", log_id=log_id,
+            run_as_user=bool(pkg.get("run_as_user")),
         ))
         msg = (
             f"Installation von '{pkg['display_name']}' auf {hostname} gestartet. "
@@ -1423,10 +1445,14 @@ async def uninstall_package(
 
     if ptype == "winget":
         _check_winget_id(body.package_name)
+        # uninstall_override mit durchreichen — Paritaet zum Admin-Dispatch
+        # (dispatch_uninstall_for_agent), sonst greift der hinterlegte
+        # Override (z.B. TeamViewer) bei Kiosk-Deinstallation nicht.
         inner_cmd = _build_winget_command(
             "uninstall", body.package_name,
             extra_args=pkg.get("install_args") or "",
             display_name=pkg.get("display_name") or "",
+            uninstall_override=(pkg.get("uninstall_cmd") or "").strip(),
         )
         scope = pkg.get("winget_scope") or "auto"
         job_id = _generate_job_id()
@@ -1488,6 +1514,7 @@ async def uninstall_package(
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, body.package_name, pkg["display_name"],
             ps_cmd, "uninstall", "custom", log_id=log_id,
+            run_as_user=bool(pkg.get("run_as_user")),
         ))
         msg = (
             f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
@@ -1744,12 +1771,18 @@ async def dispatch_upgrade_for_agent(
     agent_id: str,
     hostname: str,
     pkg: dict,
+    version_pin: str | None = None,
 ) -> dict:
     """Spawned eine reine Upgrade-Operation. Fuer winget = upgrade-action,
     fuer choco = install (idempotent, nimmt latest), fuer custom = install
     mit der aktuellen current_version_id (zaehlt als push-update).
+
+    version_pin: vom Rollout eingefrorene target_version — damit alle Ringe
+    dieselbe Version bekommen, egal wie der Catalog inzwischen weitergezogen ist.
     """
-    return await dispatch_install_for_agent(agent_id, hostname, pkg, version_pin=None)
+    return await dispatch_install_for_agent(
+        agent_id, hostname, pkg, version_pin=version_pin,
+    )
 
 
 async def dispatch_uninstall_for_agent(

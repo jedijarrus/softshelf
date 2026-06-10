@@ -4579,6 +4579,34 @@ async def get_active_run_for_agent(agent_id: str) -> dict | None:
             return dict(row) if row else None
 
 
+async def cas_workflow_step_state(
+    run_id: int, expected: str | None, new_state: str,
+) -> bool:
+    """Compare-and-swap auf workflow_runs.step_state.
+
+    True wenn geschrieben, False wenn der State sich zwischenzeitlich
+    geaendert hat (z.B. paralleler Error-Callback hat den Retry schon
+    gezogen). Verhindert doppeltes retry_count-Inkrement + Doppel-Dispatch.
+    """
+    async with _db() as db:
+        if expected is None:
+            cur = await db.execute(
+                "UPDATE workflow_runs SET step_state = ?, "
+                "updated_at = datetime('now') "
+                "WHERE id = ? AND step_state IS NULL AND status = 'running'",
+                (new_state, run_id),
+            )
+        else:
+            cur = await db.execute(
+                "UPDATE workflow_runs SET step_state = ?, "
+                "updated_at = datetime('now') "
+                "WHERE id = ? AND step_state = ? AND status = 'running'",
+                (new_state, run_id, expected),
+            )
+        await db.commit()
+        return cur.rowcount > 0
+
+
 async def update_workflow_run(run_id: int, **kwargs):
     """Flexibles Update fuer workflow_runs. updated_at wird immer gesetzt.
 

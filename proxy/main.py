@@ -233,7 +233,7 @@ async def _rollout_auto_start_tick():
                 # Race mit parallelem manuellen Start — skip diesen Durchlauf
                 continue
             try:
-                await _dispatch_rollout_phase(p, 1)
+                await _dispatch_rollout_phase(p, 1, target_version)
                 logger.info(
                     "auto-started rollout %s for %s (staged, ring1 outdated)",
                     rollout_id, p["name"],
@@ -368,7 +368,9 @@ async def _rollout_auto_advance_tick():
                 expected_phase=r["current_phase"],
             )
             if updated and updated["status"] == "active":
-                await _dispatch_rollout_phase(pkg, updated["current_phase"])
+                await _dispatch_rollout_phase(
+                    pkg, updated["current_phase"], r.get("target_version"),
+                )
                 logger.info("auto-advanced rollout %s to phase %s (err_pct=%d)",
                             r["id"], updated["current_phase"], err_pct)
             elif updated and updated["status"] == "done":
@@ -1244,11 +1246,25 @@ async def workflow_defer_reboot(run_id: int, request: Request):
         return {"ok": False, "reason": f"Run ist {run['status']}"}
     import json as _json
     state = _json.loads(run.get("step_state") or "{}")
+    # max_deferrals serverseitig durchsetzen — sonst kann der User unbegrenzt
+    # verschieben und das Limit existiert nur als Zahl im JSON.
+    max_def = int(state.get("max_deferrals") or 3)
+    if state.get("deferrals", 0) >= max_def:
+        return {
+            "ok": False,
+            "reason": f"Maximale Anzahl Verschiebungen erreicht ({max_def})",
+            "deferrals": state.get("deferrals", 0),
+        }
     state["deferrals"] = state.get("deferrals", 0) + 1
-    # Verschieben-Dauer: 60s zum Testen, spaeter 24h
     defer_seconds = 86400  # 24 Stunden
-    state["deferred_until"] = (
+    new_deadline = (
         datetime.now(timezone.utc) + timedelta(seconds=defer_seconds)
     ).strftime("%Y-%m-%d %H:%M:%S")
-    await database.update_workflow_run(run_id, step_state=_json.dumps(state))
+    state["deferred_until"] = new_deadline
+    # step_deadline_at MITschieben: check_timeouts force-rebootet rein nach
+    # der Deadline — ohne Verschiebung wuerde der Rechner trotz "Verschieben"
+    # nach force_after_hours zwangs-neugestartet.
+    await database.update_workflow_run(
+        run_id, step_state=_json.dumps(state), step_deadline_at=new_deadline,
+    )
     return {"ok": True, "deferrals": state["deferrals"], "deferred_until": state["deferred_until"]}
