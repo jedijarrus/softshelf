@@ -15,15 +15,38 @@ Läuft im Docker-Internal-Network auf Port 8766, nicht von außen erreichbar.
 """
 import asyncio
 import base64
+import hashlib
 import os
 import re
+import secrets
 import tempfile
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 app = FastAPI(title="Softshelf Builder", docs_url=None, redoc_url=None)
 
 _build_lock = asyncio.Lock()
+
+# Shared-Secret-Auth: der Builder ist zwar nur im Docker-Netz erreichbar,
+# aber jeder Prozess/Container in diesem Netz (oder eine kuenftige
+# SSRF-Luecke im Proxy) konnte sonst beliebige Builds mit beliebiger
+# proxy_url triggern — manipulierte Client-EXEs, die ueber den regulaeren
+# Download-Pfad verteilt wuerden. Secret kommt via Compose aus SECRET_KEY.
+_BUILD_SECRET = os.environ.get("BUILD_SHARED_SECRET", "")
+
+
+def _check_build_auth(x_build_auth: str | None) -> None:
+    if not _BUILD_SECRET:
+        raise HTTPException(
+            status_code=503,
+            detail="BUILD_SHARED_SECRET nicht gesetzt — Builder-Service in "
+                   "docker-compose.yml mit dem Secret versorgen.",
+        )
+    expected = hashlib.sha256(
+        f"softshelf-build:{_BUILD_SECRET}".encode("utf-8")
+    ).hexdigest()
+    if not x_build_auth or not secrets.compare_digest(x_build_auth, expected):
+        raise HTTPException(status_code=403, detail="Build-Auth ungueltig")
 
 # Muss identisch zur Validierung im Proxy und in build.sh sein.
 _SLUG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,30}$")
@@ -113,10 +136,11 @@ fi
 
 
 @app.post("/selftest")
-async def selftest():
+async def selftest(x_build_auth: str | None = Header(default=None)):
     """Quick-Build-Probe: Wine + PyInstaller produzieren ein 1-Liner-EXE.
     Erfolgt unter dem regulaeren build-lock, damit kein Konflikt mit echtem
     Build. ~30s im Cold-Case."""
+    _check_build_auth(x_build_auth)
     if _build_lock.locked():
         raise HTTPException(status_code=409, detail="Ein Build laeuft bereits.")
     async with _build_lock:
@@ -141,8 +165,9 @@ async def selftest():
 
 
 @app.post("/build")
-async def build(req: BuildRequest):
+async def build(req: BuildRequest, x_build_auth: str | None = Header(default=None)):
     """Triggert den build.sh-Lauf. Seriell — nur ein Build gleichzeitig."""
+    _check_build_auth(x_build_auth)
     if _build_lock.locked():
         raise HTTPException(status_code=409, detail="Ein Build läuft bereits.")
 
