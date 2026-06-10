@@ -57,6 +57,12 @@ services:
     restart: unless-stopped
     volumes:
       - ${SOFTSHELF_DOWNLOADS_PATH:-./downloads}:/app/downloads
+    environment:
+      # Shared-Secret fuer die /build-Auth: gleicher Wert wie SECRET_KEY
+      # des Proxys (Interpolation aus .env bzw. Stack-Env). Bewusst KEIN
+      # env_file hier — der Builder soll die uebrigen Proxy-Secrets
+      # (TACTICAL_API_KEY etc.) nicht sehen.
+      BUILD_SHARED_SECRET: ${SECRET_KEY:-}
     # Builder ist NICHT nach außen exposed — nur im internen docker-Netz
     expose:
       - "8766"

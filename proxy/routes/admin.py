@@ -6074,7 +6074,16 @@ async def _run_build_async(
             }
             if icon_b64:
                 payload["icon_ico_b64"] = icon_b64
-            r = await c.post(f"{builder_url}/build", json=payload)
+            # Shared-Secret-Auth zum Builder (abgeleitet aus SECRET_KEY,
+            # der Builder bekommt denselben Wert via Compose-Env).
+            import hashlib as _hashlib
+            _auth = _hashlib.sha256(
+                f"softshelf-build:{get_settings().secret_key}".encode("utf-8")
+            ).hexdigest()
+            r = await c.post(
+                f"{builder_url}/build", json=payload,
+                headers={"X-Build-Auth": _auth},
+            )
             data = r.json()
             log = data.get("log", "")
             status = "success" if data.get("ok") else "failed"
