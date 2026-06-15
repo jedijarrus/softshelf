@@ -1554,6 +1554,30 @@ async def download_package_file(name: str):
     )
 
 
+@router.get(
+    "/admin/api/packages/{name}/versions/{version_id}/download",
+    dependencies=[Depends(_require_admin)],
+)
+async def download_package_version_file(name: str, version_id: int):
+    """Liefert die Original-Datei einer bestimmten Version (Admin-Download
+    im UI, ueber Session-Auth). GET → read-scope-Token darf auch."""
+    if not _PKG_NAME_RE.fullmatch(name):
+        raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+    ver = await database.get_package_version(version_id)
+    if not ver or ver.get("package_name") != name:
+        raise HTTPException(status_code=404, detail="Version nicht gefunden")
+    if not ver.get("sha256"):
+        raise HTTPException(status_code=404, detail="Version hat keine Datei")
+    path = await asyncio.to_thread(file_uploads.find_file_path, ver["sha256"])
+    if not path:
+        raise HTTPException(status_code=404, detail="Datei nicht im Storage")
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=ver.get("filename") or os.path.basename(path),
+    )
+
+
 @router.post(
     "/admin/api/packages/{name}/versions/{version_id}/set-current",
     dependencies=[Depends(_require_admin)],

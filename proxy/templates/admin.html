@@ -3019,7 +3019,8 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   gap: 2px;
   flex-shrink: 0;
 }
-.version-actions button {
+.version-actions button,
+.version-actions a.btn-version-dl {
   border: 1px solid var(--border);
   background: var(--bg);
   cursor: pointer;
@@ -3029,8 +3030,12 @@ tr.row-banned .cell-time, tr.row-banned .copy-id { opacity: .55; }
   font-size: 11px;
   font-weight: 500;
   transition: all .12s;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
 }
-.version-actions button:hover:not(:disabled) {
+.version-actions button:hover:not(:disabled),
+.version-actions a.btn-version-dl:hover {
   border-color: var(--fg);
   color: var(--fg);
 }
@@ -10760,6 +10765,7 @@ function renderVersionList() {
           </div>
         </div>
         <div class="version-actions">
+          ${v.filename ? `<a class="btn-version-dl" href="/admin/api/packages/${encodeURIComponent(_editingName)}/versions/${v.id}/download" title="Original-Datei herunterladen">Download</a>` : ''}
           ${setBtn}
           ${delBtn}
         </div>
