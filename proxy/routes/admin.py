@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import (
     APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile,
 )
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 import httpx
@@ -1527,6 +1527,31 @@ async def list_package_versions(name: str):
         "versions": versions,
         "installation_summary": summary,
     }
+
+
+@router.get("/admin/api/packages/{name}/download", dependencies=[Depends(_require_admin)])
+async def download_package_file(name: str):
+    """Liefert die Original-Datei der aktuellen Version eines custom/plugin-
+    Pakets (Admin-Download, z.B. fuer manuelle Installation). GET → fuer
+    read-scope-Token erreichbar; kein Download-Token noetig."""
+    if not _PKG_NAME_RE.fullmatch(name):
+        raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+    pkg = await database.get_package(name)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Paket nicht gefunden")
+    if (pkg.get("type") or "") not in ("custom", "plugin"):
+        raise HTTPException(status_code=400, detail="Nur fuer custom/plugin-Pakete")
+    ver = await database.get_current_package_version(name)
+    if not ver or not ver.get("sha256"):
+        raise HTTPException(status_code=404, detail="Keine aktuelle Version mit Datei")
+    path = await asyncio.to_thread(file_uploads.find_file_path, ver["sha256"])
+    if not path:
+        raise HTTPException(status_code=404, detail="Datei nicht im Storage")
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=ver.get("filename") or os.path.basename(path),
+    )
 
 
 @router.post(
