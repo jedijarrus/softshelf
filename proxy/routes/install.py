@@ -78,10 +78,13 @@ async def _deliver_command_bg(
                 await _fail_delivery_log(log_id, error_msg)
             return
         if status["status"] == "offline":
-            error_msg = "Agent ist offline — Command kann nicht zugestellt werden"
-            logger.warning("%s %s pre-flight: agent offline — %s", pkg_type, action, display_name)
+            # Agent existiert, ist aber offline → queuen statt failen.
+            logger.info("%s %s pre-flight: agent offline → queued — %s", pkg_type, action, display_name)
             if log_id:
-                await _fail_delivery_log(log_id, error_msg)
+                await _queue_or_fail_delivery(
+                    log_id, agent_id, hostname, package_name, action, pkg_type,
+                    "Agent offline — Command gequeued, wird bei Reconnect zugestellt",
+                )
             return
     except Exception as e:
         logger.warning("pre-flight check failed, proceeding anyway: %s", e)
@@ -101,7 +104,55 @@ async def _deliver_command_bg(
         error_msg = str(e)[:300]
         logger.warning("%s %s delivery failed: %s auf %s — %s", pkg_type, action, display_name, hostname, error_msg)
         if log_id:
-            await _fail_delivery_log(log_id, error_msg)
+            # Generelle Regel: scheitert die Zustellung, der Agent existiert
+            # aber noch in Tactical (typisch: 400 direkt nach Reboot, NATS noch
+            # nicht reconnected) → queuen statt failen.
+            await _queue_or_fail_delivery(
+                log_id, agent_id, hostname, package_name, action, pkg_type, error_msg,
+            )
+
+
+async def _queue_or_fail_delivery(log_id, agent_id, hostname, package_name, action, pkg_type, reason):
+    """Zustellung gescheitert: wenn der Agent NOCH in Tactical existiert,
+    Action auf 'queued' zuruecksetzen — der Queue-Tick stellt sie zu, sobald
+    der Agent wieder online/command-reachable ist. Nur wenn der Agent NICHT
+    mehr existiert → echter Fehler (+ Workflow-Advance).
+
+    Ausnahme: Script-Steps (package_name 'workflow:*' bzw. pkg_type 'script')
+    kann der Queue-Tick nicht re-dispatchen (kein Whitelist-Paket) → die
+    muessen hart failen, sonst haengt der Workflow ewig queued.
+    """
+    queueable = not (pkg_type == "script" or str(package_name).startswith("workflow:"))
+    exists = True
+    try:
+        st = await get_rmm_client().check_agent_status(agent_id)
+        exists = bool(st.get("exists"))
+    except Exception:
+        exists = True  # im Zweifel queuen statt verlieren
+
+    if exists and queueable:
+        try:
+            if await database.requeue_action_log(log_id):
+                logger.info(
+                    "delivery failed, agent existiert → queued: %s %s auf %s (%s)",
+                    pkg_type, action, hostname, reason,
+                )
+                # Workflow-Step am Leben halten: Deadline rausschieben, sonst
+                # timed_out bevor der 2-min-Queue-Tick + Reconnect greift.
+                try:
+                    entry = await database.get_action_log_detail(log_id)
+                    run_id = (entry or {}).get("workflow_run_id")
+                    if run_id:
+                        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+                        new_dl = (_dt.now(_tz.utc) + _td(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+                        await database.update_workflow_run(run_id, step_deadline_at=new_dl)
+                except Exception:
+                    logger.exception("queue-requeue: workflow-deadline-extend fuer log %s", log_id)
+                return
+        except Exception:
+            logger.exception("requeue_action_log fehlgeschlagen fuer log %s", log_id)
+
+    await _fail_delivery_log(log_id, reason)
 
 
 async def _fail_delivery_log(log_id: int, error_msg: str):

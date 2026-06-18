@@ -4220,6 +4220,23 @@ async def promote_queued_to_pending(log_id: int) -> bool:
         return cur.rowcount > 0
 
 
+async def requeue_action_log(log_id: int) -> bool:
+    """status pending/running → queued. Setzt job_id/completed_at zurueck,
+    damit der Queue-Tick den Eintrag erneut zustellt sobald der Agent wieder
+    command-reachable ist. Genutzt wenn die Tactical-Zustellung scheitert
+    (z.B. 400 direkt nach Reboot, NATS noch nicht reconnected), der Agent
+    aber laut Tactical noch existiert. Returns True wenn betroffen."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET status = 'queued', job_id = NULL, "
+            "completed_at = NULL "
+            "WHERE id = ? AND status IN ('pending', 'running')",
+            (log_id,),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
 async def get_action_log(
     agent_id: str | None = None, package_name: str | None = None,
     status: str | None = None, pkg_type: str | None = None,
