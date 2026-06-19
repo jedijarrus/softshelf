@@ -1141,6 +1141,9 @@ class EnabledPackage(BaseModel):
     process_check: str = ""
     plugin_host: str | None = None
     plugin_folder: str | None = None
+    ext_id: str | None = None
+    ext_version: str | None = None
+    ext_managed_cfg: str | None = None
 
 
 class SearchResult(BaseModel):
