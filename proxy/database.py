@@ -592,6 +592,10 @@ async def init_db():
             ("process_check",      "TEXT NOT NULL DEFAULT ''"),
             ("plugin_host",        "TEXT"),
             ("plugin_folder",      "TEXT"),
+            ("ext_private_key",    "TEXT"),
+            ("ext_id",             "TEXT"),
+            ("ext_version",        "TEXT"),
+            ("ext_managed_cfg",    "TEXT"),
         ]:
             if col not in pkg_cols:
                 await db.execute(f"ALTER TABLE packages ADD COLUMN {col} {ddl}")
@@ -814,7 +818,8 @@ _PKG_COLS = (
     "archive_type, entry_point, version_pin, winget_publisher, winget_scope, "
     "required, notes, staged_rollout, hidden_in_kiosk, auto_advance, "
     "install_timeout, uninstall_timeout, run_as_user, check_reboot, "
-    "hide_uninstall, process_check, plugin_host, plugin_folder"
+    "hide_uninstall, process_check, plugin_host, plugin_folder, "
+    "ext_id, ext_version, ext_managed_cfg"
 )
 
 
@@ -954,6 +959,75 @@ async def upsert_plugin_package(
             plugin_host, plugin_folder,
         ))
         await db.commit()
+
+
+async def upsert_extension_package(
+    name: str,
+    display_name: str,
+    category: str,
+    ext_id: str,
+    ext_version: str,
+    ext_private_key: str,
+    ext_managed_cfg: str,
+    filename: str,
+    sha256: str,
+    size_bytes: int,
+):
+    """Browser-Extension-Paket (Chrome/Edge) einfuegen/aktualisieren.
+    ext_private_key wird nur beim ersten Upload gesetzt und danach NICHT
+    ueberschrieben (ID-Stabilitaet) — Caller laedt den vorhandenen Key vorher."""
+    async with _db() as db:
+        await db.execute("""
+            INSERT INTO packages (
+                name, display_name, category, type,
+                filename, sha256, size_bytes,
+                ext_id, ext_version, ext_private_key, ext_managed_cfg
+            )
+            VALUES (?, ?, ?, 'extension', ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                display_name    = excluded.display_name,
+                category        = excluded.category,
+                type            = 'extension',
+                filename        = excluded.filename,
+                sha256          = excluded.sha256,
+                size_bytes      = excluded.size_bytes,
+                ext_id          = excluded.ext_id,
+                ext_version     = excluded.ext_version,
+                ext_private_key = excluded.ext_private_key,
+                ext_managed_cfg = excluded.ext_managed_cfg,
+                updated_at      = datetime('now')
+        """, (
+            name, display_name, category,
+            filename, sha256, size_bytes,
+            ext_id, ext_version, ext_private_key, ext_managed_cfg,
+        ))
+        await db.commit()
+
+
+async def get_extension_private_key(name: str) -> str | None:
+    """Privaten Signing-Key einer Extension lesen (nur fuer CRX-Packen).
+    Bewusst getrennt von get_package, damit der Key nicht in normale
+    Package-Responses leakt."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT ext_private_key FROM packages WHERE name = ? AND type = 'extension'",
+            (name,),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row and row[0] else None
+
+
+async def get_extension_by_ext_id(ext_id: str) -> dict | None:
+    """Extension-Paket per Chromium-ext_id (fuer CRX-/update.xml-Hosting)."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT {_PKG_COLS} FROM packages "
+            "WHERE ext_id = ? AND type = 'extension'",
+            (ext_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
 
 
 async def delete_package(name: str):
