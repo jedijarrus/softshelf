@@ -2260,6 +2260,10 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                     version_id = pkg.get("current_version_id")
                     if pkg.get("type") == "plugin":
                         installed_sha = pkg.get("sha256")
+                    elif pkg.get("type") == "extension":
+                        # ausgerollte ext_version im installed_sha-Feld merken
+                        # → Kiosk/Verteilung erkennen installiert + outdated.
+                        installed_sha = pkg.get("ext_version")
             except Exception:
                 pass
             await database.set_agent_installation(
