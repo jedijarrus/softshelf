@@ -1421,6 +1421,28 @@ async def get_outdated_plugin_agents(package_name: str) -> list[dict]:
             return [dict(r) for r in await cur.fetchall()]
 
 
+async def get_outdated_extension_agents(package_name: str) -> list[dict]:
+    """Extension-Variante: Agents mit ausgerollter Policy-Version (installed_sha)
+    die nicht der aktuellen ext_version entspricht (Re-Upload mit hoeherer
+    Version)."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT i.agent_id, i.installed_sha, i.installed_at, "
+            "a.hostname, a.last_seen "
+            "FROM agent_installations i "
+            "JOIN agents a ON a.agent_id = i.agent_id "
+            "JOIN packages p ON p.name = i.package_name "
+            "WHERE i.package_name = ? "
+            "AND p.type = 'extension' "
+            "AND p.ext_version IS NOT NULL "
+            "AND (i.installed_sha IS NULL OR i.installed_sha != p.ext_version) "
+            "ORDER BY a.hostname",
+            (package_name,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
 async def get_outdated_agents_for_package(package_name: str) -> list[dict]:
     """Agents die dieses Paket installiert haben, aber NICHT auf der current Version.
     Wird für 'Update pushen' gebraucht."""
@@ -1453,7 +1475,7 @@ async def get_agent_installation_summaries() -> dict[str, dict]:
             "SELECT i.package_name, "
             "COUNT(*) AS total, "
             "SUM(CASE "
-            "      WHEN p.type = 'plugin' THEN "
+            "      WHEN p.type IN ('plugin','extension') THEN "
             "        (CASE WHEN i.installed_sha IS NULL THEN 1 ELSE 0 END) "
             "      ELSE "
             "        (CASE WHEN i.version_id IS NULL THEN 1 ELSE 0 END) "
@@ -1463,6 +1485,11 @@ async def get_agent_installation_summaries() -> dict[str, dict]:
             "        (CASE WHEN i.installed_sha IS NOT NULL "
             "                   AND p.sha256 IS NOT NULL "
             "                   AND i.installed_sha = p.sha256 "
+            "              THEN 1 ELSE 0 END) "
+            "      WHEN p.type = 'extension' THEN "
+            "        (CASE WHEN i.installed_sha IS NOT NULL "
+            "                   AND p.ext_version IS NOT NULL "
+            "                   AND i.installed_sha = p.ext_version "
             "              THEN 1 ELSE 0 END) "
             "      ELSE "
             "        (CASE WHEN i.version_id IS NOT NULL "
@@ -1474,6 +1501,11 @@ async def get_agent_installation_summaries() -> dict[str, dict]:
             "        (CASE WHEN i.installed_sha IS NOT NULL "
             "                   AND p.sha256 IS NOT NULL "
             "                   AND i.installed_sha != p.sha256 "
+            "              THEN 1 ELSE 0 END) "
+            "      WHEN p.type = 'extension' THEN "
+            "        (CASE WHEN i.installed_sha IS NOT NULL "
+            "                   AND p.ext_version IS NOT NULL "
+            "                   AND i.installed_sha != p.ext_version "
             "              THEN 1 ELSE 0 END) "
             "      ELSE "
             "        (CASE WHEN i.version_id IS NOT NULL "
@@ -1552,7 +1584,7 @@ async def get_agent_installation_summary(package_name: str) -> dict:
             "SELECT "
             "COUNT(*) AS total, "
             "SUM(CASE "
-            "      WHEN p.type = 'plugin' THEN "
+            "      WHEN p.type IN ('plugin','extension') THEN "
             "        (CASE WHEN i.installed_sha IS NULL THEN 1 ELSE 0 END) "
             "      ELSE "
             "        (CASE WHEN i.version_id IS NULL THEN 1 ELSE 0 END) "
@@ -1562,6 +1594,11 @@ async def get_agent_installation_summary(package_name: str) -> dict:
             "        (CASE WHEN i.installed_sha IS NOT NULL "
             "                   AND p.sha256 IS NOT NULL "
             "                   AND i.installed_sha = p.sha256 "
+            "              THEN 1 ELSE 0 END) "
+            "      WHEN p.type = 'extension' THEN "
+            "        (CASE WHEN i.installed_sha IS NOT NULL "
+            "                   AND p.ext_version IS NOT NULL "
+            "                   AND i.installed_sha = p.ext_version "
             "              THEN 1 ELSE 0 END) "
             "      ELSE "
             "        (CASE WHEN i.version_id IS NOT NULL "
@@ -1573,6 +1610,11 @@ async def get_agent_installation_summary(package_name: str) -> dict:
             "        (CASE WHEN i.installed_sha IS NOT NULL "
             "                   AND p.sha256 IS NOT NULL "
             "                   AND i.installed_sha != p.sha256 "
+            "              THEN 1 ELSE 0 END) "
+            "      WHEN p.type = 'extension' THEN "
+            "        (CASE WHEN i.installed_sha IS NOT NULL "
+            "                   AND p.ext_version IS NOT NULL "
+            "                   AND i.installed_sha != p.ext_version "
             "              THEN 1 ELSE 0 END) "
             "      ELSE "
             "        (CASE WHEN i.version_id IS NOT NULL "
