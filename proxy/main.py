@@ -397,6 +397,23 @@ async def _log_cleanup_job():
         logger.warning("log cleanup tick: %s", e)
 
 
+async def _action_log_watchdog():
+    """Alle 5 Min: markiere haengende (non-workflow) action_log-Eintraege als
+    error. winget/MSI koennen am globalen Windows-Installer-Lock haengen
+    bleiben und nie einen Final-Callback schicken — der Eintrag bliebe sonst
+    ewig auf 'running'. Workflow-Runs sind ausgenommen (eigener Timeout-Check)."""
+    try:
+        minutes = await runtime_int("action_running_timeout_min") or 60
+        n = await database.timeout_stale_running_actions(minutes)
+        if n:
+            logger.warning(
+                "action-log watchdog: %d haengende Eintraege (>%dmin) auf error gesetzt",
+                n, minutes,
+            )
+    except Exception as e:
+        logger.warning("action-log watchdog tick: %s", e)
+
+
 async def _queued_actions_tick():
     """Alle 2 Min: pruefe queued action_log-Eintraege. Wenn der Ziel-Agent
     laut Tactical online ist → promote auf 'pending' und dispatch ueber den
@@ -724,6 +741,18 @@ async def lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
         misfire_grace_time=180,
+    )
+    # Alle 5 Min: haengende (non-workflow) action_log-Eintraege auf error
+    # setzen, die nie einen Final-Callback bekommen haben (z.B. winget am
+    # Installer-Lock). Sonst bleiben sie ewig 'running'.
+    scheduler.add_job(
+        _action_log_watchdog,
+        IntervalTrigger(minutes=5),
+        id="_action_log_watchdog",
+        name="_action_log_watchdog",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
     )
     # Taeglich 03:30 UTC: alte audit_log / action_log Eintraege prunen.
     # Bisher lief das nur beim Boot — bei seltenem Restart wuchs die DB.
