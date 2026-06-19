@@ -1400,6 +1400,25 @@ async def has_pending_action(
             return dict(row) if row else None
 
 
+async def agent_has_inflight_install(agent_id: str) -> bool:
+    """True wenn der Agent gerade eine Installer-Operation in Arbeit hat
+    (install/upgrade/uninstall mit status pending/running). Dient der
+    Serialisierung: nur EIN Installer-Op gleichzeitig pro Agent — parallele
+    winget/MSI deadlocken sonst am globalen Windows-Installer-Lock
+    (_MSIExecute), bleiben ewig haengen und schicken nie einen Callback.
+    Stuck-Eintraege werden vom _action_log_watchdog (60min) auf error
+    gesetzt und geben den Slot damit wieder frei."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT 1 FROM action_log "
+            "WHERE agent_id = ? AND action IN ('install','upgrade','uninstall') "
+            "AND status IN ('pending','running') "
+            "AND completed_at IS NULL LIMIT 1",
+            (agent_id,),
+        ) as cur:
+            return (await cur.fetchone()) is not None
+
+
 async def get_outdated_plugin_agents(package_name: str) -> list[dict]:
     """Plugin-Variante: Agents die ein Plugin installiert haben, aber mit
     einem alten sha256 (sprich: Admin hat eine neue Version hochgeladen)."""

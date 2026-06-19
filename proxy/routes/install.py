@@ -1828,6 +1828,26 @@ async def dispatch_install_for_agent(
             return {"action": "install", "package_name": package_name,
                     "type": ptype, **qres}
 
+    # Serialisierung pro Agent: laeuft bereits ein Installer-Op auf diesem
+    # Agent, queuen wir statt parallel zu feuern. Parallele winget/MSI
+    # deadlocken am globalen Windows-Installer-Lock (siehe Bulk-Apply-Hang
+    # 2026-06). Der Queue-Tick (_queued_actions_tick) draint die Queue
+    # serialisiert ab, sobald der Slot frei ist. Workflow-Dispatches und
+    # Queue-Drains (existing_log_id) umgehen das Gate — die orchestrieren sich
+    # selbst bzw. SIND der Drain.
+    if (not workflow_run_id and not existing_log_id and not allow_duplicate
+            and await database.agent_has_inflight_install(agent_id)):
+        qlog = await database.create_queued_action_log(
+            agent_id=agent_id, hostname=hostname,
+            package_name=package_name, display_name=pkg["display_name"],
+            pkg_type=ptype, action="install", triggered_by=triggered_by,
+        )
+        return {
+            "action": "install", "package_name": package_name, "type": ptype,
+            "queued": True, "log_id": qlog, "queued_reason": "agent_busy",
+            "message": f"Agent {hostname} installiert gerade — eingereiht, laeuft serialisiert nach.",
+        }
+
     # workflow_run_id setzt auch triggered_by, wenn nicht explizit gesetzt
     if not triggered_by and workflow_run_id:
         triggered_by = f"workflow:{workflow_run_id}"
