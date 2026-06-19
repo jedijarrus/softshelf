@@ -1443,6 +1443,22 @@ async def install_package(
             f"Installation von '{pkg['display_name']}' auf {hostname} gestartet. "
             f"Das kann einige Minuten dauern."
         )
+    elif ptype == "extension":
+        inner_cmd = await _build_extension_install_command(pkg)
+        job_id = _generate_job_id()
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+        log_id = await database.create_action_log(
+            agent_id, hostname, body.package_name,
+            pkg["display_name"], "extension", "install", job_id=job_id, triggered_by=triggered_by,
+        )
+        _spawn_bg(_deliver_command_bg(
+            agent_id, hostname, body.package_name, pkg["display_name"],
+            cmd, "install", "extension", log_id=log_id,
+        ))
+        msg = (
+            f"Browser-Extension '{pkg['display_name']}' wird auf {hostname} per "
+            f"Policy ausgerollt (Chrome + Edge)."
+        )
     else:
         inner_cmd = _build_choco_command("install", body.package_name)
         job_id = _generate_job_id()
@@ -1571,6 +1587,19 @@ async def uninstall_package(
             f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
             f"Das kann einige Minuten dauern."
         )
+    elif ptype == "extension":
+        inner_cmd = _build_extension_uninstall_command(pkg)
+        job_id = _generate_job_id()
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+        log_id = await database.create_action_log(
+            agent_id, hostname, body.package_name,
+            pkg["display_name"], "extension", "uninstall", job_id=job_id, triggered_by=triggered_by,
+        )
+        _spawn_bg(_deliver_command_bg(
+            agent_id, hostname, body.package_name, pkg["display_name"],
+            cmd, "uninstall", "extension", log_id=log_id,
+        ))
+        msg = f"Browser-Extension '{pkg['display_name']}' wird auf {hostname} entfernt (Chrome + Edge)."
     else:
         inner_cmd = _build_choco_command("uninstall", body.package_name)
         job_id = _generate_job_id()
