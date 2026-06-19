@@ -3622,7 +3622,7 @@ async def get_distributions(
     Gesamtzahl nach Filter (ohne Pagination), das Frontend braucht's fuer
     Infinite-Scroll / „X von Y Pakete".
     """
-    if type not in ("all", "winget", "choco", "custom"):
+    if type not in ("all", "winget", "choco", "custom", "plugin", "extension"):
         raise HTTPException(status_code=400, detail="Ungueltiger type-Filter")
     if sort not in ("outdated_desc", "name_asc", "devices_desc"):
         raise HTTPException(status_code=400, detail="Ungueltiger sort-Parameter")
