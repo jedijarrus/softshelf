@@ -4248,6 +4248,33 @@ async def abort_orphan_action_logs_for_run(
         return cur.rowcount or 0
 
 
+async def timeout_stale_running_actions(max_minutes: int = 60) -> int:
+    """Markiert haengende action_log-Eintraege als 'error'. Trifft Eintraege
+    mit status IN ('pending','running') OHNE workflow_run_id (Workflow-Runs
+    haben ihren eigenen check_timeouts) die aelter als max_minutes sind und
+    noch kein completed_at haben. Das ist die Signatur eines haengenden
+    Agent-Prozesses, der nie einen Final-Callback schickt — z.B. winget das
+    am globalen Windows-Installer-Lock haengt. Gibt Anzahl betroffener Rows
+    zurueck."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET status = 'error', "
+            "error_summary = ?, completed_at = datetime('now') "
+            "WHERE status IN ('pending', 'running') "
+            "AND workflow_run_id IS NULL "
+            "AND completed_at IS NULL "
+            "AND created_at < datetime('now', ?)",
+            (
+                f"Timeout: kein Callback innerhalb {int(max_minutes)} min "
+                "(Agent-Prozess vermutlich haengen geblieben, z.B. winget am "
+                "Installer-Lock).",
+                f"-{int(max_minutes)} minutes",
+            ),
+        )
+        await db.commit()
+        return cur.rowcount or 0
+
+
 async def create_queued_action_log(
     agent_id: str, hostname: str, package_name: str,
     display_name: str, pkg_type: str, action: str,

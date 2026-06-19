@@ -141,6 +141,28 @@ def _validate_uninstall_cmd(cmd: str) -> str:
     return cmd
 
 
+_MSIPERUSER_RE = re.compile(r"MSIINSTALLPERUSER\s*=\s*1")
+
+
+def _check_peruser_install_consistency(install_args: str, run_as_user: int) -> None:
+    """MSIINSTALLPERUSER=1 ist ein Per-User-MSI-Install. Als SYSTEM
+    (run_as_user=0) bricht der MSI hart mit Exit 1603 ab ('Installing per
+    user SYSTEM is not allowed'). Frueh blocken statt den Fehler erst Stunden
+    spaeter auf dem Agent zu sehen — siehe UiPath-Regression 2026-06."""
+    if not install_args:
+        return
+    if _MSIPERUSER_RE.search(install_args) and not run_as_user:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MSIINSTALLPERUSER=1 ist ein Per-User-Install und scheitert als "
+                "SYSTEM mit Exit 1603. Entweder 'Als angemeldeter Benutzer "
+                "ausführen' aktivieren, oder MSIINSTALLPERUSER=1 entfernen für "
+                "einen Per-Machine-Install."
+            ),
+        )
+
+
 # RBAC: path-prefixes die nur Admins bearbeiten duerfen (POST/PATCH/DELETE).
 # Alle anderen POST/PATCH/DELETE sind fuer operator+admin. GET ueberall fuer
 # viewer+operator+admin. Viewer hat sonst nix — kein Dispatch, kein Edit.
@@ -1341,6 +1363,10 @@ async def update_package(name: str, body: EnableRequest):
     # plugin/choco haben kein Konzept dafuer.
     if body.uninstall_cmd is not None and ptype == "winget":
         updates["uninstall_cmd"] = body.uninstall_cmd.strip() or None
+    _check_peruser_install_consistency(
+        updates.get("install_args", pkg.get("install_args") or ""),
+        updates.get("run_as_user", pkg.get("run_as_user") or 0),
+    )
     if updates:
         async with database._db() as db:
             sets = ", ".join(f"{k} = ?" for k in updates)
@@ -1451,6 +1477,8 @@ async def update_custom_package(name: str, body: CustomUpdateRequest):
         raise HTTPException(status_code=404, detail="Paket nicht gefunden")
     if pkg.get("type") != "custom":
         raise HTTPException(status_code=400, detail="Kein custom-Paket")
+
+    _check_peruser_install_consistency(body.install_args.strip(), body.run_as_user)
 
     archive_type = pkg.get("archive_type") or "single"
     eff_entry = pkg.get("entry_point")
