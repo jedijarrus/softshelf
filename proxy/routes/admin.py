@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import secrets
+import zipfile
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import (
@@ -5467,6 +5468,199 @@ async def upload_plugin_file(
         "sha256": sha256,
         "ext": ext,
     }
+
+
+_EXT_ID_RE = re.compile(r"^[a-p]{32}$")
+
+
+def _ext_data_dir(ext_id: str) -> str:
+    return os.path.join(os.path.dirname(database.DB_PATH), "ext", ext_id)
+
+
+def _parse_managed_schema(zip_bytes: bytes) -> dict:
+    """Liest managed_schema.json (properties) aus dem Extension-ZIP. {} wenn keins."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+            if "managed_schema.json" not in z.namelist():
+                return {}
+            schema = json.loads(z.read("managed_schema.json").decode("utf-8"))
+        return schema.get("properties", {}) or {}
+    except Exception:
+        return {}
+
+
+def _sanitize_managed_cfg(raw_cfg: dict, props: dict) -> dict:
+    """Nur Keys aus dem Schema, Werte auf str/bool/int beschraenkt."""
+    out = {}
+    for k, v in (raw_cfg or {}).items():
+        if k not in props:
+            continue
+        if isinstance(v, bool) or isinstance(v, int):
+            out[k] = v
+        elif isinstance(v, str):
+            out[k] = v[:2000]
+        # alles andere (dict/list/None) verworfen
+    return out
+
+
+def _ver_tuple(v: str):
+    """Lockerer Versionsvergleich fuer Extension-Versionen (manifest 'version')."""
+    parts = []
+    for p in str(v or "").split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
+@router.post("/admin/api/upload-extension", dependencies=[Depends(_require_admin)])
+async def upload_extension_file(
+    file: UploadFile = File(...),
+    display_name: str = Form(""),
+    category: str = Form("Browser-Extensions"),
+    target_package: str = Form(""),
+    managed_cfg: str = Form("{}"),
+):
+    """Upload einer Browser-Extension (ZIP, MV3). Softshelf packt+signiert eine
+    CRX3, leitet die Extension-ID ab und hostet update.xml + app.crx.
+
+    Neues Paket: neuer RSA-Key wird generiert (ID stabil ueber Re-Uploads).
+    Re-Upload (target_package): bestehender Key wird wiederverwendet, die
+    Version MUSS steigen (sonst kein Browser-Auto-Update)."""
+    import crx as _crx
+
+    max_mb = await runtime_int("max_upload_mb")
+    data = await file.read()
+    if len(data) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"ZIP groesser als {max_mb} MB")
+    if len(data) < 100:
+        raise HTTPException(status_code=400, detail="ZIP leer/zu klein")
+
+    # ZIP + manifest validieren
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            bad = z.testzip()
+            if bad is not None:
+                raise HTTPException(status_code=400, detail=f"ZIP defekt: {bad}")
+            names = z.namelist()
+            if "manifest.json" not in names:
+                raise HTTPException(status_code=400, detail="Keine manifest.json im ZIP-Wurzelverzeichnis")
+            manifest = json.loads(z.read("manifest.json").decode("utf-8"))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Kein gueltiges Extension-ZIP: {e}")
+
+    if manifest.get("manifest_version") != 3:
+        raise HTTPException(status_code=400, detail="Nur Manifest V3 unterstuetzt")
+    ext_version = str(manifest.get("version") or "").strip()
+    if not re.fullmatch(r"\d+(\.\d+){0,3}", ext_version):
+        raise HTTPException(status_code=400, detail=f"Ungueltige manifest-Version: {ext_version!r}")
+    mf_name = (manifest.get("name") or "").strip()
+
+    category = (category or "Browser-Extensions").strip()
+    if not _TEXT_RE.fullmatch(category):
+        raise HTTPException(status_code=400, detail="Ungueltige Kategorie")
+
+    props = _parse_managed_schema(data)
+    try:
+        cfg = _sanitize_managed_cfg(json.loads(managed_cfg or "{}"), props)
+    except Exception:
+        raise HTTPException(status_code=400, detail="managed_cfg ist kein gueltiges JSON")
+
+    # Key bestimmen: Re-Upload -> bestehenden Key wiederverwenden
+    target_package = (target_package or "").strip()
+    if target_package:
+        if not _PKG_NAME_RE.fullmatch(target_package):
+            raise HTTPException(status_code=400, detail="Ungueltiger target_package")
+        existing = await database.get_package(target_package)
+        if not existing or existing.get("type") != "extension":
+            raise HTTPException(status_code=404, detail="Extension-Paket nicht gefunden")
+        if _ver_tuple(ext_version) <= _ver_tuple(existing.get("ext_version") or "0"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Version muss steigen (vorhanden: {existing.get('ext_version')}, neu: {ext_version})",
+            )
+        pem = await database.get_extension_private_key(target_package)
+        if not pem:
+            raise HTTPException(status_code=500, detail="Kein Signing-Key fuer dieses Paket gefunden")
+        name = target_package
+        display_name = (display_name or existing.get("display_name") or name).strip()
+    else:
+        pem = _crx.generate_private_key_pem()
+        display_name = (display_name or mf_name or "").strip()
+        if not display_name or not _TEXT_RE.fullmatch(display_name):
+            raise HTTPException(status_code=400, detail="Ungueltiger Anzeigename")
+        slug = file_uploads._slug_from_filename(file.filename or (mf_name + ".zip"))
+        if not _PKG_NAME_RE.fullmatch(slug):
+            raise HTTPException(status_code=400, detail=f"Dateiname ergibt ungueltigen Paketnamen: {slug!r}")
+        name = await file_uploads._unique_name(slug)
+
+    # ext_id + CRX bauen
+    ext_id = _crx.extension_id_from_pem(pem)
+    if not _EXT_ID_RE.fullmatch(ext_id):
+        raise HTTPException(status_code=500, detail="Abgeleitete ext_id ungueltig")
+    try:
+        crx_bytes = _crx.pack_crx(data, pem)
+    except Exception as e:
+        logger.exception("CRX packen fehlgeschlagen")
+        raise HTTPException(status_code=500, detail=f"CRX-Packen fehlgeschlagen: {e}")
+
+    # Artefakte ablegen: data/ext/<ext_id>/{app.crx, source.zip}
+    import hashlib as _hl
+    sha256 = _hl.sha256(data).hexdigest()
+    d = _ext_data_dir(ext_id)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "app.crx"), "wb") as f:
+        f.write(crx_bytes)
+    with open(os.path.join(d, "source.zip"), "wb") as f:
+        f.write(data)
+
+    await database.upsert_extension_package(
+        name=name, display_name=display_name, category=category,
+        ext_id=ext_id, ext_version=ext_version, ext_private_key=pem,
+        ext_managed_cfg=json.dumps(cfg),
+        filename=file.filename or (name + ".zip"), sha256=sha256, size_bytes=len(data),
+    )
+
+    proxy_url = (await runtime_value("proxy_public_url") or "").rstrip("/")
+    return {
+        "ok": True, "name": name, "display_name": display_name, "category": category,
+        "ext_id": ext_id, "ext_version": ext_version,
+        "managed_schema": props, "managed_cfg": cfg,
+        "update_url": f"{proxy_url}/ext/{ext_id}/update.xml" if proxy_url else f"/ext/{ext_id}/update.xml",
+        "crx_bytes": len(crx_bytes),
+    }
+
+
+@router.patch("/admin/api/packages/{name}/ext-config", dependencies=[Depends(_require_admin)])
+async def update_extension_config(name: str, request: Request):
+    """Managed-Config (z.B. linkhub_url) aktualisieren — kein Repack noetig,
+    der Wert landet nur in der Policy-Registry beim naechsten Deploy."""
+    if not _PKG_NAME_RE.fullmatch(name):
+        raise HTTPException(status_code=400, detail="Ungueltiger Paketname")
+    pkg = await database.get_package(name)
+    if not pkg or pkg.get("type") != "extension":
+        raise HTTPException(status_code=404, detail="Extension-Paket nicht gefunden")
+    body = await request.json()
+    raw = body.get("managed_cfg") if isinstance(body, dict) else None
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="managed_cfg (dict) erwartet")
+    d = _ext_data_dir(pkg["ext_id"])
+    props = {}
+    src_zip = os.path.join(d, "source.zip")
+    if os.path.isfile(src_zip):
+        with open(src_zip, "rb") as f:
+            props = _parse_managed_schema(f.read())
+    cfg = _sanitize_managed_cfg(raw, props)
+    async with database._db() as db:
+        await db.execute(
+            "UPDATE packages SET ext_managed_cfg = ?, updated_at = datetime('now') WHERE name = ?",
+            (json.dumps(cfg), name),
+        )
+        await db.commit()
+    return {"ok": True, "managed_cfg": cfg}
 
 
 @router.post("/admin/api/upload-folder", dependencies=[Depends(_require_admin)])

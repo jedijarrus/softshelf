@@ -12,7 +12,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -40,7 +40,7 @@ from rmm import get_rmm_client
 
 logger = logging.getLogger("softshelf")
 
-VERSION = "2.7.0"
+VERSION = "2.8.0"
 
 # Build-Timestamp = mtime der main.py beim Docker COPY. Aenderet sich nur
 # bei einem Image-Rebuild, nicht bei Container-Restart. Damit kann der
@@ -1146,6 +1146,51 @@ async def download_exe(filename: str):
             detail=f"{filename} noch nicht gebaut. Im Admin-UI unter Einstellungen auf 'EXEs bauen' klicken.",
         )
     return FileResponse(path, media_type="application/octet-stream", filename=filename)
+
+
+_EXT_ID_RE = re.compile(r"^[a-p]{32}$")
+
+
+def _ext_dir(ext_id: str) -> str:
+    return os.path.join(os.path.dirname(database.DB_PATH), "ext", ext_id)
+
+
+@app.get("/ext/{ext_id}/update.xml")
+async def extension_update_manifest(ext_id: str):
+    """Omaha-Update-Manifest fuer eine self-hosted Chrome/Edge-Extension.
+    Public (kein Auth) — Browser pollen das. ext_id streng validiert."""
+    if not _EXT_ID_RE.fullmatch(ext_id):
+        raise HTTPException(status_code=400, detail="Invalid ext_id")
+    pkg = await database.get_extension_by_ext_id(ext_id)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Unknown extension")
+    proxy_url = (await runtime_value("proxy_public_url") or "").rstrip("/")
+    codebase = f"{proxy_url}/ext/{ext_id}/app.crx"
+    version = html.escape(pkg.get("ext_version") or "0", quote=True)
+    xml = (
+        "<?xml version='1.0' encoding='UTF-8'?>\n"
+        "<gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'>\n"
+        f"  <app appid='{ext_id}'>\n"
+        f"    <updatecheck codebase='{html.escape(codebase, quote=True)}' version='{version}' />\n"
+        "  </app>\n"
+        "</gupdate>\n"
+    )
+    return Response(content=xml, media_type="application/xml")
+
+
+@app.get("/ext/{ext_id}/app.crx")
+async def extension_crx(ext_id: str):
+    """Liefert die signierte CRX3. Public (kein Auth), signiert."""
+    if not _EXT_ID_RE.fullmatch(ext_id):
+        raise HTTPException(status_code=400, detail="Invalid ext_id")
+    path = os.path.join(_ext_dir(ext_id), "app.crx")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="CRX nicht vorhanden")
+    return FileResponse(
+        path,
+        media_type="application/x-chrome-extension",
+        filename=f"{ext_id}.crx",
+    )
 
 
 @app.get("/api/v1/file/{sha256}")

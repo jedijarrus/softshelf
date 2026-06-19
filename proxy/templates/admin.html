@@ -4913,6 +4913,7 @@ html[data-theme="dark"] .cm-s-softshelf-light .cm-bracket   { color: #d1d5db; }
 .pkg-type-pill.choco::before  { background: var(--blue); }
 .pkg-type-pill.custom::before { background: var(--violet); }
 .pkg-type-pill.plugin::before { background: var(--green, #16a34a); }
+.pkg-type-pill.extension::before { background: var(--cyan, #0891b2); }
 
 /* Agent-Mgmt v2.4: Version-Distribution-Banner + Filter-Chips + Bulk-Bar */
 .agent-ver-banner {
@@ -5955,6 +5956,7 @@ body.help-active [data-help]:not(.tab)::after {
         <button class="btn btn-ghost btn-sm" data-ptype="choco" onclick="setPkgTypeFilter('choco', this)">choco</button>
         <button class="btn btn-ghost btn-sm" data-ptype="custom" onclick="setPkgTypeFilter('custom', this)">custom</button>
         <button class="btn btn-ghost btn-sm" data-ptype="plugin" onclick="setPkgTypeFilter('plugin', this)">plugin</button>
+        <button class="btn btn-ghost btn-sm" data-ptype="extension" onclick="setPkgTypeFilter('extension', this)">extension</button>
       </div>
       <select class="input pkg-cat-filter" id="pkg-cat-filter" onchange="setPkgCatFilter(this.value)">
         <option value="">Alle Kategorien</option>
@@ -6444,6 +6446,7 @@ body.help-active [data-help]:not(.tab)::after {
         <button class="add-mode" data-mode="upload" onclick="setAddMode('upload')">EXE / MSI</button>
         <button class="add-mode" data-mode="folder" onclick="setAddMode('folder')">Programm-Ordner</button>
         <button class="add-mode" data-mode="plugin" onclick="setAddMode('plugin')">Plugin</button>
+        <button class="add-mode" data-mode="extension" onclick="setAddMode('extension')">Browser-Extension</button>
       </div>
     </div>
     <div class="add-modes-spacer"></div>
@@ -6614,6 +6617,42 @@ body.help-active [data-help]:not(.tab)::after {
     <div class="upload-actions">
       <button class="btn btn-ghost btn-sm" type="button" onclick="closeAll()">Abbrechen</button>
       <button class="btn btn-primary btn-sm" type="button" id="plugin-submit" onclick="doPluginUpload()">Hochladen</button>
+    </div>
+  </div>
+
+  <!-- Browser-Extension Upload (Chrome/Edge, self-hosted CRX) -->
+  <div class="add-section" id="add-extension">
+    <form class="upload-form" id="upload-form-extension" onsubmit="event.preventDefault(); doExtensionUpload();">
+      <div class="field">
+        <label>Extension-ZIP (Manifest V3)</label>
+        <label class="upload-drop" id="ext-drop">
+          <svg class="upload-drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <div class="upload-drop-text">ZIP waehlen oder hierher ziehen</div>
+          <div class="upload-drop-hint">.zip mit manifest.json im Wurzelverzeichnis</div>
+          <input type="file" id="ext-file" accept=".zip" onchange="onExtFileSelected(this.files[0])">
+        </label>
+        <div class="hint">Softshelf packt + signiert eine CRX3, leitet die Extension-ID ab und hostet update.xml. Deployt per Force-Install-Policy auf Chrome + Edge.</div>
+      </div>
+      <div class="field">
+        <label>Anzeigename</label>
+        <input class="input" id="ext-display" placeholder="aus manifest.json wenn leer">
+      </div>
+      <div class="field">
+        <label>Kategorie</label>
+        <input class="input" id="ext-category" value="Browser-Extensions">
+      </div>
+      <div class="field">
+        <label>Managed-Config (optional, JSON)</label>
+        <input class="input" id="ext-managed" placeholder='{"linkhub_url": "https://linkhub.example.com"}'>
+        <div class="hint">Vorbelegung der per <code>managed_schema.json</code> definierten Policy-Werte. Nur Keys aus dem Schema werden uebernommen. Spaeter ueber die Paket-Karte aenderbar.</div>
+      </div>
+      <div class="upload-progress" id="ext-upload-progress">
+        <div class="upload-progress-bar" id="ext-upload-progress-bar"></div>
+      </div>
+    </form>
+    <div class="upload-actions">
+      <button class="btn btn-ghost btn-sm" type="button" onclick="closeAll()">Abbrechen</button>
+      <button class="btn btn-primary btn-sm" type="button" id="ext-submit" onclick="doExtensionUpload()">Hochladen + signieren</button>
     </div>
   </div>
 
@@ -8077,7 +8116,7 @@ async function renderProfilePicker() {
       ${esc(label)} <span class="cnt">${counts[type] || 0}</span>
     </button>`;
   document.getElementById('profile-picker-filters').innerHTML =
-    chip('', 'Alle') + chip('winget', 'winget') + chip('choco', 'choco') + chip('custom', 'eigen') + chip('plugin', 'plugin');
+    chip('', 'Alle') + chip('winget', 'winget') + chip('choco', 'choco') + chip('custom', 'eigen') + chip('plugin', 'plugin') + chip('extension', 'extension');
 
   // Liste rendern
   const search = (document.getElementById('profile-picker-search')?.value || '').toLowerCase();
@@ -8622,8 +8661,9 @@ function renderPackages() {
     const isCustom = pkg.type === 'custom';
     const isWinget = pkg.type === 'winget';
     const isPlugin = pkg.type === 'plugin';
-    const typeClass = isWinget ? 'winget' : isCustom ? 'custom' : isPlugin ? 'plugin' : 'choco';
-    const typeLabel = isWinget ? 'winget' : isCustom ? 'custom' : isPlugin ? 'plugin' : 'choco';
+    const isExtension = pkg.type === 'extension';
+    const typeClass = isWinget ? 'winget' : isCustom ? 'custom' : isPlugin ? 'plugin' : isExtension ? 'extension' : 'choco';
+    const typeLabel = isWinget ? 'winget' : isCustom ? 'custom' : isPlugin ? 'plugin' : isExtension ? 'extension' : 'choco';
     let subText;
     if (isCustom) {
       subText = esc(pkg.filename || pkg.name) + (pkg.size_bytes ? ' · ' + fmtBytes(pkg.size_bytes) : '');
@@ -13289,6 +13329,7 @@ function setAddMode(mode) {
   document.getElementById('add-upload').classList.toggle('active', mode === 'upload');
   document.getElementById('add-folder').classList.toggle('active', mode === 'folder');
   document.getElementById('add-plugin').classList.toggle('active', mode === 'plugin');
+  document.getElementById('add-extension').classList.toggle('active', mode === 'extension');
   if (mode === 'choco') {
     setTimeout(() => document.getElementById('search-input').focus(), 100);
   } else if (mode === 'winget') {
@@ -13298,6 +13339,9 @@ function setAddMode(mode) {
     refreshStorageIndicator();
     loadPluginHosts();
     setTimeout(() => document.getElementById('plugin-display')?.focus(), 100);
+  } else if (mode === 'extension') {
+    refreshStorageIndicator();
+    setTimeout(() => document.getElementById('ext-display')?.focus(), 100);
   } else {
     refreshStorageIndicator();
     const focusId = mode === 'folder' ? 'folder-display' : 'upload-display';
@@ -13415,6 +13459,69 @@ async function doPluginUpload() {
     toast('Netzwerkfehler beim Upload', true);
   };
   xhr.open('POST', '/admin/api/upload-plugin');
+  xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+  xhr.send(fd);
+}
+
+function onExtFileSelected(file) {
+  if (!file) return;
+  const disp = document.getElementById('ext-display');
+  if (disp && !disp.value.trim()) {
+    disp.value = (file.name || '').replace(/\.zip$/i, '').replace(/[-_]+/g, ' ').trim();
+  }
+}
+
+async function doExtensionUpload() {
+  const fileEl = document.getElementById('ext-file');
+  const file = fileEl.files[0];
+  if (!file) { toast('Bitte erst ein ZIP waehlen', true); return; }
+  // managed-cfg JSON validieren (clientseitig)
+  const mraw = document.getElementById('ext-managed').value.trim();
+  if (mraw) {
+    try { const o = JSON.parse(mraw); if (typeof o !== 'object' || Array.isArray(o)) throw 0; }
+    catch (e) { toast('Managed-Config ist kein gueltiges JSON-Objekt', true); return; }
+  }
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('display_name', document.getElementById('ext-display').value.trim());
+  fd.append('category', document.getElementById('ext-category').value.trim() || 'Browser-Extensions');
+  fd.append('managed_cfg', mraw || '{}');
+
+  const submitBtn = document.getElementById('ext-submit');
+  const progress = document.getElementById('ext-upload-progress');
+  const progBar = document.getElementById('ext-upload-progress-bar');
+  submitBtn.disabled = true;
+  progress.classList.add('active');
+
+  const xhr = new XMLHttpRequest();
+  xhr.upload.onprogress = (e) => { if (e.lengthComputable) progBar.style.width = ((e.loaded / e.total) * 100) + '%'; };
+  xhr.onload = async () => {
+    submitBtn.disabled = false;
+    progress.classList.remove('active');
+    progBar.style.width = '0%';
+    if (xhr.status >= 200 && xhr.status < 300) {
+      let r = {}; try { r = JSON.parse(xhr.responseText); } catch (e) {}
+      toast('Extension gepackt + signiert: ' + (r.ext_id || ''));
+      showConfirm(
+        'Extension bereit',
+        'ID: ' + (r.ext_id || '?') + '\nVersion: ' + (r.ext_version || '?') +
+        '\nUpdate-URL: ' + (r.update_url || '?') +
+        '\n\nUeber "Verteilung" auf Agents pushen (setzt die Force-Install-Policy fuer Chrome + Edge).',
+        () => {}, 'OK', 'btn-primary'
+      );
+      fileEl.value = '';
+      document.getElementById('ext-display').value = '';
+      document.getElementById('ext-managed').value = '';
+      closeAll();
+      await loadEnabled();
+    } else {
+      let msg = 'Upload fehlgeschlagen';
+      try { const r = JSON.parse(xhr.responseText); if (r.detail) msg = r.detail; } catch (e) {}
+      toast(msg, true);
+    }
+  };
+  xhr.onerror = () => { submitBtn.disabled = false; progress.classList.remove('active'); toast('Netzwerkfehler beim Upload', true); };
+  xhr.open('POST', '/admin/api/upload-extension');
   xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
   xhr.send(fd);
 }

@@ -1655,6 +1655,102 @@ async def _try_queue_if_offline(
     return {"queued": True, "log_id": log_id, "reason": status}
 
 
+_EXT_ID_RE = re.compile(r"^[a-p]{32}$")
+_EXT_KEY_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
+_CHROME_POLICY_BASES = (
+    r"HKLM:\SOFTWARE\Policies\Google\Chrome",
+    r"HKLM:\SOFTWARE\Policies\Microsoft\Edge",
+)
+
+
+def _ext_managed_cfg_ps(ext_id: str, managed_cfg: dict) -> str:
+    """PS-Zeilen, die die managed-config-Werte unter 3rdparty\\extensions\\<id>\\policy
+    setzen. str->String, bool/int->DWord. Keys whitelisted, Werte escaped."""
+    lines = []
+    for k, v in (managed_cfg or {}).items():
+        if not _EXT_KEY_RE.fullmatch(str(k)):
+            continue
+        if isinstance(v, bool):
+            lines.append(f'  New-ItemProperty -Path $pol -Name "{k}" -Value {1 if v else 0} -PropertyType DWord -Force | Out-Null')
+        elif isinstance(v, int):
+            lines.append(f'  New-ItemProperty -Path $pol -Name "{k}" -Value {int(v)} -PropertyType DWord -Force | Out-Null')
+        else:
+            safe = str(v).replace("'", "''")
+            lines.append(f"  New-ItemProperty -Path $pol -Name \"{k}\" -Value '{safe}' -PropertyType String -Force | Out-Null")
+    return "\n".join(lines)
+
+
+async def _build_extension_install_command(pkg: dict) -> str:
+    """PS: forciert die Extension via ExtensionInstallForcelist + managed config
+    fuer Chrome UND Edge. Update-URL zeigt auf den Softshelf-Hosting-Endpoint."""
+    import json as _json
+    ext_id = pkg.get("ext_id") or ""
+    if not _EXT_ID_RE.fullmatch(ext_id):
+        raise HTTPException(status_code=500, detail="Paket hat keine gueltige ext_id")
+    proxy_url = (await _public_proxy_url()).rstrip("/")
+    update_url = f"{proxy_url}/ext/{ext_id}/update.xml"
+    try:
+        cfg = _json.loads(pkg.get("ext_managed_cfg") or "{}")
+    except Exception:
+        cfg = {}
+    cfg_ps = _ext_managed_cfg_ps(ext_id, cfg)
+    bases_ps = ",".join(f"'{b}'" for b in _CHROME_POLICY_BASES)
+    return f"""
+$ErrorActionPreference = 'Stop'
+$extId = '{ext_id}'
+$entry = "$extId;{update_url}"
+foreach ($base in @({bases_ps})) {{
+  $fl = Join-Path $base 'ExtensionInstallForcelist'
+  New-Item -Path $fl -Force | Out-Null
+  $slot = $null; $max = 0
+  $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
+  if ($props) {{
+    foreach ($p in $props.PSObject.Properties) {{
+      if ($p.Name -match '^[0-9]+$') {{
+        if ([int]$p.Name -gt $max) {{ $max = [int]$p.Name }}
+        if ($p.Value -like "$extId;*") {{ $slot = $p.Name }}
+      }}
+    }}
+  }}
+  if (-not $slot) {{ $slot = ($max + 1).ToString() }}
+  New-ItemProperty -Path $fl -Name $slot -Value $entry -PropertyType String -Force | Out-Null
+  $pol = Join-Path $base ('3rdparty\\extensions\\' + $extId + '\\policy')
+  New-Item -Path $pol -Force | Out-Null
+{cfg_ps}
+}}
+Write-Output "Extension $extId forciert (Chrome + Edge)"
+exit 0
+""".strip()
+
+
+def _build_extension_uninstall_command(pkg: dict) -> str:
+    """PS: entfernt die Force-Install-Zeile (per ext_id-Prefix) + den
+    3rdparty-managed-Key fuer Chrome UND Edge. Extension verschwindet beim
+    naechsten Browser-Policy-Refresh."""
+    ext_id = pkg.get("ext_id") or ""
+    if not _EXT_ID_RE.fullmatch(ext_id):
+        raise HTTPException(status_code=500, detail="Paket hat keine gueltige ext_id")
+    bases_ps = ",".join(f"'{b}'" for b in _CHROME_POLICY_BASES)
+    return f"""
+$ErrorActionPreference = 'Continue'
+$extId = '{ext_id}'
+foreach ($base in @({bases_ps})) {{
+  $fl = Join-Path $base 'ExtensionInstallForcelist'
+  $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
+  if ($props) {{
+    foreach ($p in $props.PSObject.Properties) {{
+      if ($p.Name -match '^[0-9]+$' -and $p.Value -like "$extId;*") {{
+        Remove-ItemProperty -Path $fl -Name $p.Name -ErrorAction SilentlyContinue
+      }}
+    }}
+  }}
+  Remove-Item -Path (Join-Path $base ('3rdparty\\extensions\\' + $extId)) -Recurse -Force -ErrorAction SilentlyContinue
+}}
+Write-Output "Extension $extId entfernt (Chrome + Edge)"
+exit 0
+""".strip()
+
+
 async def dispatch_install_for_agent(
     agent_id: str,
     hostname: str,
@@ -1790,6 +1886,24 @@ async def dispatch_install_for_agent(
             agent_id, hostname, package_name, pkg["display_name"],
             cmd, "install", "custom", log_id=log_id,
             run_as_user=bool(pkg.get("run_as_user")),
+        ))
+        action = "install"
+
+    elif ptype == "extension":
+        if not _is_safe_package_name(package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        inner_cmd = await _build_extension_install_command(pkg)
+        job_id = _generate_job_id()
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+        log_id = await _register_or_reuse_log(
+            existing_log_id, agent_id=agent_id, hostname=hostname,
+            package_name=package_name, display_name=pkg["display_name"],
+            pkg_type="extension", action="install", job_id=job_id,
+            workflow_run_id=workflow_run_id, triggered_by=triggered_by,
+        )
+        _spawn_bg(_deliver_command_bg(
+            agent_id, hostname, package_name, pkg["display_name"],
+            cmd, "install", "extension", log_id=log_id,
         ))
         action = "install"
 
@@ -1945,6 +2059,22 @@ async def dispatch_uninstall_for_agent(
             run_as_user=bool(pkg.get("run_as_user")),
         ))
 
+    elif ptype == "extension":
+        if not _is_safe_package_name(package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        inner_cmd = _build_extension_uninstall_command(pkg)
+        job_id = _generate_job_id()
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+        log_id = await _register_or_reuse_log(
+            existing_log_id, agent_id=agent_id, hostname=hostname,
+            package_name=package_name, display_name=pkg["display_name"],
+            pkg_type="extension", action="uninstall", job_id=job_id, triggered_by=triggered_by,
+        )
+        _spawn_bg(_deliver_command_bg(
+            agent_id, hostname, package_name, pkg["display_name"],
+            cmd, "uninstall", "extension", log_id=log_id,
+        ))
+
     else:
         if not _is_safe_package_name(package_name):
             raise HTTPException(status_code=400, detail="Ungültiger Paketname")
@@ -2037,6 +2167,9 @@ async def receive_callback(job_id: str, body: CallbackPayload):
         elif pkg_type == "plugin" and ec != 0:
             status = "error"
             error_summary = f"Plugin-Install beendete mit ExitCode {ec}"
+        elif pkg_type == "extension" and ec != 0:
+            status = "error"
+            error_summary = f"Extension-Policy beendete mit ExitCode {ec}"
         elif pkg_type == "script" and ec != 0:
             status = "error"
             error_summary = f"Script beendete mit ExitCode {ec}"

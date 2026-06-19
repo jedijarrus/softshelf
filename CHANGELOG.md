@@ -7,6 +7,44 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.8.0] – 2026-06-19
+
+Browser-Extensions als 5. Pakettyp: Admin laedt eine MV3-Extension-ZIP hoch,
+Softshelf packt + signiert serverseitig eine CRX3, leitet die Extension-ID ab,
+hostet update.xml + app.crx und verteilt per Enterprise-Force-Install-Policy
+auf Chrome + Edge ueber den bestehenden Tactical-Pfad. Kein Chrome/kein Store
+noetig, kein Agent-seitiger Client-Change.
+
+### Added
+
+- **Pakettyp `extension`** (Chrome/Edge, self-hosted). Neue packages-Spalten
+  `ext_private_key` (RSA-Signing-Key pro Extension, stabil ueber Re-Uploads),
+  `ext_id`, `ext_version`, `ext_managed_cfg`.
+- **`proxy/crx.py`** — CRX3-Packer + Extension-ID-Ableitung in reinem Python
+  (via `cryptography`, neue Abhaengigkeit). Manuelles Protobuf, RSA-PKCS1v15-
+  SHA256-Signatur. Gegen Chromium-Ground-Truth verifiziert.
+- **Upload** `POST /admin/api/upload-extension` — validiert MV3-Manifest,
+  parst `managed_schema.json`, generiert/wiederverwendet den Signing-Key,
+  packt die CRX, legt sie unter `data/ext/<ext_id>/` ab. Re-Upload erzwingt
+  steigende Version. `PATCH /admin/api/packages/{name}/ext-config` setzt die
+  Managed-Config (kein Repack noetig).
+- **Hosting** (public, signiert): `GET /ext/{ext_id}/update.xml` (Omaha) +
+  `GET /ext/{ext_id}/app.crx`. ext_id streng `^[a-p]{32}$`.
+- **Deploy** via Tactical: setzt `ExtensionInstallForcelist` + die
+  `3rdparty\extensions\<id>\policy`-Managed-Config fuer Chrome UND Edge;
+  Uninstall entfernt beide. Reuse des Dispatch-/Callback-Pfads.
+- **Admin-UI**: Add-Panel-Tab "Browser-Extension" (ZIP-Upload + Managed-Config),
+  Type-Pill/Filter "extension".
+
+### Caveats
+
+- Nur Chromium (Chrome/Edge). Firefox braucht AMO-Signierung — nicht im
+  Auto-Pfad.
+- Self-hosted Force-Install greift auf managed/domain-joined Geraeten.
+- `ext_private_key` ist die dauerhafte Identitaet der Extension — im
+  data-dir-Backup einschliessen.
+
+
 ## [2.7.0] – 2026-06-10
 
 Hardening-Release: Komplett-Review ueber Code, Logik, Security und Performance —
