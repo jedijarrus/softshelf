@@ -495,6 +495,15 @@ async def _queued_actions_tick():
                     )
                 continue
 
+            # Serialisierung: nur EIN Installer-Op gleichzeitig pro Agent.
+            # Laeuft schon einer, ueberspringen wir diesen Eintrag — der
+            # naechste Tick versucht es erneut, sobald der Slot frei ist.
+            # Verhindert dass die Queue alle gequeueten Installs auf einmal
+            # promotet und sie sich am Installer-Lock gegenseitig deadlocken.
+            if entry["action"] in ("install", "uninstall") and \
+                    await database.agent_has_inflight_install(agent_id):
+                continue
+
             pkg = await database.get_package(entry["package_name"])
             if not pkg:
                 logger.warning(
