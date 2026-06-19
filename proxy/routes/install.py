@@ -1748,7 +1748,6 @@ foreach ($base in @({bases_ps})) {{
 {cfg_ps}
 }}
 Write-Output "Extension $extId forciert (Chrome + Edge)"
-exit 0
 """.strip()
 
 
@@ -1776,7 +1775,6 @@ foreach ($base in @({bases_ps})) {{
   Remove-Item -Path (Join-Path $base ('3rdparty\\extensions\\' + $extId)) -Recurse -Force -ErrorAction SilentlyContinue
 }}
 Write-Output "Extension $extId entfernt (Chrome + Edge)"
-exit 0
 """.strip()
 
 
