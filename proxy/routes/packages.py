@@ -132,6 +132,33 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
             ))
             continue
 
+        if ptype == "extension":
+            # Browser-Extension-Status via agent_installations-Tracking
+            # (Force-Install-Policy gesetzt = installiert). installed_sha
+            # haelt die ausgerollte ext_version → outdated wenn < aktuell.
+            pname = row["name"]
+            t = tracked_by_pkg.get(pname)
+            is_installed = bool(t)
+            deployed_ver = (t or {}).get("installed_sha") if t else None
+            cur_ver = row.get("ext_version")
+            update_avail = bool(is_installed and cur_ver and deployed_ver
+                                and not winget_catalog.versions_equivalent(deployed_ver, cur_ver))
+            result.append(Package(
+                name=pname,
+                display_name=row["display_name"],
+                category=row.get("category", "Browser-Extensions"),
+                type="extension",
+                version=deployed_ver,
+                publisher=None,
+                installed=is_installed,
+                installed_version_label=deployed_ver,
+                current_version_label=cur_ver,
+                update_available=update_avail,
+                hide_uninstall=bool(row.get("hide_uninstall")),
+                process_check=row.get("process_check") or "",
+            ))
+            continue
+
         if ptype == "winget":
             # Status primaer aus agent_winget_state. Fallback: agent_installations
             # — wenn winget heuristisch via ARP installiert hat aber `winget list`
