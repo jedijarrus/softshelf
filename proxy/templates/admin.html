@@ -10759,7 +10759,7 @@ function openEditPanel(name) {
   // Versionen-Block fuer winget/choco ausblenden (nur custom hat Upload).
   // Plugin: kein Versions-Block, aber Summary + Push-Update sichtbar.
   const wantsVersionsBlock = isCustom;
-  const wantsSummary = isCustom || isPlugin;
+  const wantsSummary = isCustom || isPlugin || isExtension;
   document.getElementById('edit-versions-divider').style.display = wantsSummary ? '' : 'none';
   document.getElementById('version-list').style.display = wantsVersionsBlock ? '' : 'none';
   document.getElementById('version-upload').style.display = wantsVersionsBlock ? '' : 'none';

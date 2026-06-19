@@ -2113,6 +2113,24 @@ async def push_update(name: str, stage: str = "all"):
         return {"ok": True, "dispatched": dispatched,
                 "outdated": len(outdated), "failed": failed}
 
+    if ptype == "extension":
+        if not pkg.get("ext_id"):
+            raise HTTPException(status_code=400, detail="Extension ohne ext_id")
+        outdated = await database.get_outdated_extension_agents(name)
+        outdated = [a for a in outdated if a["agent_id"] in allowed_agents]
+        if not outdated:
+            return {"ok": True, "dispatched": 0, "message": "Keine outdated Agents in dieser Stage (Browser auto-updaten ohnehin)."}
+        dispatched = 0
+        failed: list[str] = []
+        for ag in outdated:
+            try:
+                await dispatch_upgrade_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg)
+                dispatched += 1
+            except Exception as e:
+                failed.append(f"{ag.get('hostname')}: {e}")
+        return {"ok": True, "dispatched": dispatched,
+                "outdated": len(outdated), "failed": failed}
+
     if ptype == "custom":
         if not pkg.get("sha256"):
             raise HTTPException(status_code=400, detail="Paket hat keine aktive Version")
@@ -3663,13 +3681,15 @@ async def get_distributions(
         total = current = outdated = unknown = 0
         current_label = None
 
-        if ptype == "custom":
+        if ptype in ("custom", "extension", "plugin"):
             summary = custom_summaries.get(pkg["name"], {})
             total    = summary.get("total", 0)
             current  = summary.get("current", 0)
             outdated = summary.get("outdated", 0)
             unknown  = summary.get("unknown", 0)
-            if pkg.get("current_version_id"):
+            if ptype == "extension":
+                current_label = pkg.get("ext_version")
+            elif pkg.get("current_version_id"):
                 current_label = version_labels.get(pkg["current_version_id"])
         elif ptype in ("winget", "choco"):
             # Outdated-Zaehlung muss die gleiche Heuristik nutzen wie die
