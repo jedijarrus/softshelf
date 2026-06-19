@@ -6803,6 +6803,22 @@ body.help-active [data-help]:not(.tab)::after {
         </div>
       </div>
 
+      <div class="field" id="edit-extension-field" style="display:none">
+        <div class="section-divider"><span class="label">Browser-Extension</span></div>
+        <div class="hint" id="ext-edit-info" style="margin-bottom:10px">—</div>
+        <label>Neue Version hochladen</label>
+        <label class="vu-trigger">
+          <span id="ext-vu-label">+ Neue Version (.zip)</span>
+          <input type="file" id="ext-vu-file" accept=".zip" onchange="onExtVersionFile(this.files[0])">
+        </label>
+        <div class="hint">Version im manifest.json muss hoeher sein. CRX wird mit demselben Key neu gepackt (gleiche ID) — Browser ziehen die neue Version automatisch ueber die update.xml.</div>
+        <button type="button" class="btn btn-sm btn-primary" id="ext-vu-submit" onclick="doExtensionVersionUpload()" style="display:none;margin-top:8px">Hochladen + neu signieren</button>
+        <label style="margin-top:14px">Managed-Config (JSON)</label>
+        <input class="input" id="ext-edit-managed" placeholder='{"linkhub_url":"https://..."}' style="font-family:var(--mono)">
+        <div class="hint">Policy-Werte aus dem managed_schema. Wirkt beim naechsten Ausrollen — kein Re-Pack noetig.</div>
+        <button type="button" class="btn btn-sm btn-ghost" onclick="saveExtManagedCfg()" style="margin-top:6px">Config speichern</button>
+      </div>
+
       <div class="field" id="edit-version-pin-field" style="display:none">
         <label data-help-block="Fixiert auf diese Version, kein Auto-Upgrade">Version-Pin</label>
         <div style="display:flex;gap:8px;align-items:center">
@@ -10723,6 +10739,23 @@ function openEditPanel(name) {
     document.getElementById('edit-version-list').style.display = 'none';
     document.getElementById('edit-version-pin-toggle').textContent = 'Versionen \u25be';
   }
+  // Extension-Sektion (Version, update.xml, Re-Upload, Managed-Config)
+  const isExtension = ptype === 'extension';
+  const extField = document.getElementById('edit-extension-field');
+  if (extField) {
+    if (isExtension) {
+      extField.style.display = '';
+      const url = window.location.origin + '/ext/' + (pkg.ext_id || '') + '/update.xml';
+      document.getElementById('ext-edit-info').innerHTML =
+        'ID: <code>' + esc(pkg.ext_id || '?') + '</code> &middot; Version: <b>' + esc(pkg.ext_version || '?') + '</b><br>update.xml: <code>' + esc(url) + '</code>';
+      document.getElementById('ext-edit-managed').value = pkg.ext_managed_cfg || '';
+      document.getElementById('ext-vu-submit').style.display = 'none';
+      document.getElementById('ext-vu-label').textContent = '+ Neue Version (.zip)';
+      const ev = document.getElementById('ext-vu-file'); if (ev) ev.value = '';
+    } else {
+      extField.style.display = 'none';
+    }
+  }
   // Versionen-Block fuer winget/choco ausblenden (nur custom hat Upload).
   // Plugin: kein Versions-Block, aber Summary + Push-Update sichtbar.
   const wantsVersionsBlock = isCustom;
@@ -13524,6 +13557,54 @@ async function doExtensionUpload() {
   xhr.open('POST', '/admin/api/upload-extension');
   xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
   xhr.send(fd);
+}
+
+function onExtVersionFile(file) {
+  document.getElementById('ext-vu-submit').style.display = file ? '' : 'none';
+  if (file) document.getElementById('ext-vu-label').textContent = file.name;
+}
+
+async function doExtensionVersionUpload() {
+  if (!_editingName) return;
+  const fileEl = document.getElementById('ext-vu-file');
+  const file = fileEl.files[0];
+  if (!file) { toast('Bitte ZIP waehlen', true); return; }
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('target_package', _editingName);
+  const btn = document.getElementById('ext-vu-submit');
+  btn.disabled = true; btn.textContent = 'Packe + signiere…';
+  const xhr = new XMLHttpRequest();
+  xhr.onload = async () => {
+    btn.disabled = false; btn.textContent = 'Hochladen + neu signieren';
+    if (xhr.status >= 200 && xhr.status < 300) {
+      let r = {}; try { r = JSON.parse(xhr.responseText); } catch (e) {}
+      toast('Neue Version ' + (r.ext_version || '') + ' gepackt — Browser auto-updaten');
+      closeAll();
+      await loadEnabled();
+    } else {
+      let msg = 'Update fehlgeschlagen';
+      try { const r = JSON.parse(xhr.responseText); if (r.detail) msg = r.detail; } catch (e) {}
+      toast(msg, true);
+    }
+  };
+  xhr.onerror = () => { btn.disabled = false; btn.textContent = 'Hochladen + neu signieren'; toast('Netzwerkfehler', true); };
+  xhr.open('POST', '/admin/api/upload-extension');
+  xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+  xhr.send(fd);
+}
+
+async function saveExtManagedCfg() {
+  if (!_editingName) return;
+  const raw = document.getElementById('ext-edit-managed').value.trim() || '{}';
+  let obj;
+  try { obj = JSON.parse(raw); if (typeof obj !== 'object' || Array.isArray(obj)) throw 0; }
+  catch (e) { toast('Kein gueltiges JSON-Objekt', true); return; }
+  try {
+    const r = await api('PATCH', `/admin/api/packages/${encodeURIComponent(_editingName)}/ext-config`, {managed_cfg: obj});
+    if (store[_editingName]) store[_editingName].ext_managed_cfg = JSON.stringify(r.managed_cfg || {});
+    toast('Managed-Config gespeichert');
+  } catch (e) {}
 }
 
 let _storageCache = null;
