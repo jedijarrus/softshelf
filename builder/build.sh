@@ -23,6 +23,7 @@ PRODUCT_SLUG="${PRODUCT_SLUG:-Softshelf}"
 PUBLISHER="${PUBLISHER:-$PRODUCT_SLUG}"
 CLIENT_APP_NAME="${CLIENT_APP_NAME:-$PRODUCT_SLUG}"
 ICON_PATH="${ICON_PATH:-}"
+ICON_ICO_B64="${ICON_ICO_B64:-}"
 
 # Defense-in-depth: Slug wird in Dateinamen, Shell-Commands und Python-Code
 # eingebettet. Der Proxy validiert schon beim Settings-Save, wir validieren
@@ -68,7 +69,7 @@ echo
 # _build_config.py + _version.py via Python erzeugen, damit die Werte
 # garantiert mit repr() escaped sind und kein Shell/Heredoc-Injection
 # entstehen kann (PROXY_URL und PRODUCT_SLUG kommen aus dem Admin-UI).
-PROXY_URL="$PROXY_URL" VERSION="$VERSION" PRODUCT_SLUG="$PRODUCT_SLUG" PUBLISHER="$PUBLISHER" CLIENT_APP_NAME="$CLIENT_APP_NAME" python3 - <<'PYEOF'
+PROXY_URL="$PROXY_URL" VERSION="$VERSION" PRODUCT_SLUG="$PRODUCT_SLUG" PUBLISHER="$PUBLISHER" CLIENT_APP_NAME="$CLIENT_APP_NAME" ICON_ICO_B64="$ICON_ICO_B64" python3 - <<'PYEOF'
 import os
 import re
 
@@ -77,6 +78,7 @@ version     = os.environ["VERSION"]
 slug        = os.environ["PRODUCT_SLUG"]
 publisher   = os.environ["PUBLISHER"]
 app_name    = os.environ["CLIENT_APP_NAME"]
+icon_b64    = os.environ.get("ICON_ICO_B64", "")
 
 # Defensive validation: keine Steuerzeichen, keine Quotes, keine Backslashes
 # fuer proxy_url/version (landen in Python-Strings + PowerShell-Commands)
@@ -96,6 +98,13 @@ if not _DISPLAY_RE.match(publisher):
 if not _DISPLAY_RE.match(app_name):
     raise SystemExit(f"Illegal CLIENT_APP_NAME: {app_name!r}")
 
+# Branding-Icon: nur base64-Alphabet zulassen (der Proxy validiert schon
+# base64 + ICO-Magic + Groesse; hier defense-in-depth gegen Injection, da
+# der Wert als String-Literal ins _build_config.py landet).
+if icon_b64 and not re.fullmatch(r"[A-Za-z0-9+/=\s]{0,15000000}", icon_b64):
+    raise SystemExit("Illegal ICON_ICO_B64 (nicht-base64-Zeichen)")
+icon_b64 = "".join(icon_b64.split())  # Whitespace raus
+
 with open("_build_config.py", "w", encoding="utf-8") as f:
     f.write("# Generated at build time - do not edit\n")
     f.write(f"DEFAULT_PROXY_URL = {proxy_url!r}\n")
@@ -103,6 +112,7 @@ with open("_build_config.py", "w", encoding="utf-8") as f:
     f.write(f"PRODUCT_SLUG = {slug!r}\n")
     f.write(f"PUBLISHER = {publisher!r}\n")
     f.write(f"CLIENT_APP_NAME = {app_name!r}\n")
+    f.write(f"ICON_ICO_B64 = {icon_b64!r}\n")
 with open("_version.py", "w", encoding="utf-8") as f:
     f.write(f"__version__ = {version!r}\n")
 PYEOF
