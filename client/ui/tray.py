@@ -24,7 +24,25 @@ import webview
 from api_client import KioskApiClient
 from _version import __version__
 
+try:
+    from _build_config import ICON_ICO_B64 as _BAKED_ICON_B64
+except Exception:
+    _BAKED_ICON_B64 = ""
+
 HEALTH_INTERVAL = 60  # seconds between health checks
+
+
+def _decode_baked_icon() -> "Image.Image | None":
+    """Eingebackenes Branding-Icon (base64 ICO) laden. Damit zeigt der Tray
+    auch OHNE Serververbindung (Home-Office ohne VPN beim Start) sofort das
+    richtige Icon statt des generierten Fallback-Quadrats."""
+    if not _BAKED_ICON_B64:
+        return None
+    try:
+        import base64
+        return Image.open(io.BytesIO(base64.b64decode(_BAKED_ICON_B64))).convert("RGBA")
+    except Exception:
+        return None
 
 
 def _create_fallback_icon(offline: bool = False) -> Image.Image:
@@ -53,7 +71,10 @@ class KioskTray:
         self._api = api
         self._app_name = app_name
         self._icon: pystray.Icon | None = None
-        self._custom_icon: Image.Image | None = None
+        # Default = eingebackenes Branding-Icon (offline-korrekt). Der
+        # Server-Fetch (_load_custom_icon_async) ueberschreibt es spaeter
+        # falls der Server ein (evtl. neueres) Icon liefert.
+        self._custom_icon: Image.Image | None = _decode_baked_icon()
         self._is_online: bool | None = None
         self._stop_health = threading.Event()
         self._health_thread: threading.Thread | None = None
@@ -182,6 +203,29 @@ class KioskTray:
         self._is_online = online
         self._update_tray_visuals()
         self._notify_window(online)
+        # Kam die Verbindung (zurueck)? Branding (Name + Icon) nachziehen —
+        # sonst bleibt ein offline gestarteter Client (Home-Office ohne VPN)
+        # bis zum Neustart auf dem eingebackenen/Fallback-Stand haengen,
+        # auch wenn spaeter Verbindung da ist.
+        if online:
+            self._refresh_branding_async()
+
+    def _refresh_branding_async(self):
+        """Name + Custom-Icon vom Server neu laden (best-effort, non-blocking).
+        Wird beim offline->online-Uebergang getriggert."""
+        self._load_custom_icon_async()
+
+        def name_job():
+            try:
+                meta = self._api.get_client_config()
+                name = meta.get("app_name")
+                if name:
+                    self.update_app_name(name)
+            except Exception:
+                pass
+        threading.Thread(
+            target=name_job, daemon=True, name="KioskBrandingRefresh",
+        ).start()
 
     def _update_tray_visuals(self):
         if not self._icon:

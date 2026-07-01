@@ -203,6 +203,11 @@ async def build(req: BuildRequest, x_build_auth: str | None = Header(default=Non
         env["OUTPUT_DIR"] = "/app/downloads"
         if icon_path:
             env["ICON_PATH"] = icon_path
+        # Branding-Icon zusaetzlich als base64 einbacken (nicht nur als
+        # PyInstaller --icon = EXE-Datei-Icon), damit der Tray es offline
+        # sofort als Icon nutzt statt des generierten Fallback-Quadrats.
+        if req.icon_ico_b64:
+            env["ICON_ICO_B64"] = req.icon_ico_b64
 
         try:
             proc = await asyncio.create_subprocess_exec(

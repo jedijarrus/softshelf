@@ -19,3 +19,8 @@ BUILD_VERSION = "1.6.0"
 PRODUCT_SLUG = "Softshelf"
 PUBLISHER = "Softshelf"
 CLIENT_APP_NAME = "Softshelf"
+# Branding-Icon (ICO als base64) wird vom Builder eingebacken, damit der
+# Tray auch OHNE Serververbindung (Home-Office ohne VPN beim Start) sofort
+# das richtige Icon zeigt statt des generierten Fallback-Quadrats. Leer =
+# kein eingebackenes Icon (dann generiertes Fallback).
+ICON_ICO_B64 = ""
