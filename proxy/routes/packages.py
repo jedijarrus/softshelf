@@ -181,8 +181,19 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
                 version = installed_version or None
                 publisher = row.get("winget_publisher") or None
                 installed_label = installed_version or None
-                current_label = available_version or None
-                update_avail = bool(available_version)
+                pin = row.get("version_pin")
+                if pin:
+                    # Version-Pin: der Kiosk zeigt die gepinnte Version als Ziel
+                    # und bietet nur ein Update AUF den Pin an, nie darueber hinaus.
+                    # installed == pin -> kein Update; installed > pin -> auch kein
+                    # Update-Flag (echtes Downgrade waere ein eigenes Feature).
+                    current_label = pin
+                    update_avail = (not os_managed) and winget_catalog.is_outdated(
+                        installed_version or None, pin
+                    )
+                else:
+                    current_label = available_version or None
+                    update_avail = bool(available_version)
             elif tracked_by_pkg.get(wid):
                 # Heuristisch installiert via Softshelf — Kiosk soll's als
                 # installiert anzeigen, ohne Versions-Info.
@@ -239,7 +250,12 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
                     is_installed = True
                     version = cs_installed
                     installed_label = cs_installed
-                if cs_avail:
+                pin = row.get("version_pin")
+                if pin:
+                    # Version-Pin: Kiosk zeigt die gepinnte Version, Update nur AUF den Pin.
+                    current_label = pin
+                    update_avail = winget_catalog.is_outdated(cs_installed or None, pin)
+                elif cs_avail:
                     current_label = cs_avail
                     update_avail = True
 
