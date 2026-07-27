@@ -73,6 +73,7 @@ class Package:
     installed_version_label: str | None = None
     current_version_label: str | None = None
     update_available: bool = False
+    downgrade_available: bool = False
     hide_uninstall: bool = False
     process_check: str = ""
     plugin_host: str | None = None
@@ -156,6 +157,7 @@ class KioskApiClient:
                     installed_version_label=p.get("installed_version_label"),
                     current_version_label=p.get("current_version_label"),
                     update_available=p.get("update_available", False),
+                    downgrade_available=p.get("downgrade_available", False),
                     hide_uninstall=p.get("hide_uninstall", False),
                     process_check=p.get("process_check", "") or "",
                     plugin_host=p.get("plugin_host"),
@@ -181,6 +183,15 @@ class KioskApiClient:
             )
             r.raise_for_status()
             return r.json().get("message", "Deinstallation gestartet.")
+
+    def downgrade_package(self, package_name: str) -> str:
+        with self._client() as c:
+            r = c.post(
+                f"{self._base}/api/v1/downgrade",
+                json={"package_name": package_name},
+            )
+            r.raise_for_status()
+            return r.json().get("message", "Downgrade gestartet.")
 
     def get_client_config(self) -> dict:
         """

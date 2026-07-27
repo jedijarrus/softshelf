@@ -1186,10 +1186,12 @@ function renderRow(pkg) {{
   const initial = (pkg.display_name || '?')[0].toUpperCase();
   const isBusy = busyPkg === pkg.name;
   const isUpdate = pkg.update_available;
-  const isInstalled = pkg.installed && !isUpdate;
+  const isDowngrade = pkg.downgrade_available && !isUpdate;
+  const isInstalled = pkg.installed && !isUpdate && !isDowngrade;
 
   let rowClass = 'pkg-row';
   if (isUpdate) rowClass += ' update-row';
+  else if (isDowngrade) rowClass += ' update-row';
   else if (isInstalled) rowClass += ' installed';
 
   // Meta line
@@ -1206,6 +1208,10 @@ function renderRow(pkg) {{
     meta = `<span class="update-label">Update: ${{escHtml(pkg.installed_version_label)}} \\u2192 ${{escHtml(pkg.current_version_label)}}</span>`;
   }} else if (isUpdate) {{
     meta = `<span class="update-label">Update verf\\u00FCgbar</span>`;
+  }} else if (isDowngrade && pkg.installed_version_label && pkg.current_version_label) {{
+    meta = `<span class="update-label">Wechsel: ${{escHtml(pkg.installed_version_label)}} \\u2192 ${{escHtml(pkg.current_version_label)}}</span>`;
+  }} else if (isDowngrade) {{
+    meta = `<span class="update-label">Auf gepinnte Version wechseln</span>`;
   }} else if (pkg.installed && pkg.version) {{
     meta = `${{escHtml(source)}} \\u00B7 ${{escHtml(pkg.version)}}`;
   }} else if (pkg.installed) {{
@@ -1226,6 +1232,13 @@ function renderRow(pkg) {{
       ? ''
       : `<button class="btn btn-uninstall-ghost" onclick="doUninstall('${{escAttr(pkg.name)}}')">Deinstallieren</button>`;
     btn = `<button class="btn btn-update" onclick="doInstall('${{escAttr(pkg.name)}}')">Updaten</button>${{uninstBtn}}`;
+  }} else if (isDowngrade) {{
+    // Downgrade AUF den Pin: primary "Auf <pin>" + ghost Deinstallieren.
+    const uninstBtnD = pkg.hide_uninstall
+      ? ''
+      : `<button class="btn btn-uninstall-ghost" onclick="doUninstall('${{escAttr(pkg.name)}}')">Deinstallieren</button>`;
+    const tgtLbl = pkg.current_version_label ? escHtml(pkg.current_version_label) : 'Pin';
+    btn = `<button class="btn btn-update" onclick="doDowngrade('${{escAttr(pkg.name)}}')">Auf ${{tgtLbl}}</button>${{uninstBtnD}}`;
   }} else if (isInstalled) {{
     if (pkg.hide_uninstall) {{
       btn = `<span class="btn btn-installed">Installiert</span>`;
@@ -1337,6 +1350,56 @@ async function doUninstall(name) {{
     busyPkg = null;
     renderPackages();
   }}
+}}
+
+async function doDowngrade(name) {{
+  if (busyPkg) {{
+    showToast('Bitte warten \\u2014 andere Aktion l\\u00E4uft noch.', false);
+    return;
+  }}
+  const pkg = (packages || []).find(p => p.name === name);
+  const tgt = (pkg && pkg.current_version_label) || '';
+  const proceed = await showDowngradeConfirm((pkg && pkg.display_name) || name, tgt);
+  if (!proceed) return;
+  busyPkg = name;
+  renderPackages();
+  try {{
+    const msg = await pywebview.api.downgrade_package(name);
+    showToast(msg, true);
+    setTimeout(loadPackages, 800);
+  }} catch (e) {{
+    const m = e.message || 'Fehler beim Zur\\u00FCckstufen';
+    if (m.indexOf('__TOKEN_REVOKED__') !== -1) {{ showRevokedOverlay(); return; }}
+    showToast(m, false);
+  }} finally {{
+    busyPkg = null;
+    renderPackages();
+  }}
+}}
+
+function showDowngradeConfirm(displayName, targetVer) {{
+  return new Promise(resolve => {{
+    const ov = document.createElement('div');
+    ov.className = 'proc-modal-overlay';
+    const tv = targetVer ? escHtml(targetVer) : 'gepinnte Version';
+    ov.innerHTML = `
+      <div class="proc-modal">
+        <div class="proc-modal-icon">\\u2193</div>
+        <div class="proc-modal-title">${{escHtml(displayName)}} auf ${{tv}} wechseln</div>
+        <div class="proc-modal-body">
+          Die aktuelle Version wird deinstalliert und die gepinnte Version installiert.
+          Lokale App-Daten k\\u00F6nnen dabei verloren gehen. Das kann ein paar Minuten dauern.
+        </div>
+        <div class="proc-modal-actions">
+          <button class="proc-btn proc-btn-cancel">Abbrechen</button>
+          <button class="proc-btn proc-btn-retry">Zur\\u00FCckstufen</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    const cleanup = (val) => {{ ov.remove(); resolve(val); }};
+    ov.querySelector('.proc-btn-cancel').onclick = () => cleanup(false);
+    ov.querySelector('.proc-btn-retry').onclick = () => cleanup(true);
+  }});
 }}
 
 // ─── UI Helpers ───
@@ -1597,6 +1660,7 @@ class PackageApi:
                     "installed_version_label": p.installed_version_label,
                     "current_version_label": p.current_version_label,
                     "update_available": p.update_available,
+                    "downgrade_available": getattr(p, "downgrade_available", False),
                     "hide_uninstall": getattr(p, "hide_uninstall", False),
                     "process_check": getattr(p, "process_check", "") or "",
                     "plugin_host": getattr(p, "plugin_host", None),
@@ -1660,6 +1724,13 @@ class PackageApi:
         """Trigger uninstall via proxy."""
         try:
             return self._api.uninstall_package(name)
+        except Exception as e:
+            raise Exception(_format_http_error(e))
+
+    def downgrade_package(self, name: str) -> str:
+        """Trigger Downgrade auf die gepinnte Version via proxy."""
+        try:
+            return self._api.downgrade_package(name)
         except Exception as e:
             raise Exception(_format_http_error(e))
 

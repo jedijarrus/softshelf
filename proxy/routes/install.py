@@ -1271,19 +1271,25 @@ def _build_choco_command(
     Optional version pin (nur bei install): erzwingt eine bestimmte choco-
     Paket-Version via `--version=...`.
     """
-    if action not in ("install", "uninstall"):
+    if action not in ("install", "uninstall", "downgrade"):
         raise ValueError(f"unsupported choco action: {action}")
     if not _CHOCO_NAME_RE.fullmatch(package_name):
         raise HTTPException(status_code=400, detail=f"Ungültiger choco-Paketname: {package_name!r}")
     if version is not None and not _CHOCO_VERSION_RE.fullmatch(version):
         raise HTTPException(status_code=400, detail=f"Ungültige choco-Version: {version!r}")
+    if action == "downgrade" and not version:
+        raise HTTPException(status_code=400, detail="Downgrade braucht eine Ziel-Version (version_pin)")
     safe = package_name  # regex-validiert, keine Escapes nötig
-    if action == "install":
+    if action in ("install", "downgrade"):
         ver_arg = f" --version='{version}'" if version else ""
         # --force = Reinstall (choco skipped sonst bereits installierte
         # Pakete mit „already installed"); gesetzt vom Reinstall-Button.
-        force_arg = " --force" if force else ""
-        choco_args = f"install '{safe}' -y --no-progress --limit-output{force_arg}{ver_arg}"
+        # downgrade: --allow-downgrade + --force erzwingt den Wechsel auf die
+        # (aeltere) gepinnte Version; choco lehnt sonst „a newer version is
+        # already installed" ab.
+        force_arg = " --force" if (force or action == "downgrade") else ""
+        downgrade_arg = " --allow-downgrade" if action == "downgrade" else ""
+        choco_args = f"install '{safe}' -y --no-progress --limit-output{force_arg}{downgrade_arg}{ver_arg}"
     else:
         # --remove-dependencies (-x) entfernt zusätzlich alle Sub-Pakete die
         # NUR von diesem Paket benötigt wurden. Wichtig für Metapakete wie
@@ -1776,6 +1782,164 @@ foreach ($base in @({bases_ps})) {{
 }}
 Write-Output "Extension $extId entfernt (Chrome + Edge)"
 """.strip()
+
+
+def _build_winget_downgrade_command(
+    winget_id: str,
+    version: str,
+    *,
+    include_scope_machine: bool = True,
+    extra_args: str = "",
+    display_name: str = "",
+    uninstall_override: str = "",
+) -> str:
+    """Downgrade auf eine gepinnte (aeltere) winget-Version.
+
+    winget kann nicht in-place downgraden ('a newer version is already
+    installed'). Wir komponieren daher: erst uninstall der aktuellen Version
+    (mit dem bewaehrten ARP/NSIS-Fallback), dann install der Ziel-Version mit
+    --force. Erfolg wird ueber den nachgelagerten Re-Scan (installed == pin)
+    bestimmt; der Bootstrap-Exit ist der des finalen install-Schritts.
+    """
+    if not version:
+        raise HTTPException(status_code=400, detail="Downgrade braucht eine Ziel-Version (version_pin)")
+    uninstall_part = _build_winget_command(
+        "uninstall", winget_id,
+        extra_args="",
+        display_name=display_name,
+        uninstall_override=uninstall_override,
+    )
+    install_part = _build_winget_command(
+        "install", winget_id, version=version,
+        include_scope_machine=include_scope_machine,
+        extra_args=extra_args,
+        force=True,
+    )
+    safe_ver = version.replace("'", "''")[:50]
+    return (
+        "_sfProgress 'Downgrade Schritt 1/2: aktuelle Version entfernen...'\n"
+        + uninstall_part
+        + "\nStart-Sleep -Seconds 3\n"
+        + f"_sfProgress 'Downgrade Schritt 2/2: gepinnte Version {safe_ver} installieren...'\n"
+        + install_part
+    )
+
+
+async def dispatch_downgrade_for_agent(
+    agent_id: str,
+    hostname: str,
+    pkg: dict,
+    allow_duplicate: bool = False,
+    triggered_by: str | None = None,
+) -> dict:
+    """Downgrade eines (Agent, Paket)-Pairs auf die gepinnte Version.
+
+    Nur fuer winget + choco mit gesetztem version_pin. winget = uninstall +
+    install@pin, choco = install --version=pin --allow-downgrade --force.
+    Ergebnis kommt via Callback; ein nachgelagerter Re-Scan aktualisiert den
+    State. Dedup wie bei install/uninstall.
+    """
+    package_name = pkg["name"]
+    ptype = pkg.get("type") or "choco"
+    pin = (pkg.get("version_pin") or "").strip()
+    if ptype not in ("winget", "choco"):
+        raise HTTPException(status_code=400, detail="Downgrade nur fuer winget/choco moeglich")
+    if not pin:
+        raise HTTPException(status_code=400, detail="Paket hat keinen version_pin — Downgrade nicht moeglich")
+
+    if not allow_duplicate:
+        existing = await database.has_pending_action(agent_id, package_name)
+        if existing:
+            raise HTTPException(status_code=409, detail=(
+                f"Bereits eine Aktion fuer '{package_name}' auf {hostname} in Arbeit "
+                f"(id={existing['id']}, status={existing['status']}, action={existing['action']})."
+            ))
+
+    if ptype == "winget":
+        _check_winget_id(package_name)
+        scope = pkg.get("winget_scope") or "auto"
+        include_scope_machine = scope != "user"
+        inner_cmd = _build_winget_downgrade_command(
+            package_name, pin,
+            include_scope_machine=include_scope_machine,
+            extra_args=pkg.get("install_args") or "",
+            display_name=pkg.get("display_name") or "",
+            uninstall_override=(pkg.get("uninstall_cmd") or "").strip(),
+        )
+        job_id = _generate_job_id()
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+        import json as _json
+        meta = _json.dumps({"winget_scope": scope, "winget_id": package_name,
+                            "version": pin, "downgrade": True})
+        log_id = await database.create_action_log(
+            agent_id, hostname, package_name, pkg["display_name"],
+            "winget", "downgrade", job_id=job_id, metadata=meta, triggered_by=triggered_by,
+        )
+        _spawn_bg(_deliver_command_bg(
+            agent_id, hostname, package_name, pkg["display_name"],
+            cmd, "downgrade", "winget", log_id=log_id,
+            run_as_user=_is_msstore_id(package_name),
+        ))
+    else:  # choco
+        if not _is_safe_package_name(package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        inner_cmd = _build_choco_command("downgrade", package_name, version=pin)
+        job_id = _generate_job_id()
+        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+        log_id = await database.create_action_log(
+            agent_id, hostname, package_name, pkg["display_name"],
+            "choco", "downgrade", job_id=job_id, triggered_by=triggered_by,
+        )
+        _spawn_bg(_deliver_command_bg(
+            agent_id, hostname, package_name, pkg["display_name"],
+            cmd, "downgrade", "choco", log_id=log_id,
+        ))
+
+    return {"action": "downgrade", "package_name": package_name, "type": ptype,
+            "status": "started", "log_id": log_id, "target_version": pin}
+
+
+@router.post("/downgrade", response_model=SoftwareResponse)
+async def downgrade_package(
+    body: SoftwareRequest,
+    token: dict = Depends(verify_machine_token),
+):
+    """Kiosk-getriggertes Downgrade auf die gepinnte Version (nur wenn
+    installiert > pin). winget/choco."""
+    import winget_catalog as _wc
+    agent_id = token["agent_id"]
+    hostname = token["hostname"]
+    _ag_row = await database.get_agent(agent_id)
+    _u = ((_ag_row or {}).get('logged_in_user') or '').strip()
+    triggered_by = f"kiosk:{_u}" if _u else "kiosk"
+
+    pkg = await database.get_package(body.package_name)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Paket nicht freigegeben")
+    ptype = pkg.get("type") or "choco"
+    if ptype not in ("winget", "choco"):
+        raise HTTPException(status_code=400, detail="Downgrade nur fuer winget/choco")
+    pin = (pkg.get("version_pin") or "").strip()
+    if not pin:
+        raise HTTPException(status_code=400, detail="Paket ist nicht gepinnt")
+
+    if ptype == "winget":
+        st = (await database.get_agent_winget_state(agent_id)).get(body.package_name)
+    else:
+        st = (await database.get_agent_choco_state(agent_id)).get(body.package_name.lower())
+    installed = (st or {}).get("installed_version")
+    if not installed or not _wc.is_outdated(pin, installed):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Kein Downgrade noetig (installiert={installed}, pin={pin})",
+        )
+
+    await dispatch_downgrade_for_agent(agent_id, hostname, pkg, triggered_by=triggered_by)
+    return SoftwareResponse(
+        status="started",
+        message=(f"Downgrade von '{pkg['display_name']}' auf {pin} auf {hostname} "
+                 f"gestartet. Das kann einige Minuten dauern."),
+    )
 
 
 async def dispatch_install_for_agent(
@@ -2327,7 +2491,7 @@ async def receive_callback(job_id: str, body: CallbackPayload):
     if (status == "error"
         and pkg_type == "winget"
         and body.exit_code == _WINGET_NO_APPLICABLE_INSTALLER
-        and entry["action"] in ("install", "upgrade")):
+        and entry["action"] in ("install", "upgrade", "downgrade")):
         import json as _json
         meta = {}
         try:
@@ -2340,14 +2504,25 @@ async def receive_callback(job_id: str, body: CallbackPayload):
             logger.info("winget per-user retry: %s auf %s", winget_id, entry["hostname"])
             # extra_args aus pkg-Setting nachladen (auch im Retry-Pfad)
             retry_pkg = await database.get_package(winget_id)
-            inner_cmd = _build_winget_command(
-                entry["action"], winget_id, ver, include_scope_machine=False,
-                extra_args=(retry_pkg or {}).get("install_args") or "",
-                process_check=(retry_pkg or {}).get("process_check") or "",
-            )
+            if entry["action"] == "downgrade":
+                # Ganze Downgrade-Sequenz (uninstall+install@pin) im User-Kontext
+                # neu bauen — der SYSTEM-Versuch fand die per-user-App nicht.
+                inner_cmd = _build_winget_downgrade_command(
+                    winget_id, ver, include_scope_machine=False,
+                    extra_args=(retry_pkg or {}).get("install_args") or "",
+                    display_name=(retry_pkg or {}).get("display_name") or "",
+                    uninstall_override=((retry_pkg or {}).get("uninstall_cmd") or "").strip(),
+                )
+            else:
+                inner_cmd = _build_winget_command(
+                    entry["action"], winget_id, ver, include_scope_machine=False,
+                    extra_args=(retry_pkg or {}).get("install_args") or "",
+                    process_check=(retry_pkg or {}).get("process_check") or "",
+                )
             retry_job = _generate_job_id()
             retry_cmd = await _build_script_and_bootstrap(inner_cmd, retry_job)
-            retry_meta = _json.dumps({"winget_scope": "user", "winget_id": winget_id, "is_retry": True})
+            retry_meta = _json.dumps({"winget_scope": "user", "winget_id": winget_id,
+                                      "version": ver, "is_retry": True})
             retry_lid = await database.create_action_log(
                 entry["agent_id"], entry["hostname"], entry["package_name"],
                 entry["display_name"], "winget", entry["action"],
