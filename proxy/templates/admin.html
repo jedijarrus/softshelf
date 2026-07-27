@@ -11958,6 +11958,10 @@ function renderDistAgents(data) {
     const updateBtn = a.outdated
       ? `<button class="update" onclick="installOnAgent(${jsStr(a.agent_id)},${jsStr(pkg.name)},${jsStr(a.hostname || '')}, this)">Update</button>`
       : '';
+    // Downgrade AUF den Pin: nur wenn installiert > version_pin (backend-Flag).
+    const downgBtn = a.needs_downgrade
+      ? `<button class="update" title="Auf gepinnte Version zurückstufen" onclick="downgradeOnAgent(${jsStr(a.agent_id)},${jsStr(pkg.name)},${jsStr(a.hostname || '')},${jsStr(pkg.display_name)},${jsStr(pkg.target_version || '')}, this)">↓ Pin</button>`
+      : '';
     const uninstBtn = `<button class="danger" onclick="uninstallOnAgent(${jsStr(a.agent_id)},${jsStr(pkg.name)},${jsStr(a.hostname || '')},${jsStr(pkg.display_name)}, this)">Entfernen</button>`;
     return `
       <div class="dist-agent-row ${a.outdated ? 'outdated' : ''}">
@@ -11965,7 +11969,7 @@ function renderDistAgents(data) {
           <a class="dar-name" href="#agents/${esc(a.agent_id)}" style="color:var(--fg);text-decoration:none" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${esc(a.hostname || '—')}</a>
         </div>
         <div class="dar-version">${esc(ver)}${av}</div>
-        <div class="dar-actions">${updateBtn}${uninstBtn}</div>
+        <div class="dar-actions">${updateBtn}${downgBtn}${uninstBtn}</div>
       </div>`;
   }).join('');
 }
@@ -12011,6 +12015,33 @@ function uninstallOnAgent(agentId, pkgName, hostname, displayName, btnEl) {
       }
     },
     'Entfernen'
+  );
+}
+
+function downgradeOnAgent(agentId, pkgName, hostname, displayName, targetVer, btnEl) {
+  showConfirm(
+    `„${displayName}" auf ${targetVer || 'Pin'} zurückstufen`,
+    `Auf ${hostname} wird „${displayName}" auf die gepinnte Version ${targetVer || ''} zurückgestuft `
+    + `(deinstallieren + gepinnte Version installieren). Lokale App-Daten können dabei verloren gehen. `
+    + `Das kann ein paar Minuten dauern.`,
+    async () => {
+      const orig = btnEl.innerHTML;
+      btnEl.disabled = true;
+      btnEl.innerHTML = '…';
+      try {
+        const _resp = await api('POST',
+          `/admin/api/agents/${encodeURIComponent(agentId)}/downgrade/${encodeURIComponent(pkgName)}`);
+        const _r = await handleDispatchResponse(_resp, () => {
+          toast(`Downgrade auf ${hostname} gestartet`);
+          setTimeout(() => { loadDistributions(); if (_distAgentsPkg) loadDistAgents(); }, 3000);
+        });
+        if (_r !== 'dispatched') { btnEl.disabled = false; btnEl.innerHTML = orig; }
+      } catch (e) {
+        btnEl.disabled = false;
+        btnEl.innerHTML = orig;
+      }
+    },
+    'Zurückstufen'
   );
 }
 

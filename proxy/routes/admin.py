@@ -1928,8 +1928,12 @@ async def list_package_agents(
     needle = (q or "").strip().lower()
 
     target_version = await resolve_target_version(pkg)
+    pin_ver = (pkg.get("version_pin") or "").strip()
 
     agents: list[dict] = []
+    def _needs_downgrade(installed: str | None) -> bool:
+        # Downgrade nur wenn ein version_pin gesetzt ist UND installiert > pin.
+        return bool(pin_ver) and bool(installed) and winget_catalog.is_outdated(pin_ver, installed)
     def _outdated(installed: str | None, available: str | None) -> bool:
         # Outdated wenn winget-/choco-scan ein Update meldet, ODER wenn
         # installed gegen target_version semver-kleiner ist. Letzteres
@@ -1952,6 +1956,7 @@ async def list_package_agents(
                 "available_version": r["available_version"],
                 "scanned_at":        r["scanned_at"],
                 "outdated":          _outdated(r["installed_version"], r["available_version"]),
+                "needs_downgrade":   _needs_downgrade(r["installed_version"]),
             })
     elif ptype == "choco":
         rows = await database.get_agents_with_choco_package(name)
@@ -1966,6 +1971,7 @@ async def list_package_agents(
                 "available_version": r["available_version"],
                 "scanned_at":        r["scanned_at"],
                 "outdated":          _outdated(r["installed_version"], r["available_version"]),
+                "needs_downgrade":   _needs_downgrade(r["installed_version"]),
             })
     else:
         # custom: Zwei Quellen zusammenfuehren:
@@ -3913,6 +3919,53 @@ async def admin_uninstall_on_agent(
     if not online:
         return _queueable_payload(agent_id, agent["hostname"], pkg, "uninstall", reason)
     result = await dispatch_uninstall_for_agent(
+        agent_id, agent["hostname"], pkg, triggered_by=trig,
+    )
+    return {"ok": True, "agent": agent["hostname"], **result}
+
+
+@router.post("/admin/api/agents/{agent_id}/downgrade/{package_name}")
+async def admin_downgrade_on_agent(
+    agent_id: str, package_name: str, admin: dict = Depends(_require_admin),
+):
+    """Admin-getriggertes Downgrade eines gepinnten winget/choco-Pakets auf
+    die version_pin — nur wenn installiert > pin. winget = uninstall+install@pin,
+    choco = --allow-downgrade. Shared `dispatch_downgrade_for_agent`.
+
+    v1: Agent muss online sein (Downgrade wird nicht gequeued — der Queue-Tick
+    kennt die downgrade-Action nicht)."""
+    from routes.install import dispatch_downgrade_for_agent
+    import winget_catalog as _wc
+
+    if not _AGENT_ID_RE.fullmatch(agent_id):
+        raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
+    pkg = await database.get_package(package_name)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Paket nicht gefunden")
+    ptype = pkg.get("type") or "choco"
+    if ptype not in ("winget", "choco"):
+        raise HTTPException(status_code=400, detail="Downgrade nur fuer winget/choco moeglich")
+    pin = (pkg.get("version_pin") or "").strip()
+    if not pin:
+        raise HTTPException(status_code=400, detail="Paket ist nicht gepinnt (kein version_pin)")
+
+    agent = await _resolve_agent(agent_id)
+    if ptype == "winget":
+        st = (await database.get_agent_winget_state(agent_id)).get(package_name)
+    else:
+        st = (await database.get_agent_choco_state(agent_id)).get(package_name.lower())
+    installed = (st or {}).get("installed_version")
+    if not installed or not _wc.is_outdated(pin, installed):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Kein Downgrade noetig (installiert={installed}, pin={pin})",
+        )
+
+    online, reason = await _agent_online_check(agent_id)
+    if not online:
+        raise HTTPException(status_code=409, detail=f"Agent offline — Downgrade nicht moeglich ({reason})")
+    trig = f"admin:{(admin or {}).get('username') or 'admin'}"
+    result = await dispatch_downgrade_for_agent(
         agent_id, agent["hostname"], pkg, triggered_by=trig,
     )
     return {"ok": True, "agent": agent["hostname"], **result}

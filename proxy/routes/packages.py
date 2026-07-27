@@ -34,6 +34,9 @@ class Package(BaseModel):
     installed_version_label: str | None = None
     current_version_label: str | None = None
     update_available: bool = False
+    # Nur bei gesetztem version_pin + installiert > pin: Kiosk/Admin bieten
+    # ein Downgrade AUF die gepinnte Version an (uninstall+install@pin).
+    downgrade_available: bool = False
     hide_uninstall: bool = False
     # Komma-separierte Prozessnamen die VOR Install lokal geprueft werden.
     # Kiosk-Client zeigt Modal "Bitte X schliessen" wenn ein Prozess matcht.
@@ -167,6 +170,7 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
             wid = row["name"]
             state = winget_state.get(wid)
             os_managed = winget_catalog.is_os_managed(wid)
+            downgrade_avail = False
             if state:
                 installed_version = state.get("installed_version") or ""
                 available_version = state.get("available_version")
@@ -183,13 +187,16 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
                 installed_label = installed_version or None
                 pin = row.get("version_pin")
                 if pin:
-                    # Version-Pin: der Kiosk zeigt die gepinnte Version als Ziel
-                    # und bietet nur ein Update AUF den Pin an, nie darueber hinaus.
-                    # installed == pin -> kein Update; installed > pin -> auch kein
-                    # Update-Flag (echtes Downgrade waere ein eigenes Feature).
+                    # Version-Pin: der Kiosk zeigt die gepinnte Version als Ziel.
+                    #   installed < pin  -> Update AUF den Pin anbieten
+                    #   installed == pin -> nichts
+                    #   installed > pin  -> Downgrade AUF den Pin anbieten
                     current_label = pin
                     update_avail = (not os_managed) and winget_catalog.is_outdated(
                         installed_version or None, pin
+                    )
+                    downgrade_avail = (not os_managed) and winget_catalog.is_outdated(
+                        pin, installed_version or None
                     )
                 else:
                     current_label = available_version or None
@@ -222,6 +229,7 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
                 installed_version_label=installed_label,
                 current_version_label=current_label,
                 update_available=update_avail,
+                downgrade_available=downgrade_avail,
                 hide_uninstall=bool(row.get("hide_uninstall")),
                 process_check=row.get("process_check") or "",
             ))
@@ -237,6 +245,7 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
         installed_label = None
         current_label = None
         update_avail = False
+        downgrade_avail = False
 
         # Choco-Pakete: agent_choco_state ist die deterministische Quelle für
         # installed_version + available_version. Wenn vorhanden, überschreibt
@@ -252,9 +261,11 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
                     installed_label = cs_installed
                 pin = row.get("version_pin")
                 if pin:
-                    # Version-Pin: Kiosk zeigt die gepinnte Version, Update nur AUF den Pin.
+                    # Version-Pin: Kiosk zeigt die gepinnte Version.
+                    #   installed < pin -> Update AUF Pin; installed > pin -> Downgrade.
                     current_label = pin
                     update_avail = winget_catalog.is_outdated(cs_installed or None, pin)
+                    downgrade_avail = winget_catalog.is_outdated(pin, cs_installed or None)
                 elif cs_avail:
                     current_label = cs_avail
                     update_avail = True
@@ -287,6 +298,7 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
             installed_version_label=installed_label,
             current_version_label=current_label,
             update_available=update_avail,
+            downgrade_available=downgrade_avail,
             hide_uninstall=bool(row.get("hide_uninstall")),
         ))
 
