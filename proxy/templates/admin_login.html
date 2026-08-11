@@ -260,8 +260,8 @@ input::placeholder { color: var(--fg-5); }
     </form>
 
     <div class="sso-section" id="sso-section">
-      <div class="divider"><span>oder</span></div>
-      <a href="/admin/sso/login" class="btn btn-sso">
+      <div class="divider" id="sso-divider"><span>oder</span></div>
+      <button type="button" class="btn btn-sso" id="sso-btn">
         <svg width="16" height="16" viewBox="0 0 23 23" xmlns="http://www.w3.org/2000/svg">
           <rect x="1" y="1" width="10" height="10" fill="#f25022"/>
           <rect x="12" y="1" width="10" height="10" fill="#7fba00"/>
@@ -269,7 +269,7 @@ input::placeholder { color: var(--fg-5); }
           <rect x="12" y="12" width="10" height="10" fill="#ffb900"/>
         </svg>
         Mit Microsoft anmelden
-      </a>
+      </button>
     </div>
 
     <div class="footer">
@@ -277,15 +277,25 @@ input::placeholder { color: var(--fg-5); }
     </div>
   </div>
 
+  <script src="/admin/msal-browser.min.js"></script>
   <script>
-    // SSO-Section bei Bedarf anzeigen (Server hat Platzhalter ersetzt)
-    if ('{{SSO_ENABLED}}' === 'true') {
-      document.getElementById('sso-section').classList.add('show');
-    }
+    const SSO_ENABLED = ('{{SSO_ENABLED}}' === 'true');
+    const AZURE_TENANT = '{{AZURE_TENANT}}';
+    const AZURE_CLIENT_ID = '{{AZURE_CLIENT_ID}}';
 
     const form = document.getElementById('login-form');
     const errEl = document.getElementById('error');
     const submitBtn = document.getElementById('submit-btn');
+
+    // SSO aktiv → Passwort-Login ausblenden, nur Microsoft-Login anbieten.
+    if (SSO_ENABLED) {
+      document.getElementById('sso-section').classList.add('show');
+      form.style.display = 'none';
+      const div = document.getElementById('sso-divider');
+      if (div) div.style.display = 'none';
+      const intro = document.querySelector('.intro');
+      if (intro) intro.textContent = 'Melde dich mit deinem Microsoft-Konto an.';
+    }
 
     function showError(msg) {
       errEl.textContent = msg;
@@ -321,6 +331,49 @@ input::placeholder { color: var(--fg-5); }
         submitBtn.textContent = 'Anmelden';
       }
     });
+
+    // ── Microsoft Entra SSO (MSAL-Popup) ──
+    if (SSO_ENABLED && AZURE_TENANT && AZURE_CLIENT_ID && window.msal) {
+      const ssoBtn = document.getElementById('sso-btn');
+      const msalApp = new msal.PublicClientApplication({
+        auth: {
+          clientId: AZURE_CLIENT_ID,
+          authority: 'https://login.microsoftonline.com/' + AZURE_TENANT,
+          redirectUri: window.location.origin,
+        },
+        cache: { cacheLocation: 'sessionStorage' },
+      });
+      let msalReady = false;
+      ssoBtn.addEventListener('click', async () => {
+        clearError();
+        ssoBtn.disabled = true;
+        const orig = ssoBtn.innerHTML;
+        ssoBtn.innerHTML = '<span class="spinner"></span> Microsoft-Login …';
+        try {
+          if (!msalReady) { await msalApp.initialize(); msalReady = true; }
+          const resp = await msalApp.loginPopup({ scopes: ['openid', 'profile', 'email'] });
+          const r = await fetch('/api/auth/azure/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: resp.idToken }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok) {
+            window.location.href = data.redirect || '/admin';
+          } else {
+            showError(data.error || ('Anmeldung fehlgeschlagen (HTTP ' + r.status + ')'));
+          }
+        } catch (err) {
+          const cancelled = err && (err.errorCode === 'user_cancelled' || err.errorCode === 'popup_window_error');
+          showError(cancelled ? 'Anmeldung abgebrochen.' : ('Microsoft-Login fehlgeschlagen: ' + ((err && err.message) || err)));
+        } finally {
+          ssoBtn.disabled = false;
+          ssoBtn.innerHTML = orig;
+        }
+      });
+    } else if (SSO_ENABLED && !window.msal) {
+      showError('MSAL-Bibliothek konnte nicht geladen werden.');
+    }
   </script>
 </body>
 </html>

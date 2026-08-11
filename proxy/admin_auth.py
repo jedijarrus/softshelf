@@ -381,7 +381,8 @@ async def sso_exchange_code(code: str, redirect_uri: str) -> dict:
 
 
 async def sso_login_or_provision(
-    oid: str, email: str, name: str, email_verified: bool = False
+    oid: str, email: str, name: str, email_verified: bool = False,
+    auto_create: bool | None = None,
 ) -> dict | None:
     """
     Findet oder erzeugt einen lokalen admin_user für eine SSO-Identität.
@@ -428,8 +429,13 @@ async def sso_login_or_provision(
             await database.touch_admin_login(u["id"])
             return await database.get_admin_user_by_id(u["id"])
 
-    # 3. Auto-Create wenn aktiviert
-    auto_create = (await runtime_value("sso_auto_create")).lower() in ("1", "true", "yes", "on")
+    # 3. Auto-Create. auto_create=None => Runtime-Setting lesen (Legacy).
+    # Der MSAL/ENV-Flow ruft mit auto_create=True: die Zugriffskontrolle laeuft
+    # ueber die Entra Enterprise-App ("Assignment required") — ein gueltiges
+    # Token bedeutet, der Nutzer ist zugewiesen. Neue User werden als operator
+    # angelegt (niedrigste Rolle), ein Admin hebt die Rolle bei Bedarf an.
+    if auto_create is None:
+        auto_create = (await runtime_value("sso_auto_create")).lower() in ("1", "true", "yes", "on")
     if auto_create:
         # Username aus E-Mail-Local-Part oder OID
         base_username = (email.split("@")[0] if email else oid)[:50]
@@ -452,3 +458,95 @@ async def sso_login_or_provision(
         return await database.get_admin_user_by_id(user_id)
 
     return None
+
+
+# ── Microsoft Entra ID SSO (MSAL-SPA / id_token-Verify) ───────────────────────
+# Neuer Flow: das Frontend macht MSAL-loginPopup und schickt das id_token an
+# POST /api/auth/azure/verify. Hier wird es per JWKS validiert. Kein Server-
+# Redirect, kein Client-Secret noetig (Public Client). Konfiguration via ENV
+# (GRAPH_TENANT_ID / GRAPH_CLIENT_ID), siehe config.azure_sso_active().
+
+_JWKS_CACHE: dict[str, tuple[object, float]] = {}
+_JWKS_TTL_SECONDS = 3600
+
+
+def _get_jwks_client(tenant: str):
+    """PyJWKClient pro Tenant, ~1h gecacht (PyJWKClient cached die Keys zusaetzlich)."""
+    import jwt
+    now = time.time()
+    entry = _JWKS_CACHE.get(tenant)
+    if entry and (now - entry[1]) < _JWKS_TTL_SECONDS:
+        return entry[0]
+    jwks_uri = f"https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys"
+    client = jwt.PyJWKClient(jwks_uri)
+    _JWKS_CACHE[tenant] = (client, now)
+    return client
+
+
+def verify_azure_id_token(token: str) -> dict:
+    """
+    Validiert ein Entra-id_token aus dem MSAL-Popup. Wirft ValueError bei
+    ungueltig. Prueft: Signatur (JWKS/RS256), aud==GRAPH_CLIENT_ID,
+    iss==login.microsoftonline.com/{tenant}/v2.0 (sts-Variante erlaubt),
+    tid==GRAPH_TENANT_ID, exp/iat. Gibt Claims-Dict zurueck.
+    """
+    import jwt
+    from config import get_settings
+
+    s = get_settings()
+    tenant = s.graph_tenant_id
+    client_id = s.graph_client_id
+    if not (tenant and client_id):
+        raise ValueError("SSO nicht konfiguriert (GRAPH_TENANT_ID/GRAPH_CLIENT_ID fehlen)")
+    if not token or not isinstance(token, str):
+        raise ValueError("Kein Token")
+
+    try:
+        signing_key = _get_jwks_client(tenant).get_signing_key_from_jwt(token)
+    except Exception as e:
+        raise ValueError(f"Signing-Key nicht auffindbar: {e}")
+
+    try:
+        payload = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=client_id,
+            options={"require": ["exp", "iat", "iss", "sub", "aud"]},
+        )
+    except Exception as e:
+        raise ValueError(f"Token-Validierung fehlgeschlagen: {e}")
+
+    allowed_iss = {
+        f"https://login.microsoftonline.com/{tenant}/v2.0",
+        f"https://sts.windows.net/{tenant}/",
+    }
+    if payload.get("iss") not in allowed_iss:
+        raise ValueError(f"Unerwarteter Issuer: {payload.get('iss')}")
+    if payload.get("tid") != tenant:
+        raise ValueError("tid stimmt nicht mit Tenant ueberein")
+
+    oid = payload.get("oid") or payload.get("sub")
+    if not oid:
+        raise ValueError("Kein oid/sub im Token")
+
+    return {
+        "oid": oid,
+        "name": payload.get("name") or "",
+        "email": (payload.get("email") or "").strip(),
+        "email_verified": bool(payload.get("email_verified", False)),
+        "preferred_username": payload.get("preferred_username") or "",
+        "upn": payload.get("upn") or "",
+    }
+
+
+def azure_display_name(claims: dict) -> str:
+    """Anzeigename aus name / preferred_username / upn / email / oid."""
+    return (
+        claims.get("name")
+        or claims.get("preferred_username")
+        or claims.get("upn")
+        or claims.get("email")
+        or claims.get("oid")
+        or "Microsoft-Nutzer"
+    )
