@@ -31,10 +31,10 @@ services:
       ADMIN_PORTAL_TITLE: ${ADMIN_PORTAL_TITLE:-}
       TACTICAL_URL: ${TACTICAL_URL:-}
       TACTICAL_API_KEY: ${TACTICAL_API_KEY:-}
-      OIDC_TENANT_ID: ${OIDC_TENANT_ID:-}
-      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
-      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
-      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      # Entra SSO (MSAL-Flow) — Tenant/Client oeffentlich, Secret optional/leer.
+      GRAPH_TENANT_ID: ${GRAPH_TENANT_ID:-}
+      GRAPH_CLIENT_ID: ${GRAPH_CLIENT_ID:-}
+      GRAPH_CLIENT_SECRET: ${GRAPH_CLIENT_SECRET:-}
     depends_on:
       - softshelf-builder
     healthcheck:
