@@ -264,47 +264,8 @@ RUNTIME_KEYS: dict[str, dict] = {
         "required": False,
         "default": "Softshelf",
     },
-    # ── SSO (Microsoft Entra ID / Azure AD) ──
-    "sso_enabled": {
-        "label": "SSO aktivieren",
-        "help": "Wenn aktiv, erscheint auf der Login-Seite ein 'Mit Microsoft anmelden'-Button.",
-        "type": "bool",
-        "secret": False,
-        "required": False,
-        "default": "false",
-    },
-    "sso_tenant_id": {
-        "label": "Entra Tenant-ID",
-        "help": "Die Tenant-ID (GUID) eures Microsoft-365-Tenants. Zu finden im Azure-Portal unter Entra ID → Übersicht.",
-        "type": "string",
-        "secret": False,
-        "required": False,
-        "default": "",
-    },
-    "sso_client_id": {
-        "label": "Entra App Client-ID",
-        "help": "Die Application-(client)-ID einer App-Registrierung in Entra ID. Redirect-URI in der App muss <proxy_public_url>/admin/sso/callback sein.",
-        "type": "string",
-        "secret": False,
-        "required": False,
-        "default": "",
-    },
-    "sso_client_secret": {
-        "label": "Entra App Client-Secret",
-        "help": "Client-Secret der App-Registrierung (in Entra unter Zertifikate &amp; Geheimnisse generierbar).",
-        "type": "string",
-        "secret": True,
-        "required": False,
-        "default": "",
-    },
-    "sso_auto_create": {
-        "label": "User automatisch anlegen",
-        "help": "Wenn aktiv, wird beim ersten Microsoft-Login automatisch ein lokaler Admin-User angelegt. Sonst muss der Username vorher manuell mit derselben E-Mail in der Benutzer-Verwaltung angelegt sein.",
-        "type": "bool",
-        "secret": False,
-        "required": False,
-        "default": "false",
-    },
+    # SSO: Entra-ID ist auf ENV GRAPH_* umgestellt (config.azure_sso_active +
+    # admin_auth.verify_azure_id_token) — keine Runtime-Settings mehr.
     "rollout_ring1_label": {
         "label": "Ring 1 Name",
         "help": "Anzeigename fuer Ring 1 (Canary — kleinste Testgruppe, erste Phase).",

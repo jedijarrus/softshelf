@@ -248,136 +248,11 @@ async def ensure_bootstrap_admin():
         pass
 
 
-# ── Microsoft Entra ID SSO (OIDC) ─────────────────────────────────────────────
-
-# In-Memory Pending-States (CSRF-Schutz auf OAuth-Callback). Für Single-Worker-
-# Setup ausreichend; bei Load-Balancing müsste das in die DB.
-_pending_sso: dict[str, float] = {}
-_PENDING_TTL_SECONDS = 600
-
-
-def _cleanup_pending():
-    cutoff = time.time() - _PENDING_TTL_SECONDS
-    for k, v in list(_pending_sso.items()):
-        if v < cutoff:
-            _pending_sso.pop(k, None)
-
-
-def create_sso_state() -> str:
-    """Erzeugt einen kurzlebigen State-Token für den OAuth-Flow."""
-    _cleanup_pending()
-    state = secrets.token_urlsafe(32)
-    _pending_sso[state] = time.time()
-    return state
-
-
-def consume_sso_state(state: str) -> bool:
-    """Verbraucht einen State-Token (nur einmal verwendbar)."""
-    _cleanup_pending()
-    if not state or state not in _pending_sso:
-        return False
-    _pending_sso.pop(state, None)
-    return True
-
-
-async def sso_enabled() -> bool:
-    return (await runtime_value("sso_enabled")).lower() in ("1", "true", "yes", "on")
-
-
-async def sso_authorize_url(redirect_uri: str) -> str | None:
-    """
-    Baut die Microsoft-Login-URL für den OIDC-Flow.
-    Returns None wenn SSO nicht konfiguriert ist.
-    """
-    if not await sso_enabled():
-        return None
-    tenant = await runtime_value("sso_tenant_id")
-    client_id = await runtime_value("sso_client_id")
-    if not tenant or not client_id:
-        return None
-    state = create_sso_state()
-    from urllib.parse import urlencode
-    params = {
-        "client_id": client_id,
-        "response_type": "code",
-        "redirect_uri": redirect_uri,
-        "response_mode": "query",
-        "scope": "openid email profile",
-        "state": state,
-        "prompt": "select_account",
-    }
-    return f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?{urlencode(params)}"
-
-
-async def sso_exchange_code(code: str, redirect_uri: str) -> dict:
-    """
-    Tauscht den Authorization-Code gegen Tokens, validiert das ID-Token und
-    extrahiert die User-Info. Gibt {oid, email, name} zurück.
-    Wirft ValueError bei Problemen.
-    """
-    import httpx
-    import jwt
-
-    tenant = await runtime_value("sso_tenant_id")
-    client_id = await runtime_value("sso_client_id")
-    client_secret = await runtime_value("sso_client_secret")
-    if not (tenant and client_id and client_secret):
-        raise ValueError("SSO ist nicht vollständig konfiguriert")
-
-    token_url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(
-            token_url,
-            data={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-                "scope": "openid email profile",
-            },
-        )
-        if r.status_code != 200:
-            raise ValueError(f"Token-Tausch fehlgeschlagen: HTTP {r.status_code} {r.text[:200]}")
-        token_response = r.json()
-
-    id_token = token_response.get("id_token")
-    if not id_token:
-        raise ValueError("Kein id_token in Microsoft-Antwort")
-
-    # JWKS holen und Signatur prüfen
-    jwks_uri = f"https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys"
-    issuer = f"https://login.microsoftonline.com/{tenant}/v2.0"
-    try:
-        jwks_client = jwt.PyJWKClient(jwks_uri)
-        signing_key = jwks_client.get_signing_key_from_jwt(id_token)
-        payload = jwt.decode(
-            id_token,
-            signing_key.key,
-            algorithms=["RS256"],
-            audience=client_id,
-            issuer=issuer,
-            options={"require": ["exp", "iat", "iss", "sub", "aud"]},
-        )
-    except Exception as e:
-        raise ValueError(f"ID-Token Validation fehlgeschlagen: {e}")
-
-    oid = payload.get("oid") or payload.get("sub")
-    # Nur den email-Claim akzeptieren — preferred_username ist NICHT verifiziert
-    # in Entra ID und kann von einem Tenant-User auf jede beliebige Adresse
-    # gesetzt werden, was sonst Account-Übernahme über E-Mail-Linking ermöglicht.
-    email = (payload.get("email") or "").strip()
-    email_verified = bool(payload.get("email_verified", False))
-    name = payload.get("name") or email or oid
-    if not oid:
-        raise ValueError("Kein oid/sub im ID-Token")
-
-    return {
-        "oid": oid,
-        "email": email,
-        "email_verified": email_verified,
-        "name": name,
-    }
+# ── Microsoft Entra ID SSO ────────────────────────────────────────────────────
+# Der alte OIDC-Server-Redirect-Flow (create_sso_state/consume_sso_state/
+# sso_enabled/sso_authorize_url/sso_exchange_code) wurde entfernt — ersetzt durch
+# MSAL-Popup + id_token-Verify (verify_azure_id_token, weiter unten), Config via
+# ENV GRAPH_* (config.azure_sso_active). Geblieben ist nur das User-Provisioning.
 
 
 async def sso_login_or_provision(
@@ -434,8 +309,6 @@ async def sso_login_or_provision(
     # ueber die Entra Enterprise-App ("Assignment required") — ein gueltiges
     # Token bedeutet, der Nutzer ist zugewiesen. Neue User werden als operator
     # angelegt (niedrigste Rolle), ein Admin hebt die Rolle bei Bedarf an.
-    if auto_create is None:
-        auto_create = (await runtime_value("sso_auto_create")).lower() in ("1", "true", "yes", "on")
     if auto_create:
         # Username aus E-Mail-Local-Part oder OID
         base_username = (email.split("@")[0] if email else oid)[:50]

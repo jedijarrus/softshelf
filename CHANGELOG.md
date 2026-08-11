@@ -30,7 +30,10 @@ Admin-UI-SSO auf Microsoft Entra ID (MSAL-Popup) umgestellt.
 ### Removed
 
 - Alter OIDC-Authorization-Code-Redirect-Flow (`/admin/sso/login`,
-  `/admin/sso/callback`).
+  `/admin/sso/callback`) inkl. toter Helfer in `admin_auth.py`.
+- Obsolete Runtime-`sso_*`-Settings (config.py), der „SSO (Microsoft Entra)"-
+  Settings-Tab im Admin-UI und die `OIDC_*`-Env-Passthroughs in
+  `docker-compose.yml` — SSO-Config laeuft jetzt komplett ueber `GRAPH_*`.
 
 ---
 
