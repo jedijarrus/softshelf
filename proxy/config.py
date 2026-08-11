@@ -56,6 +56,16 @@ class BootstrapSettings(BaseSettings):
     # Interne Builder-Adresse (docker-compose Service-Name)
     builder_url: str = "http://softshelf-builder:8766"
 
+    # ── SSO (Microsoft Entra ID) — MSAL-SPA/Popup-Flow ──
+    # SSO gilt als aktiv, sobald tenant + client gesetzt sind. Dann wird der
+    # Passwort-Login deaktiviert. Break-glass: Variablen entfernen + Restart
+    # => Passwort wieder aktiv. tenant/client sind KEINE Secrets und duerfen
+    # ins Frontend (MSAL-Init). Nur graph_client_secret ist geheim und wird
+    # fuer reines SPA-SSO NICHT benoetigt.
+    graph_tenant_id: str = ""
+    graph_client_id: str = ""
+    graph_client_secret: str = ""
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -65,6 +75,18 @@ class BootstrapSettings(BaseSettings):
 @lru_cache
 def get_settings() -> BootstrapSettings:
     return BootstrapSettings()
+
+
+def azure_sso_active() -> bool:
+    """
+    SSO aktiv ⇔ Entra Tenant-ID + Client-ID gesetzt (per ENV/.env).
+    Ist SSO aktiv, wird der Passwort-Login deaktiviert. Break-glass:
+    GRAPH_TENANT_ID/GRAPH_CLIENT_ID entfernen + Container-Restart.
+    (get_settings ist @lru_cache → Aenderung greift erst nach Restart, was
+    bei env_file-Vars ohnehin noetig ist.)
+    """
+    s = get_settings()
+    return bool(s.graph_tenant_id and s.graph_client_id)
 
 
 # ── Runtime-Settings (aus DB) ─────────────────────────────────────────────────

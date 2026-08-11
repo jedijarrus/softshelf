@@ -394,12 +394,23 @@ def _set_session_cookie(response, token: str, expires_at: datetime, request: Req
 
 @router.get("/admin/login", response_class=HTMLResponse)
 async def login_page():
+    from config import get_settings, azure_sso_active
     with open(_LOGIN_PATH, encoding="utf-8") as f:
         page = f.read()
-    sso_on = await admin_auth.sso_enabled()
+    s = get_settings()
+    sso_on = azure_sso_active()
     page = page.replace("{{SSO_ENABLED}}", "true" if sso_on else "false")
+    page = page.replace("{{AZURE_TENANT}}", s.graph_tenant_id if sso_on else "")
+    page = page.replace("{{AZURE_CLIENT_ID}}", s.graph_client_id if sso_on else "")
     page = page.replace("{{ADMIN_PORTAL_TITLE}}", await _portal_title_html())
     return HTMLResponse(page)
+
+
+@router.get("/admin/msal-browser.min.js")
+async def msal_browser_js():
+    """Vendored MSAL.js (self-contained, same-origin — kein CDN/CSP-Risiko)."""
+    path = os.path.join(os.path.dirname(__file__), "..", "templates", "msal-browser.min.js")
+    return FileResponse(path, media_type="application/javascript")
 
 
 @router.post("/admin/login")
@@ -408,6 +419,13 @@ async def do_login(
     username: str = Form(...),
     password: str = Form(...),
 ):
+    from config import azure_sso_active
+    if azure_sso_active():
+        return JSONResponse(
+            {"ok": False, "error": "Passwort-Login ist deaktiviert (SSO aktiv). "
+                                   "Bitte 'Mit Microsoft anmelden' verwenden."},
+            status_code=403,
+        )
     user = await admin_auth.authenticate_local(username.strip(), password)
     if not user:
         return JSONResponse(
@@ -419,6 +437,72 @@ async def do_login(
     token, expires = await admin_auth.create_session(user["id"], ip, ua)
     response = JSONResponse({"ok": True, "redirect": "/admin"})
     _set_session_cookie(response, token, expires, request)
+    return response
+
+
+# ── Entra SSO (MSAL-Popup-Flow) ───────────────────────────────────────────────
+
+@router.get("/api/auth/status")
+async def auth_status(request: Request):
+    """Status fuer das Login-Frontend (MSAL-Init). Keine Auth noetig."""
+    from config import get_settings, azure_sso_active
+    s = get_settings()
+    sso = azure_sso_active()
+    authenticated = False
+    user_name = None
+    tok = request.cookies.get(admin_auth.SESSION_COOKIE)
+    if tok:
+        sess = await admin_auth.get_session_user(tok)
+        if sess:
+            authenticated = True
+            user_name = sess.get("display_name") or sess.get("username")
+    return JSONResponse({
+        "configured": sso,
+        "sso": sso,
+        "authenticated": authenticated,
+        "user": user_name,
+        "azure": {
+            "client_id": s.graph_client_id if sso else "",
+            "tenant": s.graph_tenant_id if sso else "",
+        },
+    })
+
+
+class AzureVerifyBody(BaseModel):
+    token: str
+
+
+@router.post("/api/auth/azure/verify")
+async def azure_verify(request: Request, body: AzureVerifyBody):
+    """MSAL-id_token validieren (JWKS), User provisionieren/mappen, Session setzen."""
+    from config import azure_sso_active
+    if not azure_sso_active():
+        return JSONResponse({"ok": False, "error": "SSO nicht aktiv"}, status_code=400)
+    try:
+        claims = admin_auth.verify_azure_id_token(body.token)
+    except Exception as e:
+        logger.warning("Azure id_token-Verify abgelehnt: %s", e)
+        return JSONResponse({"ok": False, "error": "Token ungueltig"}, status_code=401)
+
+    user = await admin_auth.sso_login_or_provision(
+        oid=claims["oid"],
+        email=claims["email"],
+        name=admin_auth.azure_display_name(claims),
+        email_verified=claims["email_verified"],
+        auto_create=True,
+    )
+    if not user:
+        return JSONResponse(
+            {"ok": False, "error": "Kein Zugriff (User inaktiv)"}, status_code=403
+        )
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent")
+    tok, expires = await admin_auth.create_session(user["id"], ip, ua)
+    response = JSONResponse({
+        "ok": True, "redirect": "/admin",
+        "user": user.get("display_name") or user.get("username"),
+    })
+    _set_session_cookie(response, tok, expires, request)
     return response
 
 
@@ -776,78 +860,11 @@ async def delete_api_token(
 
 # ── Microsoft Entra ID SSO ────────────────────────────────────────────────────
 
-async def _sso_redirect_uri() -> str:
-    base = (await runtime_value("proxy_public_url")).rstrip("/")
-    if not base:
-        cfg = get_settings()
-        base = f"http://{cfg.host}:{cfg.port}"
-    return f"{base}/admin/sso/callback"
-
-
-@router.get("/admin/sso/login")
-async def sso_login():
-    if not await admin_auth.sso_enabled():
-        raise HTTPException(status_code=400, detail="SSO ist nicht aktiviert")
-    redirect_uri = await _sso_redirect_uri()
-    url = await admin_auth.sso_authorize_url(redirect_uri)
-    if not url:
-        raise HTTPException(
-            status_code=400,
-            detail="SSO ist nicht vollständig konfiguriert (Tenant-ID / Client-ID prüfen)",
-        )
-    return RedirectResponse(url=url, status_code=302)
-
-
-@router.get("/admin/sso/callback")
-async def sso_callback(
-    request: Request,
-    code: Optional[str] = None,
-    state: Optional[str] = None,
-    error: Optional[str] = None,
-    error_description: Optional[str] = None,
-):
-    if error:
-        return HTMLResponse(
-            f"<h1>SSO-Fehler</h1><p>{error}: {error_description or ''}</p>"
-            f"<p><a href='/admin/login'>Zurück zum Login</a></p>",
-            status_code=400,
-        )
-    if not code or not state:
-        raise HTTPException(status_code=400, detail="code/state fehlen")
-    if not admin_auth.consume_sso_state(state):
-        raise HTTPException(status_code=400, detail="Ungültiger oder abgelaufener state-Token")
-
-    redirect_uri = await _sso_redirect_uri()
-    try:
-        info = await admin_auth.sso_exchange_code(code, redirect_uri)
-    except ValueError as e:
-        return HTMLResponse(
-            f"<h1>SSO-Fehler</h1><p>{e}</p>"
-            f"<p><a href='/admin/login'>Zurück zum Login</a></p>",
-            status_code=400,
-        )
-
-    user = await admin_auth.sso_login_or_provision(
-        oid=info["oid"],
-        email=info["email"],
-        email_verified=info.get("email_verified", False),
-        name=info["name"],
-    )
-    if not user:
-        return HTMLResponse(
-            "<h1>Zugriff verweigert</h1>"
-            "<p>Dein Microsoft-Konto ist nicht in der Admin-Benutzerverwaltung hinterlegt. "
-            "Bitte vorher manuell anlegen oder 'User automatisch anlegen' in den Einstellungen aktivieren.</p>"
-            "<p><a href='/admin/login'>Zurück zum Login</a></p>",
-            status_code=403,
-        )
-
-    ip = request.client.host if request.client else None
-    ua = request.headers.get("user-agent")
-    token, expires = await admin_auth.create_session(user["id"], ip, ua)
-    response = RedirectResponse(url="/admin", status_code=302)
-    _set_session_cookie(response, token, expires, request)
-    return response
+# ── Entra SSO: alter Server-Redirect-Flow ENTFERNT ────────────────────────────
+# /admin/sso/login + /admin/sso/callback (Authorization-Code) wurden durch den
+# MSAL-Popup-Flow ersetzt: Frontend loginPopup → POST /api/auth/azure/verify
+# (siehe oben). Konfiguration jetzt via ENV GRAPH_TENANT_ID/GRAPH_CLIENT_ID
+# (config.azure_sso_active), nicht mehr Runtime-Settings sso_*.
 
 
 # ── Admin User Management ─────────────────────────────────────────────────────

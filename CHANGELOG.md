@@ -7,6 +7,33 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.8.1] – 2026-08-11
+
+Admin-UI-SSO auf Microsoft Entra ID (MSAL-Popup) umgestellt.
+
+### Changed
+
+- **Admin-Login-SSO: Server-Redirect-Flow → MSAL-SPA-Popup.** Frontend macht
+  `loginPopup`, Backend validiert das `id_token` per JWKS
+  (`POST /api/auth/azure/verify`). Public Client, kein Client-Secret noetig.
+- **SSO-Config jetzt per ENV** `GRAPH_TENANT_ID` / `GRAPH_CLIENT_ID`
+  (+ optional `GRAPH_CLIENT_SECRET`) statt Runtime-Settings. SSO aktiv ⇔ beide
+  gesetzt → Passwort-Login deaktiviert (403). Break-glass: Variablen entfernen
+  + Restart.
+- MSAL.js v3 vendored, same-origin ausgeliefert (`/admin/msal-browser.min.js`).
+
+### Added
+
+- `GET /api/auth/status` (configured/sso/authenticated/user/azure) fuers
+  Frontend-MSAL-Setup.
+
+### Removed
+
+- Alter OIDC-Authorization-Code-Redirect-Flow (`/admin/sso/login`,
+  `/admin/sso/callback`).
+
+---
+
 ## [2.8.0] – 2026-06-19
 
 Browser-Extensions als 5. Pakettyp: Admin laedt eine MV3-Extension-ZIP hoch,
