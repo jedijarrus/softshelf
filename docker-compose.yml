@@ -35,6 +35,7 @@ services:
       GRAPH_TENANT_ID: ${GRAPH_TENANT_ID:-}
       GRAPH_CLIENT_ID: ${GRAPH_CLIENT_ID:-}
       GRAPH_CLIENT_SECRET: ${GRAPH_CLIENT_SECRET:-}
+      GRAPH_REQUIRED_ROLE: ${GRAPH_REQUIRED_ROLE:-}
     depends_on:
       - softshelf-builder
     healthcheck:

@@ -65,6 +65,10 @@ class BootstrapSettings(BaseSettings):
     graph_tenant_id: str = ""
     graph_client_id: str = ""
     graph_client_secret: str = ""
+    # Optional: nur Nutzer mit dieser App-Rolle (roles-Claim) duerfen sich
+    # anmelden (leer = kein Gate, jeder zugewiesene Nutzer). Wert = der
+    # App-Rollen-"Wert" aus Entra (NICHT der Anzeigename). Treffer => Kiosk-Admin.
+    graph_required_role: str = ""
 
     class Config:
         env_file = ".env"
