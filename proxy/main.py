@@ -40,7 +40,7 @@ from rmm import get_rmm_client
 
 logger = logging.getLogger("softshelf")
 
-VERSION = "2.8.1"
+VERSION = "2.8.2"
 
 # Build-Timestamp = mtime der main.py beim Docker COPY. Aenderet sich nur
 # bei einem Image-Rebuild, nicht bei Container-Restart. Damit kann der

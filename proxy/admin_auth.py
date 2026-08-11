@@ -257,7 +257,7 @@ async def ensure_bootstrap_admin():
 
 async def sso_login_or_provision(
     oid: str, email: str, name: str, email_verified: bool = False,
-    auto_create: bool | None = None,
+    auto_create: bool | None = None, role: str = "admin",
 ) -> dict | None:
     """
     Findet oder erzeugt einen lokalen admin_user für eine SSO-Identität.
@@ -275,10 +275,14 @@ async def sso_login_or_provision(
     # 1. Schon mit Entra verknüpft?
     user = await database.get_admin_user_by_sso("entra", oid)
     if user:
-        if user.get("is_active"):
-            await database.touch_admin_login(user["id"])
-            return user
-        return None
+        if not user.get("is_active"):
+            return None
+        # Rolle aus Azure erzwingen (Azure = Source-of-Truth fuer SSO-User)
+        if role and user.get("role") != role:
+            await database.update_admin_user(user["id"], role=role)
+            user = await database.get_admin_user_by_id(user["id"])
+        await database.touch_admin_login(user["id"])
+        return user
 
     # 2. Existierender lokaler User mit gleicher E-Mail — nur bei
     # verifizierter E-Mail UND wenn der bestehende User noch keine
@@ -296,9 +300,9 @@ async def sso_login_or_provision(
             # Verknüpfen
             async with database._db() as db:
                 await db.execute(
-                    "UPDATE admin_users SET sso_provider='entra', sso_subject=? "
+                    "UPDATE admin_users SET sso_provider='entra', sso_subject=?, role=? "
                     "WHERE id = ?",
-                    (oid, u["id"]),
+                    (oid, role, u["id"]),
                 )
                 await db.commit()
             await database.touch_admin_login(u["id"])
@@ -326,6 +330,7 @@ async def sso_login_or_provision(
             sso_provider="entra",
             sso_subject=oid,
             is_active=True,
+            role=role,
         )
         await database.touch_admin_login(user_id)
         return await database.get_admin_user_by_id(user_id)
@@ -410,6 +415,7 @@ def verify_azure_id_token(token: str) -> dict:
         "email_verified": bool(payload.get("email_verified", False)),
         "preferred_username": payload.get("preferred_username") or "",
         "upn": payload.get("upn") or "",
+        "roles": payload.get("roles") or [],   # Entra App-Roles (roles-Claim)
     }
 
 

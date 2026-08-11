@@ -7,6 +7,21 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.8.2] – 2026-08-11
+
+Entra-SSO: App-Rollen-Gate + Admin-Rollenzuweisung.
+
+### Added
+
+- **App-Rollen-Gate** (`GRAPH_REQUIRED_ROLE`): wenn gesetzt, dürfen sich nur
+  Nutzer anmelden, deren `roles`-Claim diese Entra-App-Rolle (der *Wert*, nicht
+  der Anzeigename) enthält — sonst HTTP 403. Leer = kein Gate.
+- SSO-Nutzer mit gültiger Rolle werden als **admin** provisioniert; die Rolle
+  wird bei jedem Login aus Azure gesetzt (Azure = Source-of-Truth für SSO-User).
+- `verify_azure_id_token` liefert jetzt den `roles`-Claim.
+
+---
+
 ## [2.8.1] – 2026-08-11
 
 Admin-UI-SSO auf Microsoft Entra ID (MSAL-Popup) umgestellt.

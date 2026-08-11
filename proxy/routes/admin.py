@@ -484,6 +484,20 @@ async def azure_verify(request: Request, body: AzureVerifyBody):
         logger.warning("Azure id_token-Verify abgelehnt: %s", e)
         return JSONResponse({"ok": False, "error": "Token ungueltig"}, status_code=401)
 
+    # Rollen-Gate: wenn GRAPH_REQUIRED_ROLE gesetzt ist, darf sich nur anmelden
+    # wer diese App-Rolle im roles-Claim hat. Treffer => Kiosk-Admin (siehe
+    # sso_login_or_provision role-Default). Leer => kein Gate.
+    from config import get_settings
+    required = (get_settings().graph_required_role or "").strip()
+    if required:
+        token_roles = [str(r).lower() for r in (claims.get("roles") or [])]
+        if required.lower() not in token_roles:
+            logger.warning("Azure-Login abgelehnt: App-Rolle '%s' fehlt (roles=%s)", required, token_roles)
+            return JSONResponse(
+                {"ok": False, "error": "Keine Berechtigung fuer diese Anwendung (App-Rolle fehlt)."},
+                status_code=403,
+            )
+
     user = await admin_auth.sso_login_or_provision(
         oid=claims["oid"],
         email=claims["email"],
