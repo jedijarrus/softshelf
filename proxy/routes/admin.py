@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import secrets
+import sqlite3
 import zipfile
 from datetime import datetime, timezone
 from typing import Optional
@@ -7270,9 +7271,25 @@ async def delete_workflow_run(run_id: int):
         raise HTTPException(status_code=404)
     if run["status"] in ("pending", "running", "paused"):
         raise HTTPException(status_code=400, detail="Aktive Runs erst abbrechen")
-    async with database._db() as db:
-        await db.execute("DELETE FROM workflow_runs WHERE id = ?", (run_id,))
-        await db.commit()
+    try:
+        async with database._db() as db:
+            # action_log.workflow_run_id referenziert workflow_runs(id) ohne
+            # ON DELETE-Regel. Bei aktiviertem PRAGMA foreign_keys scheitert das
+            # DELETE deshalb an jedem Run, der ueberhaupt etwas getan hat.
+            # Verweis loesen statt Protokoll loeschen - die Installationshistorie
+            # soll den Run ueberleben.
+            await db.execute(
+                "UPDATE action_log SET workflow_run_id = NULL WHERE workflow_run_id = ?",
+                (run_id,),
+            )
+            await db.execute("DELETE FROM workflow_runs WHERE id = ?", (run_id,))
+            await db.commit()
+    except sqlite3.IntegrityError:
+        logger.exception("Workflow-Run %s konnte nicht geloescht werden", run_id)
+        raise HTTPException(
+            status_code=409,
+            detail="Run ist noch referenziert und kann nicht geloescht werden",
+        )
     return {"ok": True}
 
 
