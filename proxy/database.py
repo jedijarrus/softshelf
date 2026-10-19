@@ -4368,14 +4368,21 @@ async def timeout_stale_running_actions(max_minutes: int = 60) -> int:
     Agent-Prozesses, der nie einen Final-Callback schickt — z.B. winget das
     am globalen Windows-Installer-Lock haengt. Gibt Anzahl betroffener Rows
     zurueck."""
+    # Gemessen ab dem Claim, nicht ab dem Einreihen: ein Eintrag, der lange
+    # in der Warteschlange stand, darf nicht direkt nach dem Start als
+    # haengend gelten. Workflow-Zeilen bleiben ausgenommen, solange ihr Run
+    # aktiv ist (der hat eigene Timeouts) — ist der Run beendet, sind offene
+    # Zeilen verwaist und wuerden den Installer-Slot sonst ewig blockieren.
     async with _db() as db:
         cur = await db.execute(
             "UPDATE action_log SET status = 'error', "
             "error_summary = ?, completed_at = datetime('now') "
             "WHERE status IN ('pending', 'running') "
-            "AND workflow_run_id IS NULL "
+            "AND (workflow_run_id IS NULL OR workflow_run_id NOT IN ("
+            "     SELECT id FROM workflow_runs "
+            "     WHERE status IN ('pending','running','paused'))) "
             "AND completed_at IS NULL "
-            "AND created_at < datetime('now', ?)",
+            "AND COALESCE(claimed_at, created_at) < datetime('now', ?)",
             (
                 f"Timeout: kein Callback innerhalb {int(max_minutes)} min "
                 "(Agent-Prozess vermutlich haengen geblieben, z.B. winget am "

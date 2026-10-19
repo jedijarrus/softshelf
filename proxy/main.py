@@ -410,6 +410,9 @@ async def _action_log_watchdog():
                 "action-log watchdog: %d haengende Eintraege (>%dmin) auf error gesetzt",
                 n, minutes,
             )
+            # Freigewordene Slots sofort an Wartende weitergeben
+            import action_queue
+            await action_queue.tick()
     except Exception as e:
         logger.warning("action-log watchdog tick: %s", e)
 
