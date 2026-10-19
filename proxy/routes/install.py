@@ -29,6 +29,7 @@ import winget_scanner
 from auth import create_download_token, verify_machine_token
 from config import get_settings, runtime_value
 from rmm import get_rmm_client
+import action_queue
 
 router = APIRouter()
 logger = logging.getLogger("softshelf")
@@ -175,6 +176,8 @@ async def _fail_delivery_log(log_id: int, error_msg: str):
         if run_id:
             import workflow_engine
             await workflow_engine.advance(run_id, log_id, "error")
+        # Slot ist frei — naechsten Wartenden anstossen
+        action_queue.kick_soon((entry or {}).get("agent_id"))
     except Exception:
         logger.exception("delivery-fail advance failed for log %s", log_id)
 
@@ -186,6 +189,67 @@ class SoftwareRequest(BaseModel):
 class SoftwareResponse(BaseModel):
     status: str
     message: str
+    # Warteschlange (optional — alte Trays werten nur status/message aus)
+    queued: bool = False
+    position: int | None = None
+    log_id: int | None = None
+
+
+KIOSK_MAX_OPEN_ACTIONS = 10
+
+_KIOSK_VERBS = {
+    "install": "Installation", "upgrade": "Aktualisierung",
+    "uninstall": "Deinstallation", "downgrade": "Zurückstufung",
+}
+
+
+async def _kiosk_guard(agent_id: str, pkg: dict, action: str) -> None:
+    """Server-seitige Durchsetzung dessen, was der Kiosk dem Benutzer zeigt.
+    Ohne diese Pruefung koennte ein Benutzer mit dem Maschinen-Token die API
+    direkt aufrufen und z.B. eine Pflichtsoftware deinstallieren."""
+    if int(pkg.get("hidden_in_kiosk") or 0) == 2:
+        # Komplett ausgeblendet: wie "nicht freigegeben" behandeln
+        raise HTTPException(status_code=404, detail="Paket nicht freigegeben")
+    if action == "uninstall" and pkg.get("hide_uninstall"):
+        raise HTTPException(
+            status_code=403,
+            detail="Dieses Paket kann über den Kiosk nicht deinstalliert werden.",
+        )
+    if await database.count_open_actions(agent_id) >= KIOSK_MAX_OPEN_ACTIONS:
+        raise HTTPException(
+            status_code=429,
+            detail="Auf diesem Gerät sind schon viele Aktionen offen. Bitte warten, bis einige fertig sind.",
+        )
+
+
+def _kiosk_queue_response(pkg: dict, hostname: str, action: str, res: dict) -> "SoftwareResponse":
+    """Antworttext fuer den Kiosk aus dem Ergebnis von action_queue.enqueue()."""
+    name = pkg.get("display_name") or pkg["name"]
+    verb = _KIOSK_VERBS.get(action, "Aktion")
+    if res.get("duplicate"):
+        return SoftwareResponse(
+            status=res.get("status") or "queued",
+            message=f"Für '{name}' läuft bereits eine Aktion oder sie ist vorgemerkt.",
+            queued=res.get("status") == "queued",
+            log_id=res.get("log_id"),
+        )
+    if res.get("started"):
+        return SoftwareResponse(
+            status="started",
+            message=f"{verb} von '{name}' auf {hostname} gestartet. Das kann einige Minuten dauern.",
+            log_id=res.get("log_id"),
+        )
+    pos = res.get("position")
+    if res.get("reason") in ("agent_offline", "agent_unknown", "rmm_unreachable"):
+        msg = f"{verb} von '{name}' ist vorgemerkt und startet, sobald das Gerät erreichbar ist."
+    elif res.get("current"):
+        msg = (f"{verb} von '{name}' ist in der Warteschlange (Position {pos}) und startet "
+               f"automatisch, sobald '{res['current']}' fertig ist.")
+    else:
+        msg = f"{verb} von '{name}' ist in der Warteschlange (Position {pos}) und startet gleich."
+    return SoftwareResponse(
+        status="queued", message=msg, queued=True, position=pos, log_id=res.get("log_id"),
+    )
 
 
 def _is_safe_package_name(name: str) -> bool:
@@ -1345,6 +1409,8 @@ async def install_package(
     body: SoftwareRequest,
     token: dict = Depends(verify_machine_token),
 ):
+    """Kiosk-Install. Wird nur noch eingereiht — zugestellt wird ueber die
+    Warteschlange, hoechstens ein Installer-Op gleichzeitig pro Agent."""
     agent_id = token["agent_id"]
     hostname = token["hostname"]
     _ag_row = await database.get_agent(agent_id)
@@ -1355,137 +1421,29 @@ async def install_package(
     if not pkg:
         raise HTTPException(status_code=404, detail="Paket nicht freigegeben")
 
-    # Dedup: existiert schon ein pending/running Eintrag fuer
-    # (agent, package), blockt Re-Dispatch (Doppelklick / Re-Trigger).
-    existing = await database.has_pending_action(agent_id, body.package_name)
-    if existing:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Bereits eine Aktion fuer '{body.package_name}' in Arbeit "
-                f"(status={existing['status']}, action={existing['action']}). "
-                f"Bitte abwarten."
-            ),
-        )
-
     ptype = pkg.get("type") or "choco"
-
+    action = "install"
+    # Validierung VOR dem Einreihen — ein kaputter Eintrag soll nicht erst
+    # beim Zustellen auffallen.
     if ptype == "winget":
         _check_winget_id(body.package_name)
-        state = await database.get_agent_winget_state(agent_id)
-        st = state.get(body.package_name)
+        st = (await database.get_agent_winget_state(agent_id)).get(body.package_name)
         if st and st.get("installed_version") and st.get("available_version"):
             action = "upgrade"
-        else:
-            action = "install"
-        scope = pkg.get("winget_scope") or "auto"
-        ver = pkg.get("version_pin")
-        include_scope_machine = scope != "user"
-        extra = pkg.get("install_args") or ""
-        inner_cmd = _build_winget_command(
-            action, body.package_name, ver,
-            include_scope_machine=include_scope_machine,
-            extra_args=extra,
-            process_check=pkg.get("process_check") or "",
-        )
-        job_id = _generate_job_id()
-        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        import json as _json
-        meta = _json.dumps({"winget_scope": scope, "winget_id": body.package_name, "version": ver})
-        log_id = await database.create_action_log(
-            agent_id, hostname, body.package_name,
-            pkg["display_name"], "winget", action, job_id=job_id, metadata=meta, triggered_by=triggered_by,
-        )
-        _spawn_bg(_deliver_command_bg(
-            agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, action, "winget", log_id=log_id,
-            run_as_user=_is_msstore_id(body.package_name),
-        ))
-        verb = "Aktualisierung" if action == "upgrade" else "Installation"
-        msg = (
-            f"{verb} von '{pkg['display_name']}' auf {hostname} gestartet. "
-            f"Das kann einige Minuten dauern."
-        )
-        return SoftwareResponse(status="started", message=msg)
-
-    if not _is_safe_package_name(body.package_name):
-        raise HTTPException(status_code=400, detail="Ungültiger Paketname")
-
-    if ptype == "plugin":
-        if not pkg.get("sha256"):
-            raise HTTPException(status_code=500, detail="Plugin-Paket ohne Datei-Hash")
-        inner_cmd = await _build_plugin_install_command(pkg, agent_id)
-        job_id = _generate_job_id()
-        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, body.package_name,
-            pkg["display_name"], "plugin", "install", job_id=job_id, triggered_by=triggered_by,
-        )
-        _spawn_bg(_deliver_command_bg(
-            agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, "install", "plugin", log_id=log_id,
-        ))
-        return SoftwareResponse(
-            status="started",
-            message=f"Plugin-Installation von '{pkg['display_name']}' auf {hostname} gestartet.",
-        )
-
-    if ptype == "custom":
-        if not pkg.get("sha256"):
-            raise HTTPException(status_code=500, detail="Custom-Paket ohne Datei-Hash")
-        inner_cmd = await _build_install_command(pkg, agent_id)
-        job_id = _generate_job_id()
-        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, body.package_name,
-            pkg["display_name"], "custom", "install", job_id=job_id, triggered_by=triggered_by,
-        )
-        _spawn_bg(_deliver_command_bg(
-            agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, "install", "custom", log_id=log_id,
-            run_as_user=bool(pkg.get("run_as_user")),
-        ))
-        msg = (
-            f"Installation von '{pkg['display_name']}' auf {hostname} gestartet. "
-            f"Das kann einige Minuten dauern."
-        )
-    elif ptype == "extension":
-        inner_cmd = await _build_extension_install_command(pkg)
-        job_id = _generate_job_id()
-        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, body.package_name,
-            pkg["display_name"], "extension", "install", job_id=job_id, triggered_by=triggered_by,
-        )
-        _spawn_bg(_deliver_command_bg(
-            agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, "install", "extension", log_id=log_id,
-        ))
-        msg = (
-            f"Browser-Extension '{pkg['display_name']}' wird auf {hostname} per "
-            f"Policy ausgerollt (Chrome + Edge)."
-        )
     else:
-        inner_cmd = _build_choco_command("install", body.package_name)
-        job_id = _generate_job_id()
-        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, body.package_name,
-            pkg["display_name"], "choco", "install", job_id=job_id, triggered_by=triggered_by,
-        )
-        _spawn_bg(_deliver_command_bg(
-            agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, "install", "choco", log_id=log_id,
-        ))
-        msg = (
-            f"Installation von '{pkg['display_name']}' auf {hostname} gestartet. "
-            f"Das kann einige Minuten dauern."
-        )
+        if not _is_safe_package_name(body.package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        if ptype == "plugin" and not pkg.get("sha256"):
+            raise HTTPException(status_code=500, detail="Plugin-Paket ohne Datei-Hash")
+        if ptype == "custom" and not pkg.get("sha256"):
+            raise HTTPException(status_code=500, detail="Custom-Paket ohne Datei-Hash")
 
-    return SoftwareResponse(
-        status="started",
-        message=msg or f"Installation von '{pkg['display_name']}' auf {hostname} gestartet.",
+    await _kiosk_guard(agent_id, pkg, action)
+    res = await action_queue.enqueue(
+        agent_id, hostname, pkg, action,
+        priority=database.PRIO_INTERACTIVE, triggered_by=triggered_by,
     )
+    return _kiosk_queue_response(pkg, hostname, action, res)
 
 
 @router.post("/uninstall", response_model=SoftwareResponse)
@@ -1493,6 +1451,7 @@ async def uninstall_package(
     body: SoftwareRequest,
     token: dict = Depends(verify_machine_token),
 ):
+    """Kiosk-Uninstall, ueber die Warteschlange."""
     agent_id = token["agent_id"]
     hostname = token["hostname"]
     _ag_row = await database.get_agent(agent_id)
@@ -1502,131 +1461,24 @@ async def uninstall_package(
     if not pkg:
         raise HTTPException(status_code=404, detail="Paket nicht freigegeben")
 
-    # Dedup: existiert schon ein pending/running Eintrag fuer
-    # (agent, package), blockt Re-Dispatch.
-    existing = await database.has_pending_action(agent_id, body.package_name)
-    if existing:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Bereits eine Aktion fuer '{body.package_name}' in Arbeit "
-                f"(status={existing['status']}, action={existing['action']})."
-            ),
-        )
-
     ptype = pkg.get("type") or "choco"
-
     if ptype == "winget":
         _check_winget_id(body.package_name)
-        # uninstall_override mit durchreichen — Paritaet zum Admin-Dispatch
-        # (dispatch_uninstall_for_agent), sonst greift der hinterlegte
-        # Override (z.B. TeamViewer) bei Kiosk-Deinstallation nicht.
-        inner_cmd = _build_winget_command(
-            "uninstall", body.package_name,
-            extra_args=pkg.get("install_args") or "",
-            display_name=pkg.get("display_name") or "",
-            uninstall_override=(pkg.get("uninstall_cmd") or "").strip(),
-        )
-        scope = pkg.get("winget_scope") or "auto"
-        job_id = _generate_job_id()
-        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, body.package_name,
-            pkg["display_name"], "winget", "uninstall", job_id=job_id, triggered_by=triggered_by,
-        )
-        _spawn_bg(_deliver_command_bg(
-            agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, "uninstall", "winget", log_id=log_id,
-            run_as_user=_is_msstore_id(body.package_name),
-        ))
-        msg = (
-            f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
-            f"Das kann einige Minuten dauern."
-        )
-        return SoftwareResponse(status="started", message=msg)
-
-    if not _is_safe_package_name(body.package_name):
-        raise HTTPException(status_code=400, detail="Ungültiger Paketname")
-
-    if ptype == "plugin":
-        inner_cmd = _build_plugin_uninstall_command(pkg)
-        job_id = _generate_job_id()
-        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, body.package_name,
-            pkg["display_name"], "plugin", "uninstall", job_id=job_id, triggered_by=triggered_by,
-        )
-        _spawn_bg(_deliver_command_bg(
-            agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, "uninstall", "plugin", log_id=log_id,
-        ))
-        return SoftwareResponse(
-            status="started",
-            message=f"Plugin-Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet.",
-        )
-
-    if ptype == "custom":
-        uninstall_cmd = pkg.get("uninstall_cmd")
-        if not uninstall_cmd:
+    else:
+        if not _is_safe_package_name(body.package_name):
+            raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+        if ptype == "custom" and not (pkg.get("uninstall_cmd") or "").strip():
             raise HTTPException(
                 status_code=400,
-                detail="Für dieses Paket wurde kein Uninstall-Command hinterlegt.",
+                detail="Für dieses Paket ist keine Deinstallation hinterlegt.",
             )
-        inner_cmd = _build_uninstall_command(
-            uninstall_cmd,
-            timeout_s=(pkg.get("uninstall_timeout")
-                       or pkg.get("install_timeout") or 120),
-            detection_name=pkg.get("detection_name") or pkg.get("display_name") or "",
-        )
-        job_id = _generate_job_id()
-        ps_cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, body.package_name,
-            pkg["display_name"], "custom", "uninstall", job_id=job_id, triggered_by=triggered_by,
-        )
-        _spawn_bg(_deliver_command_bg(
-            agent_id, hostname, body.package_name, pkg["display_name"],
-            ps_cmd, "uninstall", "custom", log_id=log_id,
-            run_as_user=bool(pkg.get("run_as_user")),
-        ))
-        msg = (
-            f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
-            f"Das kann einige Minuten dauern."
-        )
-    elif ptype == "extension":
-        inner_cmd = _build_extension_uninstall_command(pkg)
-        job_id = _generate_job_id()
-        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, body.package_name,
-            pkg["display_name"], "extension", "uninstall", job_id=job_id, triggered_by=triggered_by,
-        )
-        _spawn_bg(_deliver_command_bg(
-            agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, "uninstall", "extension", log_id=log_id,
-        ))
-        msg = f"Browser-Extension '{pkg['display_name']}' wird auf {hostname} entfernt (Chrome + Edge)."
-    else:
-        inner_cmd = _build_choco_command("uninstall", body.package_name)
-        job_id = _generate_job_id()
-        cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, body.package_name,
-            pkg["display_name"], "choco", "uninstall", job_id=job_id, triggered_by=triggered_by,
-        )
-        _spawn_bg(_deliver_command_bg(
-            agent_id, hostname, body.package_name, pkg["display_name"],
-            cmd, "uninstall", "choco", log_id=log_id,
-        ))
-        msg = (
-            f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet. "
-            f"Das kann einige Minuten dauern."
-        )
 
-    return SoftwareResponse(
-        status="started",
-        message=msg or f"Deinstallation von '{pkg['display_name']}' auf {hostname} gestartet.",
+    await _kiosk_guard(agent_id, pkg, "uninstall")
+    res = await action_queue.enqueue(
+        agent_id, hostname, pkg, "uninstall",
+        priority=database.PRIO_INTERACTIVE, triggered_by=triggered_by,
     )
+    return _kiosk_queue_response(pkg, hostname, "uninstall", res)
 
 
 # ── Shared dispatch helpers (für admin-driven bulk + profile apply) ───────────
@@ -1642,7 +1494,7 @@ async def _register_or_reuse_log(
     Eintrag wieder (Queue-Tick). Returns log_id."""
     if existing_log_id:
         ok = await database.repurpose_queued_action_log(
-            existing_log_id, job_id=job_id, metadata=metadata,
+            existing_log_id, job_id=job_id, metadata=metadata, action=action,
         )
         if ok:
             return existing_log_id
@@ -1831,6 +1683,7 @@ async def dispatch_downgrade_for_agent(
     pkg: dict,
     allow_duplicate: bool = False,
     triggered_by: str | None = None,
+    existing_log_id: int | None = None,
 ) -> dict:
     """Downgrade eines (Agent, Paket)-Pairs auf die gepinnte Version.
 
@@ -1871,9 +1724,11 @@ async def dispatch_downgrade_for_agent(
         import json as _json
         meta = _json.dumps({"winget_scope": scope, "winget_id": package_name,
                             "version": pin, "downgrade": True})
-        log_id = await database.create_action_log(
-            agent_id, hostname, package_name, pkg["display_name"],
-            "winget", "downgrade", job_id=job_id, metadata=meta, triggered_by=triggered_by,
+        log_id = await _register_or_reuse_log(
+            existing_log_id, agent_id=agent_id, hostname=hostname,
+            package_name=package_name, display_name=pkg["display_name"],
+            pkg_type="winget", action="downgrade", job_id=job_id, metadata=meta,
+            triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1886,9 +1741,11 @@ async def dispatch_downgrade_for_agent(
         inner_cmd = _build_choco_command("downgrade", package_name, version=pin)
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-        log_id = await database.create_action_log(
-            agent_id, hostname, package_name, pkg["display_name"],
-            "choco", "downgrade", job_id=job_id, triggered_by=triggered_by,
+        log_id = await _register_or_reuse_log(
+            existing_log_id, agent_id=agent_id, hostname=hostname,
+            package_name=package_name, display_name=pkg["display_name"],
+            pkg_type="choco", action="downgrade", job_id=job_id,
+            triggered_by=triggered_by,
         )
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
@@ -1934,12 +1791,13 @@ async def downgrade_package(
             detail=f"Kein Downgrade noetig (installiert={installed}, pin={pin})",
         )
 
-    await dispatch_downgrade_for_agent(agent_id, hostname, pkg, triggered_by=triggered_by)
-    return SoftwareResponse(
-        status="started",
-        message=(f"Downgrade von '{pkg['display_name']}' auf {pin} auf {hostname} "
-                 f"gestartet. Das kann einige Minuten dauern."),
+    await _kiosk_guard(agent_id, pkg, "downgrade")
+    res = await action_queue.enqueue(
+        agent_id, hostname, pkg, "downgrade",
+        priority=database.PRIO_INTERACTIVE, triggered_by=triggered_by,
+        request={"version_pin": pin},
     )
+    return _kiosk_queue_response(pkg, hostname, "downgrade", res)
 
 
 async def dispatch_install_for_agent(
@@ -2567,6 +2425,11 @@ async def receive_callback(job_id: str, body: CallbackPayload):
             )
         except Exception:
             logger.exception("workflow advance failed for run %s", entry.get("workflow_run_id"))
+
+    # ── Warteschlange: Naechsten sofort starten ────────────────────
+    # Bewusst NACH den Retries: ein soeben angelegter Retry belegt den
+    # Installer-Slot und laeuft damit vor dem naechsten Wartenden.
+    action_queue.kick_soon(entry["agent_id"])
 
     # ── Targeted Re-Scan (fire-and-forget) ─────────────────────────
     # Nicht inline: blockiert sonst den Callback-Response bis zu 120s
