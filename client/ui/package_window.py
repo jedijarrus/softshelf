@@ -735,6 +735,27 @@ html, body {{
 }}
 .proc-btn-retry:hover {{ background: var(--fg-2); }}
 
+/* ─── Verlauf ─── */
+.hist-row {{
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--bg);
+}}
+.hist-row.error {{ border-color: var(--red-border); background: var(--red-bg); }}
+.hist-head {{ display: flex; align-items: center; justify-content: space-between; gap: 8px; }}
+.hist-name {{ font-size: 13px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.hist-pill {{ flex-shrink: 0; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--fg-3); background: var(--bg); }}
+.hist-pill.success {{ color: var(--green); border-color: var(--green-border); background: var(--green-bg); }}
+.hist-pill.error {{ color: var(--red); border-color: var(--red-border); background: var(--bg); }}
+.hist-meta {{ font-size: 11px; color: var(--fg-4); margin-top: 3px; }}
+.hist-reason {{ font-size: 12px; color: var(--fg-3); margin-top: 6px; line-height: 1.4; }}
+.hist-row.error .hist-reason {{ color: var(--red); }}
+.hist-detail-toggle {{ font-size: 11px; color: var(--fg-4); margin-top: 4px; cursor: pointer; text-decoration: underline; }}
+.hist-detail {{ display: none; font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--fg-3); white-space: pre-wrap; word-break: break-word; margin-top: 6px; padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); }}
+.hist-detail.open {{ display: block; }}
+
 /* ─── Workflow Cards (Tab Aktionen) ─── */
 .wf-card {{
   border: 1px solid var(--border);
@@ -943,6 +964,7 @@ html, body {{
         <div class="tab" data-tab="updates">Updates <span class="tab-badge" id="updateBadge" style="display:none">0</span></div>
         <div class="tab" data-tab="installed">Installiert</div>
         <div class="tab" data-tab="actions" id="tabActions" style="display:none">Aktionen</div>
+        <div class="tab" data-tab="history">Verlauf <span class="tab-badge" id="historyBadge" style="display:none">0</span></div>
       </div>
       <div class="header-status">
         <div class="status-dot" id="statusDot"></div>
@@ -1004,6 +1026,7 @@ let _wfPollTimer = null;
 let _wfPendingId = null;
 let _queuePollTimer = null;
 let _queueCurrent = null;   // was gerade im Installer laeuft (Name oder 'IT-Wartung')
+let history = null;         // null = noch nicht geladen
 
 // ─── Init ───
 function _initApp() {{
@@ -1015,6 +1038,9 @@ function _initApp() {{
       if (activeTab === 'actions') {{
         renderActions();
         loadWorkflows();
+      }} else if (activeTab === 'history') {{
+        renderHistory();
+        loadHistory();
       }} else {{
         renderPackages();
       }}
@@ -1024,10 +1050,12 @@ function _initApp() {{
   searchInput.addEventListener('input', (e) => {{
     searchQuery = e.target.value.toLowerCase();
     if (activeTab === 'actions') renderActions();
+    else if (activeTab === 'history') renderHistory();
     else renderPackages();
   }});
   loadPackages();
   loadWorkflows();
+  loadHistory();
   pollActiveRun();
 }}
 // JS-Fehler ins Client-Log (tray.log) — sonst sieht sie niemand
@@ -1160,6 +1188,8 @@ function getFilteredPackages() {{
 }}
 
 function renderPackages() {{
+  if (activeTab === 'actions') {{ renderActions(); return; }}
+  if (activeTab === 'history') {{ renderHistory(); return; }}
   const content = document.getElementById('content');
   const filtered = getFilteredPackages();
 
@@ -1460,6 +1490,84 @@ function showDowngradeConfirm(displayName, targetVer) {{
 
 // ─── UI Helpers ───
 
+// ─── Verlauf ───
+async function loadHistory() {{
+  try {{
+    const r = await pywebview.api.get_history();
+    if (Array.isArray(r)) history = r;
+  }} catch (e) {{}}
+  updateHistoryBadge();
+  if (activeTab === 'history') renderHistory();
+}}
+
+function _parseUtc(ts) {{
+  if (!ts) return null;
+  const d = new Date(String(ts).replace(' ', 'T') + 'Z');
+  return isNaN(d.getTime()) ? null : d;
+}}
+
+function _fmtWhen(ts) {{
+  const d = _parseUtc(ts);
+  if (!d) return '';
+  const now = new Date();
+  const hm = d.toLocaleTimeString('de-DE', {{ hour: '2-digit', minute: '2-digit' }});
+  if (d.toDateString() === now.toDateString()) return 'heute ' + hm;
+  const y = new Date(now); y.setDate(now.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return 'gestern ' + hm;
+  return d.toLocaleDateString('de-DE', {{ day: '2-digit', month: '2-digit' }}) + ' ' + hm;
+}}
+
+function updateHistoryBadge() {{
+  const badge = document.getElementById('historyBadge');
+  if (!badge) return;
+  const since = Date.now() - 24 * 3600 * 1000;
+  const n = (history || []).filter(h => h.status === 'error' && (_parseUtc(h.completed_at || h.created_at) || 0) > since).length;
+  badge.textContent = n;
+  badge.style.display = n > 0 ? 'inline-block' : 'none';
+}}
+
+const _HIST_VERB = {{ install: 'Installation', upgrade: 'Update', uninstall: 'Deinstallation', downgrade: 'Versionswechsel', reinstall: 'Neuinstallation' }};
+
+function renderHistory() {{
+  const content = document.getElementById('content');
+  if (history === null) {{
+    content.innerHTML = `<div class="loading"><div class="spinner"></div><div class="loading-text">Verlauf wird geladen...</div></div>`;
+    return;
+  }}
+  let items = history.slice();
+  if (searchQuery) items = items.filter(h => (h.display_name || '').toLowerCase().includes(searchQuery));
+  if (!items.length) {{
+    content.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">\u2713</div>
+        <div class="empty-title">Noch nichts passiert</div>
+        <div class="empty-detail">Hier erscheinen die Installationen der letzten 30 Tage.</div>
+      </div>`;
+    return;
+  }}
+  content.innerHTML = items.map(h => {{
+    const st = h.status === 'success' ? 'success' : (h.status === 'error' ? 'error' : '');
+    const verb = h.action === 'install' && h.pkg_type === 'client_update' ? 'Update' : (_HIST_VERB[h.action] || 'Aktion');
+    const who = h.own ? '' : ' \u00B7 durch IT';
+    const when = _fmtWhen(h.completed_at || h.created_at);
+    let extra = '';
+    if (h.reason) extra += `<div class="hist-reason">${{escHtml(h.reason)}}</div>`;
+    if (h.detail && h.status === 'error') {{
+      extra += `<div class="hist-detail-toggle" onclick="this.nextElementSibling.classList.toggle('open')">Technische Details</div>`
+             + `<div class="hist-detail">${{escHtml(h.detail)}}</div>`;
+    }}
+    return `
+      <div class="hist-row ${{st}}">
+        <div class="hist-head">
+          <div class="hist-name">${{escHtml(h.display_name)}}</div>
+          <span class="hist-pill ${{st}}">${{escHtml(h.status_label || h.status)}}</span>
+        </div>
+        <div class="hist-meta">${{escHtml(verb)}} \u00B7 ${{escHtml(when)}}${{who}}</div>
+        ${{extra}}
+      </div>`;
+  }}).join('');
+}}
+
 // ─── Warteschlange ───
 function scheduleQueuePoll() {{
   if (_queuePollTimer) {{ clearTimeout(_queuePollTimer); _queuePollTimer = null; }}
@@ -1491,8 +1599,13 @@ async function pollQueue() {{
     }}
   }});
   if (finished) {{
+    const doneIds = (packages || []).filter(p => p.op && !byId[p.op.log_id]).map(p => p.op.log_id);
     // Status kommt nach dem Callback per Re-Scan — einmal sofort, einmal spaeter
     await loadPackages();
+    await loadHistory();
+    (history || []).filter(h => doneIds.includes(h.log_id) && h.status === 'error').forEach(h => {{
+      showToast(h.display_name + ': fehlgeschlagen \u2014 ' + (h.reason || 'siehe Verlauf'), false);
+    }});
     setTimeout(loadPackages, 15000);
     return;
   }}
@@ -1884,6 +1997,14 @@ class PackageApi:
             msg = _format_http_error(e)
             logger.warning("Versionswechsel %s fehlgeschlagen: %s", name, msg)
             raise Exception(msg)
+
+    def get_history(self) -> list[dict] | None:
+        """Verlauf dieses Geraets (Tab 'Verlauf')."""
+        try:
+            return self._api.get_history()
+        except Exception:
+            logger.exception("Verlauf nicht ladbar")
+            return None
 
     def get_queue(self) -> dict | None:
         """Warteschlange dieses Geraets (fuer das Polling im Fenster)."""

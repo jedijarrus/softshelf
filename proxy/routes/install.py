@@ -1442,6 +1442,85 @@ async def kiosk_queue(token: dict = Depends(verify_machine_token)):
     return {"installer": {"busy": current is not None, "current": current}, "items": items}
 
 
+# Klartext fuer den Kiosk-Verlauf. Nur dokumentierte Codes: MSI
+# (Windows Installer) und winget (APPINSTALLER_CLI_ERROR_*).
+_EXIT_REASON = {
+    1602: "Installation wurde abgebrochen.",
+    1603: "Schwerer Fehler im Installer.",
+    1605: "Das Programm ist nicht installiert.",
+    1618: "Es lief gerade eine andere Installation.",
+    1619: "Installationspaket konnte nicht geöffnet werden (Download unvollständig?).",
+    1620: "Installationspaket konnte nicht geöffnet werden (Download unvollständig?).",
+    1625: "Durch eine Richtlinie verboten.",
+    1633: "Dieses Gerät wird vom Installer nicht unterstützt.",
+    1638: "Eine andere Version ist bereits installiert.",
+    -1978335212: "Paket in der Quelle nicht gefunden.",
+    -1978335216: "Kein passender Installer für dieses Gerät.",
+}
+# (Muster im technischen Text, Klartext) — erster Treffer gewinnt
+_TEXT_REASON = (
+    ("nicht geantwortet", "Zeitüberschreitung: Der Installer hat nicht rechtzeitig geantwortet."),
+    ("unable to find package", "Paket in der Quelle nicht gefunden."),
+    ("no package found", "Paket in der Quelle nicht gefunden."),
+    ("download failed", "Download fehlgeschlagen."),
+    ("existiert nicht in tactical", "Gerät war nicht erreichbar."),
+    ("rmm-aufruf fehlgeschlagen", "Gerät war nicht erreichbar."),
+    ("queue ttl", "Zu lange gewartet — automatisch verworfen."),
+    ("zeitlimit", "Zeitüberschreitung."),
+)
+_HISTORY_STATUS = {
+    "queued": "Wartet", "pending": "Wird gestartet", "running": "Läuft",
+    "success": "Erfolgreich", "error": "Fehlgeschlagen",
+    "skipped": "Übersprungen", "cancelled": "Abgebrochen",
+}
+
+
+def _kiosk_reason(entry: dict) -> str | None:
+    """Kurzer Grund fuer Fehler/Abbruch, verstaendlich fuer Endanwender."""
+    status = entry.get("status")
+    if status not in ("error", "cancelled", "skipped"):
+        return None
+    ec = entry.get("exit_code")
+    if status == "error" and isinstance(ec, int) and ec in _EXIT_REASON:
+        return _EXIT_REASON[ec]
+    text = (entry.get("error_summary") or "").strip()
+    low = text.lower()
+    for pattern, reason in _TEXT_REASON:
+        if pattern in low:
+            return reason
+    if status == "cancelled":
+        return "Abgebrochen."
+    if status == "skipped":
+        return "Übersprungen."
+    if text:
+        return text.splitlines()[-1][:160]
+    return f"Fehlgeschlagen (Code {ec})." if ec not in (None, 0) else "Fehlgeschlagen."
+
+
+@router.get("/history")
+async def kiosk_history(token: dict = Depends(verify_machine_token)):
+    """Verlauf des eigenen Geraets fuer den Tray-Tab 'Verlauf': was lief,
+    mit welchem Ergebnis und — bei Fehlern — warum."""
+    items = []
+    for r in await database.list_agent_history(token["agent_id"]):
+        items.append({
+            "log_id": r["id"],
+            "package_name": r["package_name"],
+            "display_name": r.get("display_name") or r["package_name"],
+            "pkg_type": r["pkg_type"],
+            "action": r["action"],
+            "status": r["status"],
+            "status_label": _HISTORY_STATUS.get(r["status"], r["status"]),
+            "own": (r.get("triggered_by") or "").startswith("kiosk"),
+            "reason": _kiosk_reason(r),
+            "detail": (r.get("error_summary") or "")[-400:] or None,
+            "exit_code": r.get("exit_code"),
+            "created_at": r.get("created_at"),
+            "completed_at": r.get("completed_at"),
+        })
+    return {"items": items}
+
+
 @router.post("/queue/{log_id}/cancel")
 async def kiosk_queue_cancel(log_id: int, token: dict = Depends(verify_machine_token)):
     """Eigenen, noch wartenden Kiosk-Eintrag abbrechen."""
