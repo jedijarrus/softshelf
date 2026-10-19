@@ -6336,7 +6336,7 @@ body.help-active [data-help]:not(.tab)::after {
     <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
       <select id="al-filter-status" class="input input-sm" onchange="loadActionLog(true)" style="width:140px">
         <option value="">Alle Status</option>
-        <option value="queued">Vorgemerkt</option>
+        <option value="queued">Wartet</option>
         <option value="pending">Ausstehend</option>
         <option value="running">Läuft</option>
         <option value="success">Erfolg</option>
@@ -12696,6 +12696,8 @@ function renderAgentDetail(softwareData, log) {
       <span class="agent-section-count">${log.length} Einträge</span>
     </div>
     <div>${logBlock}</div>
+    <div class="section-divider" style="margin-top:24px"><span class="label">Warteschlange</span></div>
+    <div id="agent-queue" style="margin-bottom:16px"><div class="empty-mini">Lade…</div></div>
     <div class="section-divider" style="margin-top:24px"><span class="label">Workflows</span></div>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
       <select class="input" id="agent-wf-select" style="flex:1;font-size:13px">
@@ -12709,6 +12711,8 @@ function renderAgentDetail(softwareData, log) {
   `;
   _applySoftwareFilter();
   loadAgentWorkflows(_currentAgent.agent_id);
+  _agentQueueSig = null;
+  loadAgentQueue(_currentAgent.agent_id);
 }
 
 function _onSoftwareFilterInput() {
@@ -14680,7 +14684,13 @@ async function handleDispatchResponse(resp, onDispatched) {
       );
     });
   }
+  if (resp && (resp.queued || resp.duplicate)) {
+    toast(resp.message || 'In der Warteschlange.');
+    if (_currentAgent) loadAgentQueue(_currentAgent.agent_id);
+    return resp.duplicate ? 'duplicate' : 'queued';
+  }
   if (typeof onDispatched === 'function') onDispatched();
+  if (_currentAgent) loadAgentQueue(_currentAgent.agent_id);
   return 'dispatched';
 }
 
@@ -16040,7 +16050,7 @@ init();
 var alPage = 0;
 const AL_PAGE_SIZE = 50;
 var _alFilterTimer = null;
-const _alStatusLabel = { queued: 'Vorgemerkt', pending: 'Ausstehend', running: 'Läuft', success: 'Erfolg', error: 'Fehler', skipped: 'Übersprungen', cancelled: 'Abgebrochen' };
+const _alStatusLabel = { queued: 'Wartet', pending: 'Ausstehend', running: 'Läuft', success: 'Erfolg', error: 'Fehler', skipped: 'Übersprungen', cancelled: 'Abgebrochen' };
 const _alPkgTypeLabel = { winget: 'winget', choco: 'choco', custom: 'custom', plugin: 'plugin', client_update: 'update', script: 'script' };
 const _alPkgTypeClass = { client_update: 'custom' }; // visuell wie custom-Pille (violet dot)
 const _alActionLabel  = { install: 'install', uninstall: 'uninstall', upgrade: 'upgrade', reboot: 'reboot', run: 'run' };
@@ -16185,7 +16195,7 @@ function renderActionLog(entries) {
     if (e.status === 'error') {
       retryBtn = `<button class="al-retry" onclick="event.stopPropagation();alRetry(${e.id})" title="Nochmal versuchen">&#8635;</button>`;
     } else if (e.status === 'queued') {
-      retryBtn = `<button class="al-retry" onclick="event.stopPropagation();alCancelQueued(${e.id})" title="Vormerkung abbrechen">&times;</button>`;
+      retryBtn = `<button class="al-retry" onclick="event.stopPropagation();alCancelQueued(${e.id})" title="Aus Warteschlange entfernen">&times;</button>`;
     }
     const rowCls = ['al-row'];
     if (e.status === 'error')  rowCls.push('al-error');
@@ -16269,7 +16279,7 @@ async function alRetry(logId) {
 async function alCancelQueued(logId) {
   try {
     await api('POST', '/admin/api/action-log/' + logId + '/cancel-queued');
-    toast('Vormerkung abgebrochen');
+    toast('Aus Warteschlange entfernt');
     loadActionLog();
   } catch (e) { /* api() hat bereits getoastet */ }
 }
@@ -16907,6 +16917,114 @@ function renderAgentWorkflowRuns(runs, agentId) {
     '</div>';
   }).join('');
   if (agentId) _scheduleAgentWfPoll(agentId, runs);
+}
+
+// ── Agent-Warteschlange ─────────────────────────────────────────────────────
+let _agentQueueTimer = null;
+let _agentQueueSig = null;
+const _QUEUE_ACTION_LABEL = { install: 'Installation', upgrade: 'Update', uninstall: 'Deinstallation',
+  downgrade: 'Downgrade', reinstall: 'Reinstall', run: 'Skript', client_update: 'Client-Update' };
+const _QUEUE_REASON_LABEL = { agent_offline: 'Agent offline', agent_unknown: 'Agent in Tactical unbekannt',
+  rmm_unreachable: 'Tactical nicht erreichbar', delivery_failed: 'Zustellung wird wiederholt',
+  dispatch_error: 'Zustellung wird wiederholt', client_build_missing: 'Client-Build fehlt' };
+
+function _queueTrigger(t, runId) {
+  if (runId) return 'Workflow #' + runId;
+  if (!t) return 'System';
+  const i = t.indexOf(':');
+  const kind = i < 0 ? t : t.slice(0, i), who = i < 0 ? '' : t.slice(i + 1);
+  const k = { kiosk: 'Kiosk', admin: 'Admin', bulk: 'Bulk', profile: 'Profil', rollout: 'Rollout',
+    compliance: 'Compliance', workflow: 'Workflow' }[kind] || kind;
+  return who ? k + ' · ' + who : k;
+}
+
+async function loadAgentQueue(agentId) {
+  if (_agentQueueTimer) { clearTimeout(_agentQueueTimer); _agentQueueTimer = null; }
+  if (!_currentAgent || _currentAgent.agent_id !== agentId) return;
+  let items = null;
+  try {
+    // Direkt per fetch statt api(): ein Polling-Fehler soll nicht alle 5s toasten
+    const r = await fetch('/admin/api/agents/' + encodeURIComponent(agentId) + '/queue',
+      { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+    if (r.ok) items = ((await r.json()) || {}).items || [];
+  } catch (e) {}
+  if (!_currentAgent || _currentAgent.agent_id !== agentId) return;
+  const el = document.getElementById('agent-queue');
+  if (!el) return;
+  if (items === null) {
+    if (_agentQueueSig === null) el.innerHTML = '<div class="empty-mini">Fehler beim Laden.</div>';
+  } else {
+    const sig = JSON.stringify(items.map(q => [q.id, q.status, q.position, q.priority, q.queue_reason]));
+    if (sig !== _agentQueueSig) { _agentQueueSig = sig; renderAgentQueue(items); }
+  }
+  // Solange etwas offen ist zuegig, sonst gemaechlich (Kiosk-Klicks tauchen auch so auf)
+  const busy = items && items.length;
+  _agentQueueTimer = setTimeout(() => loadAgentQueue(agentId), busy ? 5000 : 20000);
+}
+
+function renderAgentQueue(items) {
+  const el = document.getElementById('agent-queue');
+  if (!el) return;
+  if (!items.length) {
+    el.innerHTML = '<div class="empty-mini">Nichts offen.</div>';
+    return;
+  }
+  el.innerHTML = items.map(q => {
+    const running = q.status !== 'queued';
+    const name = q.display_name || q.package_name;
+    const act = _QUEUE_ACTION_LABEL[q.action] || q.action;
+    let state;
+    if (running) {
+      state = '<span style="color:var(--blue);font-weight:600">' + (q.status === 'running' ? 'Läuft' : 'Wird zugestellt') + '</span>';
+    } else {
+      const reason = _QUEUE_REASON_LABEL[q.queue_reason] || q.queue_reason || '';
+      state = '<span style="color:var(--fg-muted);font-weight:600">Wartet · Pos. ' + q.position + '</span>' +
+        (reason ? '<span style="color:var(--fg-muted)"> · ' + esc(reason) + '</span>' : '');
+    }
+    const meta = [act, _queueTrigger(q.triggered_by, q.workflow_run_id)];
+    if (q.lane && q.lane !== 'installer') meta.push(q.lane === 'light' ? 'Erweiterungen' : q.lane === 'client' ? 'Client' : q.lane);
+    if (q.attempts > 0) meta.push(q.attempts + '. Versuch');
+    let btns = '';
+    if (!running) {
+      if (q.position > 1) {
+        btns += '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="prioritizeQueued(' + q.id + ')" title="An die Spitze der Warteschlange">Vorziehen</button>';
+      }
+      if (!q.workflow_run_id) {
+        btns += '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="cancelQueuedAgentAction(' + q.id + ', ' + jsStr(name) + ')">Abbrechen</button>';
+      }
+    }
+    return '<div style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+      '<div style="min-width:0">' +
+        '<div style="font-size:13px"><span style="font-weight:600">' + esc(name) + '</span>' +
+          '<span style="font-size:11px;margin-left:8px">' + state + '</span></div>' +
+        '<div style="font-size:11px;color:var(--fg-muted);margin-top:2px">' + esc(meta.join(' · ')) + '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:4px;flex-shrink:0">' + btns + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function prioritizeQueued(logId) {
+  try {
+    await api('POST', '/admin/api/action-log/' + logId + '/prioritize');
+    toast('Vorgezogen');
+  } catch (e) { /* api() hat bereits getoastet */ }
+  if (_currentAgent) loadAgentQueue(_currentAgent.agent_id);
+}
+
+function cancelQueuedAgentAction(logId, name) {
+  showConfirm(
+    'Aus Warteschlange entfernen',
+    '„' + name + '" wurde noch nicht gestartet und wird nicht ausgeführt.',
+    async () => {
+      try {
+        await api('POST', '/admin/api/action-log/' + logId + '/cancel-queued');
+        toast('Aus Warteschlange entfernt');
+      } catch (e) { /* api() hat bereits getoastet */ }
+      if (_currentAgent) loadAgentQueue(_currentAgent.agent_id);
+    },
+    'Entfernen'
+  );
 }
 
 async function startWorkflowOnAgent() {
