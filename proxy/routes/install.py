@@ -443,8 +443,8 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
             "Remove-Item $zipPath -Force -ErrorAction SilentlyContinue\n",
             "Remove-Item $extPath -Recurse -Force -ErrorAction SilentlyContinue\n",
             event_log,
-            "if ($ec -ne 0 -and $ec -ne 3010) {\n",
-            '    _sfProgress "FEHLER: Installer beendete mit ExitCode $ec"\n',
+            "if (@(0,1641,3010) -notcontains $ec) {\n",
+            '    _sfProgress "WARNUNG: Installer beendete mit ExitCode $ec"\n',
             '    cmd /c "exit $ec"\n',
             "}\n",
             post_check,
@@ -468,7 +468,7 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
         )
         log_read = """
 # MSI-Log auslesen bei Fehler
-if ($ec -ne 0 -and $ec -ne 3010 -and (Test-Path $logFile)) {
+if ((@(0,1641,3010) -notcontains $ec) -and (Test-Path $logFile)) {
     Write-Output "--- MSI Install Log (letzte 30 Zeilen) ---"
     Get-Content $logFile -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "  $_" }
 }
@@ -512,8 +512,8 @@ Remove-Item $logFile -Force -ErrorAction SilentlyContinue"""
         f"Remove-Item {tmp_var} -Force -ErrorAction SilentlyContinue\n",
         event_log,
         log_read + "\n" if log_read else "",
-        "if ($ec -ne 0 -and $ec -ne 3010) {\n",
-        '    _sfProgress "FEHLER: Installer beendete mit ExitCode $ec"\n',
+        "if (@(0,1641,3010) -notcontains $ec) {\n",
+        '    _sfProgress "WARNUNG: Installer beendete mit ExitCode $ec"\n',
         '    cmd /c "exit $ec"\n',
         "}\n",
         post_check,
@@ -1231,6 +1231,8 @@ def _detect_winget_soft_error(output: str) -> str | None:
 #   404  - download failure (was the 3cx case)
 # Wir werten 0/1641/3010 als Erfolg.
 _CHOCO_SUCCESS_CODES = {0, 1641, 3010}
+# Eigene Pakete (MSI/EXE): 1641 = Neustart eingeleitet, 3010 = Neustart noetig
+_CUSTOM_SUCCESS_CODES = {0, 1641, 3010}
 
 # winget exit codes die als "ist eigentlich Erfolg" gewertet werden:
 #   0           - normaler Erfolg
@@ -2370,9 +2372,17 @@ async def receive_callback(job_id: str, body: CallbackPayload):
         elif pkg_type == "winget" and ec not in _WINGET_SUCCESS_CODES:
             status = "error"
             error_summary = f"winget beendete mit ExitCode {ec}"
-        elif pkg_type == "custom" and ec not in (0, 3010):
-            # 1603 bei already-installed + Post-Verify OK → nicht als Fehler werten
-            if ec == 1603 and "Post-Verify: OK" in (body.output or ""):
+        elif pkg_type == "custom" and ec not in _CUSTOM_SUCCESS_CODES:
+            # Abweichender Exit-Code, aber Post-Verify findet das Produkt:
+            # - 1603 bei already-installed (MSI)
+            # - 129 = SAPSetup "erfolgreich, Neustart erforderlich" (SAP GUI,
+            #   Adobe LiveCycle Designer: Reboot-Manager plant OnReboot-Arbeit)
+            # - sonst nur, wenn das Produkt VORHER nicht da war — ein
+            #   gescheitertes Update ueber eine alte Version bleibt Fehler.
+            out = body.output or ""
+            verified = "Post-Verify: OK" in out
+            was_installed = "Pre-Check: Bereits installiert" in out
+            if verified and (ec in (1603, 129) or not was_installed):
                 pass  # success bleibt
             else:
                 status = "error"
