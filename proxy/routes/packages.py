@@ -344,6 +344,9 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
                 "log_id": o["id"], "status": o["status"], "action": o["action"],
                 "position": o["position"] or None,
                 "reason": _QUEUE_REASON_TEXT.get(o.get("queue_reason") or ""),
+                "can_cancel": (o["status"] == "queued"
+                               and (o.get("triggered_by") or "").startswith("kiosk")
+                               and not o.get("workflow_run_id")),
             }
 
     # "Hidden in Kiosk"-Filter (3-state):

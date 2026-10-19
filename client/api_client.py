@@ -78,6 +78,7 @@ class Package:
     process_check: str = ""
     plugin_host: str | None = None
     plugin_host_label: str | None = None
+    op: dict | None = None        # offene Aktion aus der Warteschlange
 
 
 class _PooledHttp:
@@ -162,6 +163,7 @@ class KioskApiClient:
                     process_check=p.get("process_check", "") or "",
                     plugin_host=p.get("plugin_host"),
                     plugin_host_label=p.get("plugin_host_label"),
+                    op=p.get("op"),
                 )
                 for p in r.json()
             ]
@@ -192,6 +194,33 @@ class KioskApiClient:
             )
             r.raise_for_status()
             return r.json().get("message", "Downgrade gestartet.")
+
+    def get_queue(self) -> dict | None:
+        """Warteschlange dieses Geraets (laufend + wartend). None bei Fehler."""
+        try:
+            with self._client() as c:
+                r = _get_with_retry(c, f"{self._base}/api/v1/queue", timeout=5)
+                if r.status_code == 200:
+                    data = r.json()
+                    return data if isinstance(data, dict) else None
+        except Exception:
+            pass
+        return None
+
+    def cancel_queue_item(self, log_id: int) -> tuple[bool, str]:
+        """Eigenen wartenden Eintrag abbrechen. Returns (ok, message)."""
+        try:
+            with self._client() as c:
+                r = c.post(f"{self._base}/api/v1/queue/{int(log_id)}/cancel", timeout=8)
+                if r.status_code == 200:
+                    return True, "Aus der Warteschlange entfernt."
+                try:
+                    msg = r.json().get("detail") or f"Fehler {r.status_code}"
+                except Exception:
+                    msg = f"Fehler {r.status_code}"
+                return False, str(msg)
+        except Exception as e:
+            return False, str(e)
 
     def get_client_config(self) -> dict:
         """
