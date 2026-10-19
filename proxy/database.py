@@ -4671,6 +4671,66 @@ async def set_lane_queue_reason(agent_id: str, lane: str, reason: str | None) ->
         await db.commit()
 
 
+async def list_agent_queue(agent_id: str) -> list[dict]:
+    """Offene Eintraege eines Agents mit Position je Lane — fuer Kiosk- und
+    Admin-Anzeige. Laufende zuerst, dann Wartende in Abarbeitungsreihenfolge."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, package_name, display_name, pkg_type, action, status, lane, "
+            "       priority, queue_reason, triggered_by, workflow_run_id, attempts, "
+            "       COALESCE(queued_at, created_at) AS since, claimed_at "
+            "FROM action_log WHERE agent_id = ? "
+            "AND status IN ('queued','pending','running') "
+            "ORDER BY CASE WHEN status = 'queued' THEN 1 ELSE 0 END, priority, id",
+            (agent_id,),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+    pos: dict[str, int] = {}
+    for r in rows:
+        if r["status"] == "queued":
+            lane = r.get("lane") or "installer"
+            pos[lane] = pos.get(lane, 0) + 1
+            r["position"] = pos[lane]
+        else:
+            r["position"] = 0
+    return rows
+
+
+async def open_action_by_package(agent_id: str) -> dict[str, dict]:
+    """package_name → offener Eintrag (fuer das op-Feld in /api/v1/packages)."""
+    return {r["package_name"]: r for r in await list_agent_queue(agent_id)}
+
+
+async def prioritize_action(log_id: int) -> bool:
+    """Wartenden Eintrag an die Spitze seiner Lane ziehen (Admin 'Vorziehen').
+    Prioritaet 1: vor allen Klicks und Bulk-Laeufen, aber hinter Fortsetzungen
+    (Retry, Workflow-Folgestep) mit 0."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET priority = 1 WHERE id = ? AND status = 'queued'",
+            (log_id,),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def cancel_own_kiosk_action(agent_id: str, log_id: int) -> bool:
+    """Kiosk-Benutzer bricht einen eigenen, noch wartenden Eintrag ab.
+    Nur eigener Agent, nur status queued, nur vom Kiosk ausgeloest —
+    Admin-/Bulk-/Workflow-Eintraege darf der Benutzer nicht abbrechen."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET status = 'cancelled', completed_at = datetime('now'), "
+            "error_summary = 'Vom Benutzer abgebrochen' "
+            "WHERE id = ? AND agent_id = ? AND status = 'queued' "
+            "AND triggered_by LIKE 'kiosk%' AND workflow_run_id IS NULL",
+            (log_id, agent_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
 async def installer_lane_holder(agent_id: str) -> dict | None:
     """Der Eintrag, der gerade den Installer-Slot eines Agents belegt (inkl.
     offener Altzeilen ohne Lane) — oder None. Vor einem Neustart pruefen,

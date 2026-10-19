@@ -3355,12 +3355,46 @@ async def cancel_queued_action_endpoint(log_id: int):
 
 @router.delete("/admin/api/action-log/{log_id}", dependencies=[Depends(_require_admin)])
 async def delete_action_log_entry(log_id: int):
-    """Einzelnen Action-Log-Eintrag loeschen."""
+    """Einzelnen Action-Log-Eintrag loeschen — nur abgeschlossene. Ein offener
+    Eintrag haelt den Installer-Slot des Agents; ihn zu loeschen gaebe den
+    Slot frei, waehrend die Installation weiterlaeuft, und der naechste
+    Wartende startete parallel. Wartende erst abbrechen."""
     async with database._db() as db:
-        res = await db.execute("DELETE FROM action_log WHERE id = ?", (log_id,))
+        res = await db.execute(
+            "DELETE FROM action_log WHERE id = ? "
+            "AND status NOT IN ('queued','pending','running')",
+            (log_id,),
+        )
         await db.commit()
         if res.rowcount == 0:
+            async with db.execute("SELECT status FROM action_log WHERE id = ?", (log_id,)) as cur:
+                row = await cur.fetchone()
+            if row:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Offene Aktionen können nicht gelöscht werden. Wartende zuerst abbrechen.",
+                )
             raise HTTPException(status_code=404, detail="Eintrag nicht gefunden")
+    return {"ok": True}
+
+
+@router.get("/admin/api/agents/{agent_id}/queue", dependencies=[Depends(_require_admin)])
+async def get_agent_queue(agent_id: str):
+    """Warteschlange eines Agents: was laeuft, was wartet in welcher Reihenfolge."""
+    if not _AGENT_ID_RE.fullmatch(agent_id):
+        raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
+    return {"items": await database.list_agent_queue(agent_id)}
+
+
+@router.post("/admin/api/action-log/{log_id}/prioritize", dependencies=[Depends(_require_admin)])
+async def prioritize_action_endpoint(log_id: int):
+    """Wartenden Eintrag an die Spitze seiner Lane ziehen."""
+    if not await database.prioritize_action(log_id):
+        raise HTTPException(status_code=409, detail="Nur wartende Einträge können vorgezogen werden.")
+    entry = await database.get_action_log_detail(log_id)
+    if entry:
+        import action_queue
+        action_queue.kick_soon(entry["agent_id"])
     return {"ok": True}
 
 
