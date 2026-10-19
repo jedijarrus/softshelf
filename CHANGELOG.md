@@ -7,6 +7,31 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.9.1] – 2026-10-19
+
+Tray-Client 2.9.1 (nur Client, Backend unverändert 2.9.0).
+
+### Fixed
+
+- Tray und Fenster konnten sich gegenseitig verklemmen („Keine Rückmeldung",
+  Client offline), wenn das Tray-Symbol angeklickt wurde, während das Fenster
+  noch lud. Ursache: pywebview setzt `on_top` direkt aus dem Tray-Thread und
+  hält dabei Pythons GIL, während der Fenster-Thread genau diesen GIL braucht.
+  Das Fenster wird jetzt per `SetWindowPos`/`SetForegroundWindow` (ctypes,
+  gibt den GIL frei) nach vorne geholt.
+
+### Added
+
+- Client-Log `%LOCALAPPDATA%\<Slug>\logs\tray.log` (rotierend, 4 × 1 MB):
+  Start, Erreichbarkeit des Servers mit Fehlergrund, Klicks, Aktionen mit
+  Serverantwort, Neustart-Anforderungen, unbehandelte Ausnahmen, JS-Fehler
+  aus dem Fenster.
+- Hänger-Erkennung mit Thread-Dump in `hang-dumps.log`: reagiert ein Fenster
+  15 s nicht, oder blockiert Pythons GIL 60 s lang (C-Watchdog von
+  `faulthandler`, funktioniert auch bei komplettem Stillstand).
+
+---
+
 ## [2.9.0] – 2026-10-19
 
 Installations-Warteschlange pro Agent: nie mehr zwei Installer gleichzeitig.

@@ -14,6 +14,7 @@ from ctypes import wintypes
 
 import webview
 
+import diag
 from config import load_config
 from api_client import KioskApiClient
 from ui.tray import KioskTray
@@ -92,10 +93,21 @@ def main():
         sys.exit(0)
 
     try:
+        from _build_config import PRODUCT_SLUG as _slug
+    except Exception:
+        _slug = "Softshelf"
+    try:
+        from _version import __version__ as _ver
+    except Exception:
+        _ver = "?"
+    diag.setup(_slug, _ver)
+
+    try:
         config = load_config()
     except SystemExit:
         raise
     except Exception as e:
+        diag.logger.exception("Konfiguration nicht ladbar")
         ctypes.windll.user32.MessageBoxW(
             0, str(e), "Softshelf - Fehler", 0x10,
         )

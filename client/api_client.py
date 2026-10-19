@@ -117,6 +117,8 @@ def _get_windows_user() -> str:
 class KioskApiClient:
     def __init__(self, config: ClientConfig):
         self._base = config.proxy_url
+        # Grund des letzten fehlgeschlagenen Health-Checks (fuers Log)
+        self.last_error: str | None = None
         # Telemetrie-Header: Tray-Version + OS einmal beim Init bestimmen
         # (aendern sich nicht zur Laufzeit). Tray-Uptime wird per-call gesetzt.
         self._build_version = _build_version()
@@ -250,9 +252,11 @@ class KioskApiClient:
             with self._client() as c:
                 r = _get_with_retry(c, f"{self._base}/api/v1/health", timeout=5)
                 if r.status_code == 200:
+                    self.last_error = None
                     return r.json()
-        except Exception:
-            pass
+                self.last_error = f"HTTP {r.status_code}"
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"[:300]
         return {"status": "error"}
 
     def client_version_check(self) -> dict | None:
