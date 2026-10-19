@@ -195,6 +195,16 @@ async def _deliver(row: dict) -> bool:
             _spawn_bg(_deliver_client_update(row))
             return True
 
+        from routes import install as inst
+
+        # winget-Uninstall aus dem Agent-Detail: braucht keinen Whitelist-Eintrag
+        if req.get("adhoc") and action == "uninstall":
+            await inst.dispatch_winget_adhoc_uninstall(
+                agent_id, hostname, row["package_name"],
+                existing_log_id=log_id, triggered_by=row.get("triggered_by"),
+            )
+            return True
+
         pkg = await database.get_package(row["package_name"])
         if not pkg:
             await database.complete_action_log(
@@ -203,7 +213,6 @@ async def _deliver(row: dict) -> bool:
             )
             return False
 
-        from routes import install as inst
         common = dict(
             existing_log_id=log_id, allow_duplicate=True,
             triggered_by=row.get("triggered_by"),

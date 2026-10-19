@@ -6992,21 +6992,21 @@ class WingetUninstallOnAgentRequest(BaseModel):
         return v
 
 
-@router.post(
-    "/admin/api/agents/{agent_id}/winget-uninstall",
-    dependencies=[Depends(_require_admin)],
-)
-async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentRequest):
+@router.post("/admin/api/agents/{agent_id}/winget-uninstall")
+async def winget_uninstall_on_agent(
+    agent_id: str, body: WingetUninstallOnAgentRequest,
+    admin: dict = Depends(_require_admin),
+):
     """
     Deinstalliert ein winget-Paket auf einem Agent — funktioniert auch wenn
     das Paket NICHT in der Softshelf-Whitelist steht. Wird vom Agent-Detail
     benutzt um unerwünschte Software via `winget uninstall --id <ID>` direkt
     aufzuräumen.
+
+    Laeuft ueber die Warteschlange: winget uninstall haengt am selben
+    Windows-Installer-Mutex wie jede Installation.
     """
-    from routes.install import (
-        _build_winget_command, _deliver_command_bg,
-        _build_script_and_bootstrap, _generate_job_id, _is_msstore_id,
-    )
+    import action_queue
 
     if not _AGENT_ID_RE.fullmatch(agent_id):
         raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
@@ -7015,24 +7015,26 @@ async def winget_uninstall_on_agent(agent_id: str, body: WingetUninstallOnAgentR
     wid = body.winget_id
     pkg = await database.get_package(wid)
     display_name = pkg["display_name"] if pkg else wid
-    # Paritaet zu dispatch_uninstall_for_agent: hinterlegter Override greift
-    # auch hier, msstore-IDs brauchen --source msstore + User-Kontext.
-    inner_cmd = _build_winget_command(
-        "uninstall", wid, display_name=display_name,
-        uninstall_override=((pkg or {}).get("uninstall_cmd") or "").strip(),
+    trig = f"admin:{(admin or {}).get('username') or 'admin'}"
+    res = await action_queue.enqueue(
+        agent_id, agent["hostname"],
+        {"name": wid, "display_name": display_name, "type": "winget"},
+        "uninstall",
+        priority=database.PRIO_INTERACTIVE, triggered_by=trig,
+        request={"adhoc": True},
     )
-    job_id = _generate_job_id()
-    cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
-    log_id = await database.create_action_log(
-        agent_id, agent["hostname"], wid,
-        display_name, "winget", "uninstall", job_id=job_id,
-    )
-    _spawn_bg(_deliver_command_bg(
-        agent_id, agent["hostname"], wid, display_name,
-        cmd, "uninstall", "winget", log_id=log_id,
-        run_as_user=_is_msstore_id(wid),
-    ))
-    return {"ok": True, "agent": agent["hostname"]}
+    if res.get("duplicate") and res.get("action") != "uninstall":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Für '{display_name}' ist bereits eine andere Aktion offen ({res.get('action')}).",
+        )
+    out = {"ok": True, "agent": agent["hostname"], "log_id": res.get("log_id"),
+           "queued": bool(res.get("duplicate") or not res.get("started"))}
+    if out["queued"] and res.get("position"):
+        out["position"] = res["position"]
+        out["message"] = (f"'{display_name}' ist in der Warteschlange (Position "
+                          f"{res['position']})" + (f", startet nach '{res['current']}'." if res.get("current") else "."))
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
