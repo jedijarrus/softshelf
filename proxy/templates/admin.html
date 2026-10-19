@@ -16079,7 +16079,7 @@ function _alTriggerCompact(trig, workflowRunId) {
   if (!trig && workflowRunId) trig = 'workflow:' + workflowRunId;
   if (!trig) return '';
   const [kind] = String(trig).split(':', 2);
-  const map = { admin:'A', kiosk:'K', workflow:'W', bulk:'B', profile:'P', rollout:'R', queue:'Q', system:'S' };
+  const map = { admin:'A', kiosk:'K', workflow:'W', bulk:'B', profile:'P', rollout:'R', queue:'Q', system:'S', scheduled:'Z', compliance:'C' };
   const letter = map[kind] || '·';
   return `<span class="al-trigger-dot" title="${esc(trig)}">${letter}</span>`;
 }
@@ -16934,7 +16934,7 @@ function _queueTrigger(t, runId) {
   const i = t.indexOf(':');
   const kind = i < 0 ? t : t.slice(0, i), who = i < 0 ? '' : t.slice(i + 1);
   const k = { kiosk: 'Kiosk', admin: 'Admin', bulk: 'Bulk', profile: 'Profil', rollout: 'Rollout',
-    compliance: 'Compliance', workflow: 'Workflow' }[kind] || kind;
+    compliance: 'Compliance', workflow: 'Workflow', scheduled: 'Zeitplan' }[kind] || kind;
   return who ? k + ' · ' + who : k;
 }
 

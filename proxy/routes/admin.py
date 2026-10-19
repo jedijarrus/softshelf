@@ -2172,7 +2172,7 @@ async def push_update(name: str, stage: str = "all"):
         failed: list[str] = []
         for ag in outdated:
             try:
-                await dispatch_upgrade_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg)
+                await dispatch_upgrade_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg, triggered_by="bulk:push-update")
                 dispatched += 1
             except Exception as e:
                 failed.append(f"{ag.get('hostname')}: {e}")
@@ -2190,7 +2190,7 @@ async def push_update(name: str, stage: str = "all"):
         failed: list[str] = []
         for ag in outdated:
             try:
-                await dispatch_upgrade_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg)
+                await dispatch_upgrade_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg, triggered_by="bulk:push-update")
                 dispatched += 1
             except Exception as e:
                 failed.append(f"{ag.get('hostname')}: {e}")
@@ -2215,6 +2215,7 @@ async def push_update(name: str, stage: str = "all"):
             try:
                 await dispatch_upgrade_for_agent(
                     ag["agent_id"], ag.get("hostname") or "", pkg,
+                    triggered_by="bulk:push-update",
                 )
                 dispatched += 1
             except Exception as e:
@@ -2237,7 +2238,7 @@ async def push_update(name: str, stage: str = "all"):
     failed: list[str] = []
     for ag in outdated_agents:
         try:
-            await dispatch_upgrade_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg)
+            await dispatch_upgrade_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg, triggered_by="bulk:push-update")
             dispatched += 1
         except Exception as e:
             failed.append(f"{ag.get('hostname')}: {e}")
@@ -2346,7 +2347,7 @@ async def execute_scheduled_job(job: dict) -> dict:
             targets = [r for r in raw if r.get("available_version") and r["agent_id"] in allowed_agents]
             for ag in targets:
                 try:
-                    await dispatch_upgrade_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg)
+                    await dispatch_upgrade_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg, triggered_by=f"scheduled:{job.get('id')}")
                     dispatched += 1
                 except Exception as e:
                     errors.append(f"{ag.get('hostname')}: {e}")
@@ -2376,9 +2377,9 @@ async def execute_scheduled_job(job: dict) -> dict:
                 for ag in targets:
                     try:
                         if bulk_action == "push_update":
-                            await dispatch_upgrade_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg)
+                            await dispatch_upgrade_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg, triggered_by=f"scheduled:{job.get('id')}")
                         else:
-                            await dispatch_uninstall_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg)
+                            await dispatch_uninstall_for_agent(ag["agent_id"], ag.get("hostname") or "", pkg, triggered_by=f"scheduled:{job.get('id')}")
                         dispatched += 1
                     except Exception as e:
                         errors.append(f"{ag.get('hostname')}/{pkg_name}: {e}")
@@ -2397,6 +2398,7 @@ async def execute_scheduled_job(job: dict) -> dict:
                         await dispatch_install_for_agent(
                             miss["agent_id"], miss.get("hostname") or "", pkg,
                             queue_if_offline=True,
+                            triggered_by=f"scheduled:{job.get('id')}",
                         )
                         dispatched += 1
                     except Exception as e:
@@ -2509,6 +2511,7 @@ async def _dispatch_rollout_phase(
             await dispatch_upgrade_for_agent(
                 ag["agent_id"], ag.get("hostname") or "", pkg,
                 version_pin=target_version,
+                triggered_by=f"rollout:phase{phase}",
             )
             dispatched += 1
         except Exception as e:
@@ -2870,10 +2873,12 @@ async def bulk_distribution_action(body: BulkDistBody):
                 if body.action == "push_update":
                     await dispatch_upgrade_for_agent(
                         ag["agent_id"], ag.get("hostname") or "", pkg,
+                        triggered_by="bulk:distribution",
                     )
                 else:
                     await dispatch_uninstall_for_agent(
                         ag["agent_id"], ag.get("hostname") or "", pkg,
+                        triggered_by="bulk:distribution",
                     )
                 dispatched += 1
             except Exception as e:
@@ -3175,6 +3180,7 @@ async def fix_compliance(stage: str = "all"):
                 await dispatch_install_for_agent(
                     miss["agent_id"], miss.get("hostname") or "", pkg,
                     queue_if_offline=True,
+                    triggered_by="compliance:fix",
                 )
                 dispatched += 1
             except Exception as e:
@@ -3552,10 +3558,12 @@ async def retry_action(log_id: int):
     if original["action"] == "uninstall":
         result = await dispatch_uninstall_for_agent(
             original["agent_id"], original["hostname"], pkg,
+            triggered_by="admin:retry",
         )
     else:
         result = await dispatch_install_for_agent(
             original["agent_id"], original["hostname"], pkg,
+            triggered_by="admin:retry",
         )
     return {"ok": True, **result}
 
@@ -4947,6 +4955,7 @@ async def run_profile_autoupdate_endpoint(profile_id: int, request: Request):
                 await dispatch_install_for_agent(
                     ag["agent_id"], ag["hostname"], pkg, version_pin=pin,
                     queue_if_offline=True,
+                    triggered_by=f"profile:{profile_id}",
                 )
                 queued += 1
             except HTTPException as e:
@@ -5010,6 +5019,7 @@ async def _apply_profile_sequential(agent_id: str, hostname: str,
         try:
             result = await dispatch_install_for_agent(
                 agent_id, hostname, pkg, version_pin=pin, queue_if_offline=True,
+                triggered_by="profile:apply",
             )
             if result.get("queued"):
                 logger.info(
@@ -5127,7 +5137,7 @@ async def unassign_profile_endpoint(profile_id: int, body: ProfileUnassignBody, 
                 if not pkg:
                     continue
                 try:
-                    await dispatch_uninstall_for_agent(agent_id, agent["hostname"], pkg)
+                    await dispatch_uninstall_for_agent(agent_id, agent["hostname"], pkg, triggered_by=f"profile:{profile_id}")
                     uninstalls_queued += 1
                 except HTTPException as e:
                     logger.warning(
@@ -5183,7 +5193,7 @@ async def bulk_install_on_agent(agent_id: str, body: BulkInstallBody):
             skipped.append(pkg_name)
             continue
         try:
-            await dispatch_install_for_agent(agent_id, agent["hostname"], pkg)
+            await dispatch_install_for_agent(agent_id, agent["hostname"], pkg, triggered_by="admin:bulk-install")
             queued += 1
         except HTTPException as e:
             logger.warning("Bulk-install dispatch failed pkg=%s: %s", pkg_name, e.detail)
@@ -5231,7 +5241,7 @@ async def update_all_on_agent(agent_id: str):
         if not pkg:
             continue
         try:
-            await dispatch_install_for_agent(agent_id, agent["hostname"], pkg)
+            await dispatch_install_for_agent(agent_id, agent["hostname"], pkg, triggered_by="admin:update-all")
             queued += 1
         except HTTPException as e:
             logger.warning("Update-all dispatch failed pkg=%s: %s", pkg_name, e.detail)
@@ -5280,7 +5290,7 @@ async def update_all_for_package(name: str, stage: str = "all"):
         if not (inst and avail and inst != avail):
             continue  # nicht outdated, skip
         try:
-            await dispatch_install_for_agent(ag["agent_id"], ag["hostname"], pkg)
+            await dispatch_install_for_agent(ag["agent_id"], ag["hostname"], pkg, triggered_by="bulk:update-all")
             queued += 1
         except HTTPException as e:
             logger.warning("Fleet-update dispatch failed agent=%s: %s",
