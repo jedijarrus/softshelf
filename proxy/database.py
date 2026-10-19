@@ -20,6 +20,48 @@ import aiosqlite
 DB_PATH = os.path.join(os.path.dirname(__file__), "data", "softshelf.db")
 _JSON_LEGACY = os.path.join(os.path.dirname(__file__), "packages.json")
 
+# ── Installations-Warteschlange ──────────────────────────────────────────────
+# Ein Agent darf pro Lane hoechstens EINE Operation in Arbeit haben. Parallele
+# MSI-/winget-/choco-Laeufe warten sonst am globalen Windows-Installer-Mutex
+# (_MSIExecute) aufeinander, haengen ewig und schicken nie einen Callback.
+# Erzwungen wird das ueber den partiellen UNIQUE-Index uq_action_log_lane plus
+# den NOT-EXISTS-Guard in claim_next — nicht ueber einen vorgelagerten Check.
+SLOT_STATES = ("pending", "running")
+INSTALLER_ACTIONS = ("install", "upgrade", "uninstall", "downgrade", "reinstall")
+QUEUE_LANES = ("installer", "light", "client")
+
+# Prioritaeten: kleiner = frueher. Gleichstand → FIFO ueber id.
+PRIO_CONTINUATION = 0   # Auto-Retry, Workflow-Folgestep
+PRIO_INTERACTIVE = 10   # Kiosk-Klick, Admin-Einzelaktion
+PRIO_BULK = 50          # install-bulk, Profile, Rollout manuell
+PRIO_BACKGROUND = 80    # Scheduled Jobs, Rollout-Ticks, Nightly
+
+
+def lane_for(pkg_type: str | None, action: str | None) -> str:
+    """Ordnet eine Operation ihrer Lane zu.
+    - extension: eigene light-Lane, beruehrt kein MSI, laeuft parallel zu Installs
+    - client_update: eigene client-Lane, Setup.exe nutzt kein MSI
+    - run/reboot: none — haelt keinen Installer-Slot
+    - alles andere (inkl. plugin, Entscheidung E1): installer
+    """
+    if action == "client_update" or pkg_type == "client_update":
+        return "client"
+    if pkg_type == "extension":
+        return "light"
+    if action in ("run", "reboot"):
+        return "none"
+    return "installer"
+
+
+def priority_for(triggered_by: str | None) -> int:
+    """Prioritaet aus triggered_by ableiten (fuer Altpfade ohne explizite Prio)."""
+    t = (triggered_by or "").lower()
+    if t.startswith(("kiosk:", "admin:", "workflow:")):
+        return PRIO_INTERACTIVE
+    if t.startswith(("bulk:", "profile:", "rollout:", "compliance:")):
+        return PRIO_BULK
+    return PRIO_BACKGROUND
+
 
 @asynccontextmanager
 async def _db():
@@ -478,6 +520,50 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE action_log ADD COLUMN triggered_by TEXT"
             )
+
+        # Migration: Installations-Warteschlange (Lanes, Prioritaet, Claim).
+        # lane NULL = Altzeile ohne Queue-Verwaltung; zaehlt im Claim-Guard
+        # trotzdem als belegter installer-Slot, wenn sie offen ist.
+        for col, ddl in (
+            ("lane", "TEXT"),
+            ("priority", f"INTEGER NOT NULL DEFAULT {PRIO_BACKGROUND}"),
+            ("queued_at", "TEXT"),
+            ("claimed_at", "TEXT"),
+            ("request", "TEXT"),
+            ("queue_reason", "TEXT"),
+            ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if col not in al_cols_now:
+                await db.execute(f"ALTER TABLE action_log ADD COLUMN {col} {ddl}")
+        # Wartende Altzeilen in die Queue uebernehmen. Offene pending/running-
+        # Zeilen bleiben bei lane NULL, damit der UNIQUE-Index an Altdaten
+        # nicht scheitern kann.
+        await db.execute(
+            "UPDATE action_log SET "
+            "  lane = CASE WHEN pkg_type = 'client_update' THEN 'client' "
+            "              WHEN pkg_type = 'extension' THEN 'light' "
+            "              ELSE 'installer' END, "
+            "  queued_at = COALESCE(queued_at, created_at) "
+            "WHERE status = 'queued' AND lane IS NULL"
+        )
+        try:
+            await db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_action_log_lane "
+                "ON action_log(agent_id, lane) "
+                "WHERE lane IN ('installer','light','client') "
+                "AND status IN ('pending','running')"
+            )
+        except Exception:
+            # Darf den Boot nicht verhindern — claim_next schuetzt dann
+            # weiterhin ueber den NOT-EXISTS-Guard.
+            import logging
+            logging.getLogger("softshelf.db").exception(
+                "uq_action_log_lane konnte nicht angelegt werden"
+            )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_action_log_queue "
+            "ON action_log(agent_id, lane, priority, id) WHERE status = 'queued'"
+        )
 
         # Migration: role-Spalte auf admin_users fuer RBAC
         async with db.execute("PRAGMA table_info(admin_users)") as cur:
@@ -1408,13 +1494,16 @@ async def agent_has_inflight_install(agent_id: str) -> bool:
     (_MSIExecute), bleiben ewig haengen und schicken nie einen Callback.
     Stuck-Eintraege werden vom _action_log_watchdog (60min) auf error
     gesetzt und geben den Slot damit wieder frei."""
+    # downgrade/reinstall gehoeren dazu: ein Downgrade ist uninstall + install
+    # und haengt genauso am _MSIExecute-Lock.
+    ph = ",".join("?" * len(INSTALLER_ACTIONS))
     async with _db() as db:
         async with db.execute(
             "SELECT 1 FROM action_log "
-            "WHERE agent_id = ? AND action IN ('install','upgrade','uninstall') "
+            f"WHERE agent_id = ? AND action IN ({ph}) "
             "AND status IN ('pending','running') "
             "AND completed_at IS NULL LIMIT 1",
-            (agent_id,),
+            (agent_id, *INSTALLER_ACTIONS),
         ) as cur:
             return (await cur.fetchone()) is not None
 
@@ -4305,10 +4394,11 @@ async def create_queued_action_log(
         cur = await db.execute(
             "INSERT INTO action_log "
             "(agent_id, hostname, package_name, display_name, pkg_type, action, "
-            " status, metadata, triggered_by) "
-            "VALUES (?,?,?,?,?,?, 'queued', ?, ?)",
+            " status, metadata, triggered_by, lane, priority, queued_at) "
+            "VALUES (?,?,?,?,?,?, 'queued', ?, ?, ?, ?, datetime('now'))",
             (agent_id, hostname, package_name, display_name, pkg_type, action,
-             metadata, triggered_by),
+             metadata, triggered_by, lane_for(pkg_type, action),
+             priority_for(triggered_by)),
         )
         await db.commit()
         return cur.lastrowid
@@ -4397,6 +4487,192 @@ async def requeue_action_log(log_id: int) -> bool:
         )
         await db.commit()
         return cur.rowcount > 0
+
+
+# ── Installations-Warteschlange: atomare Primitive ───────────────────────────
+
+async def enqueue_action(
+    agent_id: str, hostname: str, package_name: str, display_name: str,
+    pkg_type: str, action: str, *,
+    priority: int = PRIO_INTERACTIVE,
+    request: dict | None = None,
+    triggered_by: str | None = None,
+    workflow_run_id: int | None = None,
+    metadata: str | None = None,
+) -> dict:
+    """Reiht eine Operation ein (status='queued').
+
+    Dedup und Insert sind EIN Statement (INSERT ... SELECT ... WHERE NOT
+    EXISTS) — zwei gleichzeitige Klicks auf dasselbe Paket koennen sich
+    damit nicht beide durchmogeln. Gibt zurueck:
+      {"log_id": int, "duplicate": False}                 neu eingereiht
+      {"log_id": int, "duplicate": True, "status": str}   war schon offen
+    """
+    lane = lane_for(pkg_type, action)
+    req = json.dumps(request or {}, ensure_ascii=False)
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "INSERT INTO action_log "
+            "(agent_id, hostname, package_name, display_name, pkg_type, action, "
+            " status, lane, priority, queued_at, request, triggered_by, "
+            " workflow_run_id, metadata) "
+            "SELECT ?,?,?,?,?,?, 'queued', ?, ?, datetime('now'), ?, ?, ?, ? "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM action_log "
+            "  WHERE agent_id = ? AND package_name = ? "
+            "  AND status IN ('queued','pending','running'))",
+            (agent_id, hostname, package_name, display_name, pkg_type, action,
+             lane, int(priority), req, triggered_by, workflow_run_id, metadata,
+             agent_id, package_name),
+        )
+        if cur.rowcount:
+            log_id = cur.lastrowid
+            await db.commit()
+            return {"log_id": log_id, "duplicate": False}
+        async with db.execute(
+            "SELECT id, status, action FROM action_log "
+            "WHERE agent_id = ? AND package_name = ? "
+            "AND status IN ('queued','pending','running') "
+            "ORDER BY id DESC LIMIT 1",
+            (agent_id, package_name),
+        ) as c2:
+            row = await c2.fetchone()
+        await db.commit()
+        if not row:
+            # Der offene Eintrag ist zwischen INSERT und SELECT fertig
+            # geworden — selten, Aufrufer soll es einfach nochmal versuchen.
+            return {"log_id": None, "duplicate": True, "status": "gone"}
+        return {"log_id": row["id"], "duplicate": True,
+                "status": row["status"], "action": row["action"]}
+
+
+async def claim_next(agent_id: str, lane: str) -> dict | None:
+    """Beansprucht den naechsten wartenden Eintrag einer Lane (queued → pending).
+
+    Ein einziges UPDATE mit Compare-and-Swap: es greift nur, wenn in der Lane
+    gerade nichts in Arbeit ist. Fuer die installer-Lane zaehlen auch offene
+    Altzeilen ohne Lane (lane IS NULL), damit die Queue nicht neben einem
+    noch alt dispatchten Install startet. Der UNIQUE-Index ist das Netz,
+    falls doch zwei Claims kollidieren. Returns die beanspruchte Zeile oder None.
+    """
+    ph = ",".join("?" * len(INSTALLER_ACTIONS))
+    legacy_guard = (
+        f" OR (h.lane IS NULL AND h.action IN ({ph}))" if lane == "installer" else ""
+    )
+    params = [agent_id, lane, agent_id, lane]
+    if lane == "installer":
+        params.extend(INSTALLER_ACTIONS)
+    try:
+        async with _db() as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "UPDATE action_log SET status = 'pending', "
+                "  claimed_at = datetime('now'), attempts = attempts + 1, "
+                "  queue_reason = NULL "
+                "WHERE id = ("
+                "  SELECT id FROM action_log "
+                "  WHERE agent_id = ? AND lane = ? AND status = 'queued' "
+                "  ORDER BY priority, id LIMIT 1) "
+                "AND status = 'queued' "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM action_log h "
+                "  WHERE h.agent_id = ? AND h.status IN ('pending','running') "
+                f"  AND (h.lane = ?{legacy_guard})) "
+                "RETURNING *",
+                params,
+            ) as cur:
+                # fetchall statt fetchone: bei RETURNING ist das Statement erst
+                # nach dem letzten Step abgeschlossen.
+                rows = await cur.fetchall()
+            row = dict(rows[0]) if rows else None
+            if row:
+                # Wie create_action_log: Historie in install_log mitschreiben.
+                await db.execute(
+                    "INSERT INTO install_log "
+                    "(agent_id, hostname, package_name, display_name, action) "
+                    "VALUES (?,?,?,?,?)",
+                    (row["agent_id"], row["hostname"], row["package_name"],
+                     row["display_name"],
+                     row["action"] if row["action"] in ("install", "uninstall") else "install"),
+                )
+            await db.commit()
+            return row
+    except aiosqlite.IntegrityError:
+        # Ein paralleler Claim hat den Slot gewonnen — kein Fehler.
+        return None
+
+
+async def release_claim(log_id: int, reason: str) -> bool:
+    """pending → queued, wenn die Zustellung scheiterte, bevor der Agent etwas
+    gestartet hat. Gibt den Slot frei; der Eintrag behaelt seine Position."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET status = 'queued', job_id = NULL, "
+            "claimed_at = NULL, queue_reason = ? "
+            "WHERE id = ? AND status = 'pending'",
+            (reason[:60], log_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def set_queue_reason(log_id: int, reason: str | None) -> None:
+    """Warte-Grund eines queued-Eintrags setzen (z.B. agent_offline)."""
+    async with _db() as db:
+        await db.execute(
+            "UPDATE action_log SET queue_reason = ? WHERE id = ? AND status = 'queued'",
+            (reason[:60] if reason else None, log_id),
+        )
+        await db.commit()
+
+
+async def agents_with_queued() -> list[str]:
+    """Agents mit mindestens einem wartenden Eintrag, aeltester zuerst."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT agent_id, MIN(COALESCE(queued_at, created_at)) AS oldest "
+            "FROM action_log WHERE status = 'queued' "
+            "AND lane IN ('installer','light','client') "
+            "GROUP BY agent_id ORDER BY oldest"
+        ) as cur:
+            return [r[0] for r in await cur.fetchall()]
+
+
+async def queue_position(log_id: int) -> dict | None:
+    """Position eines wartenden Eintrags in seiner Lane.
+    position 1 = als Naechstes. busy = Lane gerade belegt."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, agent_id, lane, priority, status FROM action_log WHERE id = ?",
+            (log_id,),
+        ) as cur:
+            me = await cur.fetchone()
+        if not me:
+            return None
+        if me["status"] != "queued":
+            return {"position": 0, "status": me["status"], "busy": True}
+        async with db.execute(
+            "SELECT COUNT(*) FROM action_log "
+            "WHERE agent_id = ? AND lane = ? AND status = 'queued' "
+            "AND (priority < ? OR (priority = ? AND id < ?))",
+            (me["agent_id"], me["lane"], me["priority"], me["priority"], me["id"]),
+        ) as cur:
+            ahead = (await cur.fetchone())[0]
+        async with db.execute(
+            "SELECT package_name, display_name FROM action_log "
+            "WHERE agent_id = ? AND lane = ? AND status IN ('pending','running') "
+            "ORDER BY id LIMIT 1",
+            (me["agent_id"], me["lane"]),
+        ) as cur:
+            holder = await cur.fetchone()
+        return {
+            "position": ahead + 1,
+            "status": "queued",
+            "busy": holder is not None,
+            "current": (holder["display_name"] or holder["package_name"]) if holder else None,
+        }
 
 
 async def get_action_log(
