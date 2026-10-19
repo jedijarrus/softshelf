@@ -30,6 +30,8 @@ Installations-Warteschlange pro Agent: nie mehr zwei Installer gleichzeitig.
 - Admin: Sektion „Warteschlange" im Agent-Detail mit „Vorziehen" und
   „Abbrechen". Endpoints `GET /admin/api/agents/{id}/queue` und
   `POST /admin/api/action-log/{id}/prioritize`.
+- Tray 2.9.0: Pakete zeigen „läuft" bzw. „wartet · Position N · nach X".
+  Eigene wartende Aktionen lassen sich abbrechen.
 
 ### Changed
 
@@ -37,6 +39,13 @@ Installations-Warteschlange pro Agent: nie mehr zwei Installer gleichzeitig.
   bereits offene gleiche Aktion wird vom Workflow übernommen. Die Step-Frist
   verlängert sich um bis zu 6 h, solange der Step noch wartet.
 - Action-Log: Status `queued` heißt jetzt „Wartet".
+- Tray-Update läuft über die Warteschlange (eigene Spur) mit Bootstrap +
+  Callback statt synchronem `run_command`. Das Registrierungs-Secret steht
+  nicht mehr in der Tactical-Befehlshistorie, Massen-Updates blockieren nicht
+  mehr Agent für Agent.
+- Alle Admin-Massenaktionen (Push-Update, Update-all, Verteilung, Compliance,
+  Rollout, Profile) laufen mit Bulk-Priorität, Einzelaktionen am Agent mit
+  Klick-Priorität.
 - `/api/v1/packages` liefert bei Tactical-Ausfall eine leere Installed-Liste
   statt 502.
 

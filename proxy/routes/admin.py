@@ -6588,17 +6588,25 @@ async def _do_client_update(
     agent_id: str, agent: dict, existing_log_id: int | None = None,
     triggered_by: str | None = None,
 ) -> dict:
-    """Eigentliches Client-Update: laed Setup.exe und fuehrt es als SYSTEM aus.
-    Synchroner run_command — daher Pre-Flight beim Endpoint vorher noetig
-    (siehe update_client_for_agent / Queue-Tick).
+    """Eigentliches Client-Update: Setup.exe laden und als SYSTEM ausfuehren.
+    Laeuft wie alle Paket-Aktionen ueber Bootstrap + Callback (fire-and-
+    forget): das Script holt sich der Agent per HTTP, das Ergebnis kommt
+    ueber /api/v1/callback. Damit steht das Registrierungs-Secret nicht mehr
+    in der Tactical-Befehlshistorie, und ein Massen-Update wartet nicht
+    Agent fuer Agent auf den Setup-Lauf.
 
-    Prerequisites werden VOR action_log create/promote validiert damit ein
-    Settings-Fehler keinen stuck pending-Eintrag zuruecklaesst (siehe Review-#3).
+    Normalfall: Aufruf aus der Warteschlange (client-Lane) mit
+    existing_log_id. Prerequisites werden VOR dem action_log geprueft, damit
+    ein Settings-Fehler keinen haengenden Eintrag hinterlaesst.
     """
+    from routes.install import _build_script_and_bootstrap, _deliver_command_bg, _ps_quote
+
     current, proxy_url, reg_secret, slug, target_version = await _check_client_update_prereqs()
 
     job_id = _make_random_token()
-    meta = __import__("json").dumps({"target_version": target_version})
+    meta = json.dumps({"target_version": target_version})
+    package_name = f"client-update:{target_version}"
+    display_name = f"Tray-Update auf {target_version}"
     if existing_log_id:
         await database.repurpose_queued_action_log(
             existing_log_id, job_id=job_id, metadata=meta,
@@ -6607,8 +6615,7 @@ async def _do_client_update(
     else:
         log_id = await database.create_action_log(
             agent_id, agent.get("hostname") or "",
-            f"client-update:{target_version}",
-            f"Tray-Update auf {target_version}",
+            package_name, display_name,
             "client_update", "install",
             job_id=job_id, metadata=meta,
             triggered_by=triggered_by,
@@ -6616,70 +6623,44 @@ async def _do_client_update(
 
     nonce = __import__("secrets").token_hex(4)
     setup_url = f"{proxy_url}/download/{slug}-setup.exe"
-    ps = f"""$ErrorActionPreference = 'Stop'
-$slug   = '{slug}'
+    # $args ist in PowerShell eine automatische Variable → $sargs
+    inner = f"""$slug   = '{slug}'
 $tmp    = "$env:TEMP\\$slug-setup-{nonce}.exe"
-$url    = '{setup_url}'
-$base   = '{proxy_url}'
-$secret = '{reg_secret}'
-$aid    = '{agent_id}'
+$url    = '{_ps_quote(setup_url)}'
+$base   = '{_ps_quote(proxy_url)}'
+$secret = '{_ps_quote(reg_secret)}'
+$aid    = '{_ps_quote(agent_id)}'
 
+_sfProgress 'Tray wird beendet'
 Get-Process $slug -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
 
+_sfProgress 'Lade Setup herunter'
 & curl.exe -sS -L --max-time 300 -o $tmp $url
 if ($LASTEXITCODE -ne 0) {{ throw "download failed (curl exit=$LASTEXITCODE)" }}
-$size = (Get-Item $tmp).Length
-if ($size -lt 1000000) {{ throw "downloaded file too small ($size bytes)" }}
+$size = (Get-Item $tmp -ErrorAction SilentlyContinue).Length
+if (-not $size -or $size -lt 1000000) {{ throw "downloaded file too small ($size bytes)" }}
 
-$args = @("--proxy-url",$base,"--reg-secret",$secret,"--agent-id",$aid)
-$p = Start-Process -FilePath $tmp -ArgumentList $args -Wait -PassThru -WindowStyle Hidden
-Write-Host "SETUP_EXIT=$($p.ExitCode)"
-exit $p.ExitCode
+_sfProgress "Starte Setup ($size Bytes)"
+$sargs = @("--proxy-url",$base,"--reg-secret",$secret,"--agent-id",$aid)
+$p = Start-Process -FilePath $tmp -ArgumentList $sargs -Wait -PassThru -WindowStyle Hidden
+$_sfExitCode = $p.ExitCode
+if ($p.ExitCode -ne 0) {{ $_sfSuccess = $false }}
+_sfProgress "SETUP_EXIT=$($p.ExitCode)"
+Remove-Item $tmp -Force -ErrorAction SilentlyContinue
 """
-    try:
-        out = await get_rmm_client().run_command(agent_id, ps, timeout=300)
-    except Exception as e:
-        await database.complete_action_log(
-            log_id, "error", error_summary=f"RMM-Aufruf fehlgeschlagen: {e}",
-        )
-        raise HTTPException(status_code=502, detail=f"RMM-Aufruf fehlgeschlagen: {e}")
-
-    text = out if isinstance(out, str) else str(out)
-    try:
-        if text.startswith('"') and text.endswith('"'):
-            text = __import__("json").loads(text)
-    except Exception:
-        pass
-
-    m = re.search(r"SETUP_EXIT=(-?\d+)", text or "")
-    exit_code = int(m.group(1)) if m else None
-    snippet = (text or "")[-500:]
-
-    if exit_code == 0:
-        await database.complete_action_log(log_id, "success", exit_code=0, stdout=snippet)
-        status = "success"
-    elif exit_code is None:
-        await database.complete_action_log(
-            log_id, "error",
-            error_summary="Setup ohne Exit-Marker beendet (download- oder start-Fehler)",
-            stdout=snippet,
-        )
-        status = "error"
-    else:
-        await database.complete_action_log(
-            log_id, "error", exit_code=exit_code,
-            error_summary=f"Setup exit {exit_code}", stdout=snippet,
-        )
-        status = "error"
-
+    bootstrap = await _build_script_and_bootstrap(inner, job_id)
+    await _deliver_command_bg(
+        agent_id, agent.get("hostname") or "", package_name, display_name,
+        bootstrap, "install", "client_update", log_id=log_id,
+    )
     return {
-        "ok": status == "success",
+        "ok": True,
         "agent_id": agent_id,
         "target_version": target_version,
         "job_id": job_id,
-        "exit_code": exit_code,
-        "status": status,
+        "log_id": log_id,
+        "status": "started",
     }
 
 
@@ -6697,11 +6678,10 @@ async def update_client_for_agent(
     (Win 1803+), das ist robust. Setup.exe killt selbst die laufende
     Tray-App, ueberschreibt die Files in-place und startet den neuen Tray.
 
-    Run_command-Result wird synchron geparsed (kein Callback noetig):
-      - exit 0 → action_log success sofort
-      - exit != 0 → action_log error mit stdout-Snippet
-    Telemetrie-Auto-Complete in update_agent_telemetry bleibt als
-    zusaetzlicher Sicherheitsnetz.
+    Wird in die client-Lane der Warteschlange eingereiht (eigene Spur,
+    wartet nicht auf Installer). Zustellung per Bootstrap, Ergebnis per
+    Callback. Telemetrie-Auto-Complete in update_agent_telemetry bleibt als
+    zusaetzliches Sicherheitsnetz.
     """
     if not _AGENT_ID_RE.fullmatch(agent_id):
         raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
@@ -6718,31 +6698,33 @@ async def update_client_for_agent(
         trig = f"admin:{admin.get('username') or 'admin'}"
     else:
         trig = "admin:bulk"
-    online, reason = await _agent_online_check(agent_id)
-    if not online:
-        current = await database.get_current_build()
-        target_version = (current or {}).get("version") or "?"
-        log_id = await database.create_queued_action_log(
-            agent_id=agent_id,
-            hostname=agent.get("hostname") or "",
-            package_name=f"client-update:{target_version}",
-            display_name=f"Tray-Update auf {target_version}",
-            pkg_type="client_update",
-            action="install",
-            metadata=__import__("json").dumps({"target_version": target_version}),
-            triggered_by=trig,
-        )
-        return {
-            "ok": False, "queueable": True,
-            "agent_id": agent_id, "hostname": agent.get("hostname") or "",
-            "display_name": f"Tray-Update auf {target_version}",
-            "package_name": f"client-update:{target_version}",
-            "pkg_type": "client_update", "action": "install",
-            "reason": reason, "queued_log_id": log_id,
-            "message": f"Agent nicht erreichbar (Status: {reason}). Tray-Update bereits vorgemerkt.",
-        }
 
-    return await _do_client_update(agent_id, agent, triggered_by=trig)
+    # Konfigurationsfehler sofort melden, nicht erst beim Zustellen
+    _cur, _url, _sec, _slug, target_version = await _check_client_update_prereqs()
+
+    import action_queue
+    hostname = agent.get("hostname") or ""
+    res = await action_queue.enqueue(
+        agent_id, hostname,
+        {"name": f"client-update:{target_version}",
+         "display_name": f"Tray-Update auf {target_version}",
+         "type": "client_update"},
+        "install",
+        priority=database.priority_for(trig), triggered_by=trig,
+        metadata=json.dumps({"target_version": target_version}),
+    )
+    out = {"ok": True, "agent_id": agent_id, "hostname": hostname,
+           "target_version": target_version, "log_id": res.get("log_id")}
+    if res.get("duplicate"):
+        out.update(duplicate=True, queued=res.get("status") == "queued",
+                   message=f"Tray-Update fuer {hostname} ist bereits offen.")
+    elif res.get("started"):
+        out.update(queued=False, status="started",
+                   message=f"Tray-Update fuer {hostname} gestartet.")
+    else:
+        out.update(queued=True, status="queued",
+                   message=f"Tray-Update fuer {hostname} vorgemerkt — startet, sobald der Agent erreichbar ist.")
+    return out
 
 
 def _make_random_token() -> str:
@@ -6789,7 +6771,9 @@ async def bulk_update_client(body: BulkUpdateClientBody):
             r = await update_client_for_agent(
                 a["agent_id"], triggered_by="admin:bulk-update",
             )
-            if isinstance(r, dict) and r.get("queueable"):
+            if isinstance(r, dict) and r.get("duplicate"):
+                skipped += 1
+            elif isinstance(r, dict) and r.get("queued"):
                 queued += 1
             else:
                 dispatched += 1

@@ -2386,6 +2386,9 @@ async def receive_callback(job_id: str, body: CallbackPayload):
         elif pkg_type == "script" and ec != 0:
             status = "error"
             error_summary = f"Script beendete mit ExitCode {ec}"
+        elif pkg_type == "client_update" and ec != 0:
+            status = "error"
+            error_summary = f"Setup beendete mit ExitCode {ec}"
         if status == "error":
             await database.complete_action_log(
                 entry["id"], "error", exit_code=ec,
@@ -2431,7 +2434,8 @@ async def receive_callback(job_id: str, body: CallbackPayload):
     # Am FINALEN status haengen, nicht an body.success: die Wrapper-Skripte
     # werfen nie, harte Fehler kommen als success=True + non-zero ExitCode
     # an und werden oben erst reklassifiziert.
-    if status == "success":
+    # Tray-Update ist kein Whitelist-Paket → nichts in agent_installations
+    if status == "success" and pkg_type != "client_update":
         if entry["action"] in ("install", "upgrade"):
             # current_version_id aus Paket holen damit Update-Tracking funktioniert
             # Plus: sha256 fuer Plugin-Update-Detection (kein package_versions

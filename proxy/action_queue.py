@@ -87,6 +87,7 @@ async def enqueue(
     request: dict | None = None,
     workflow_run_id: int | None = None,
     kick_now: bool = True,
+    metadata: str | None = None,
 ) -> dict:
     """Reiht eine Operation ein und stoesst den Drain an.
 
@@ -103,7 +104,7 @@ async def enqueue(
         pkg.get("display_name") or pkg["name"],
         pkg.get("type") or "custom", action,
         priority=priority, request=request, triggered_by=triggered_by,
-        workflow_run_id=workflow_run_id,
+        workflow_run_id=workflow_run_id, metadata=metadata,
     )
     if res["duplicate"]:
         return {

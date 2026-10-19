@@ -12195,11 +12195,8 @@ function updateSingleClient(agentId, hostname) {
     async () => {
       try {
         const r = await api('POST', '/admin/api/agents/' + encodeURIComponent(agentId) + '/update-client');
-        if (r && r.queueable) {
-          toast('Update fuer "' + hostname + '" vorgemerkt — wird ausgefuehrt sobald online.');
-        } else {
-          toast('Update fuer "' + hostname + '" dispatched');
-        }
+        toast((r && r.message) || ('Tray-Update fuer "' + hostname + '" eingereiht'));
+        if (_currentAgent) loadAgentQueue(_currentAgent.agent_id);
         setTimeout(loadAgents, 4000);
       } catch (e) {}
     },
