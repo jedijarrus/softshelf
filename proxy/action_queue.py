@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import deque
 
 import database
 
@@ -32,6 +33,14 @@ _agent_locks: dict[str, asyncio.Lock] = {}
 _status_cache: dict[str, tuple[float, str]] = {}
 _STATUS_TTL = 30.0          # Sekunden, wie lange ein Online-Check gilt
 _MAX_CLAIMS_PER_LANE = 5    # Schutz gegen Endlosschleifen bei kaputten Eintraegen
+
+# Tray-Updates flottenweit drosseln: jedes Setup registriert sich neu
+# (POST /api/v1/register, Rate-Limit 5/min pro Client-IP). Hinter einem
+# Reverse-Proxy ohne trusted_proxies-Eintrag teilt sich die ganze Flotte
+# eine IP — ein Massen-Push lief sonst sofort in 429 und das Setup brach ab.
+_CLIENT_UPDATE_MAX_PARALLEL = 3
+_CLIENT_UPDATE_STARTS_PER_MIN = 4
+_client_update_starts: deque = deque()
 
 _bg_tasks: set = set()
 
@@ -169,13 +178,28 @@ async def _drain_lane(agent_id: str, lane: str) -> None:
             }.get(st, "agent_offline")
             await database.set_lane_queue_reason(agent_id, lane, reason)
             return
+        if lane == "client" and not await _client_update_slot_free():
+            await database.set_lane_queue_reason(agent_id, lane, "client_update_throttle")
+            return  # der 60-s-Tick versucht es erneut
         row = await database.claim_next(agent_id, lane)
         if not row:
             return  # Lane belegt — der Callback des Halters kickt erneut
+        if lane == "client":
+            _client_update_starts.append(time.monotonic())
         if await _deliver(row):
             return  # ein Eintrag in Arbeit, mehr geht in dieser Lane nicht
         # Eintrag wurde ohne Zustellung abgeschlossen (z.B. Paket weg) →
         # naechsten Wartenden versuchen.
+
+
+async def _client_update_slot_free() -> bool:
+    """Darf gerade ein weiteres Tray-Update starten?"""
+    now = time.monotonic()
+    while _client_update_starts and now - _client_update_starts[0] > 60:
+        _client_update_starts.popleft()
+    if len(_client_update_starts) >= _CLIENT_UPDATE_STARTS_PER_MIN:
+        return False
+    return await database.count_running_client_updates() < _CLIENT_UPDATE_MAX_PARALLEL
 
 
 async def _deliver(row: dict) -> bool:

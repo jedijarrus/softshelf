@@ -4671,6 +4671,16 @@ async def set_lane_queue_reason(agent_id: str, lane: str, reason: str | None) ->
         await db.commit()
 
 
+async def count_running_client_updates() -> int:
+    """Tray-Updates in Arbeit, flottenweit (fuer die Drosselung)."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM action_log WHERE pkg_type = 'client_update' "
+            "AND status IN ('pending', 'running')"
+        ) as cur:
+            return (await cur.fetchone())[0]
+
+
 async def list_agent_history(agent_id: str, limit: int = 40, days: int = 30) -> list[dict]:
     """Letzte Paket-Aktionen eines Agents fuer den Kiosk-Tab 'Verlauf'.
     Workflow-Skripte und Neustarts bleiben draussen (interne Schritte,

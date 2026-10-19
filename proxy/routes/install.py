@@ -1414,6 +1414,7 @@ _QUEUE_REASON_TEXT = {
     "delivery_failed": "Zustellung wird wiederholt",
     "dispatch_error": "Zustellung wird wiederholt",
     "client_build_missing": "Update noch nicht bereit",
+    "client_update_throttle": "Wartet auf freien Update-Platz",
 }
 
 
