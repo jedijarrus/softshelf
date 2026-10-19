@@ -6648,10 +6648,8 @@ $url    = '{_ps_quote(setup_url)}'
 $base   = '{_ps_quote(proxy_url)}'
 $secret = '{_ps_quote(reg_secret)}'
 $aid    = '{_ps_quote(agent_id)}'
-
-_sfProgress 'Tray wird beendet'
-Get-Process $slug -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Seconds 2
+# Setup schreibt seinen Fehlergrund (Secret bereits geschwaerzt) hierhin
+$errf   = Join-Path $env:TEMP ($slug.ToLower() + '_setup_error.txt')
 
 _sfProgress 'Lade Setup herunter'
 & curl.exe -sS -L --max-time 300 -o $tmp $url
@@ -6659,13 +6657,51 @@ if ($LASTEXITCODE -ne 0) {{ throw "download failed (curl exit=$LASTEXITCODE)" }}
 $size = (Get-Item $tmp -ErrorAction SilentlyContinue).Length
 if (-not $size -or $size -lt 1000000) {{ throw "downloaded file too small ($size bytes)" }}
 
-_sfProgress "Starte Setup ($size Bytes)"
+# Tray erst nach erfolgreichem Download beenden — vorher waere er bei
+# einem Download-Fehler grundlos weg
+_sfProgress 'Tray wird beendet'
+Get-Process $slug -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Seconds 2
+
 $sargs = @("--proxy-url",$base,"--reg-secret",$secret,"--agent-id",$aid)
-$p = Start-Process -FilePath $tmp -ArgumentList $sargs -Wait -PassThru -WindowStyle Hidden
-$_sfExitCode = $p.ExitCode
-if ($p.ExitCode -ne 0) {{ $_sfSuccess = $false }}
-_sfProgress "SETUP_EXIT=$($p.ExitCode)"
+$ok = $false
+for ($try = 1; $try -le 3; $try++) {{
+    Remove-Item $errf -Force -ErrorAction SilentlyContinue
+    _sfProgress "Starte Setup ($size Bytes), Versuch $try"
+    $p = Start-Process -FilePath $tmp -ArgumentList $sargs -Wait -PassThru -WindowStyle Hidden
+    $_sfExitCode = $p.ExitCode
+    _sfProgress "SETUP_EXIT=$($p.ExitCode)"
+    if ($p.ExitCode -eq 0) {{ $ok = $true; break }}
+    $err = if (Test-Path $errf) {{ ((Get-Content $errf) -join ' ').Trim() }} else {{ '' }}
+    if ($err) {{ _sfProgress "Setup-Fehler: $err" }}
+    # 429 vom Register-Endpoint: kurz warten und erneut versuchen
+    if ($err -notmatch 'Zu viele Versuche' -or $try -eq 3) {{ break }}
+    _sfProgress 'Server drosselt Registrierungen, neuer Versuch in 75 s'
+    Start-Sleep -Seconds 75
+}}
 Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+
+if (-not $ok) {{
+    $_sfSuccess = $false
+    # Setup hat den Tray beendet, aber nicht wieder gestartet: in der Sitzung
+    # des angemeldeten Benutzers neu starten (gleicher Weg wie das Setup)
+    try {{
+        $exe = Join-Path $env:ProgramFiles "$slug\\$slug.exe"
+        $user = (Get-CimInstance Win32_ComputerSystem).UserName
+        if ((Test-Path $exe) -and $user -and -not (Get-Process $slug -ErrorAction SilentlyContinue)) {{
+            $task = "$slug-RelaunchOnce"
+            Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+            $action = New-ScheduledTaskAction -Execute $exe -WorkingDirectory $env:SystemRoot
+            $trigger = New-ScheduledTaskTrigger -AtStartup
+            $principal = New-ScheduledTaskPrincipal -UserId $user -RunLevel Limited -LogonType Interactive
+            Register-ScheduledTask -TaskName $task -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+            Start-ScheduledTask -TaskName $task
+            Start-Sleep -Seconds 2
+            Unregister-ScheduledTask -TaskName $task -Confirm:$false
+            _sfProgress "Tray nach fehlgeschlagenem Update wieder gestartet ($user)"
+        }}
+    }} catch {{ _sfProgress "Tray-Neustart fehlgeschlagen: $($_.Exception.Message)" }}
+}}
 """
     bootstrap = await _build_script_and_bootstrap(inner, job_id)
     await _deliver_command_bg(

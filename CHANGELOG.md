@@ -7,6 +7,27 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.9.4] – 2026-10-19
+
+Tray-Massenupdate robust (nur Backend, Tray bleibt 2.9.3).
+
+### Fixed
+
+- Massen-Tray-Update scheiterte seit 2.9.0 auf vielen Geräten mit Setup-Exit 1
+  („Zu viele Versuche"): Seit dem Umbau auf die Warteschlange starteten alle
+  Setups gleichzeitig, jedes registriert sich neu, und `/api/v1/register` ist
+  auf 5/min pro Client-IP begrenzt — hinter einem Reverse-Proxy ohne
+  `trusted_proxies`-Eintrag teilt sich die ganze Flotte eine IP. Danach war
+  der Tray beendet und wurde nicht neu gestartet.
+- Tray-Updates laufen jetzt flottenweit gedrosselt (max. 3 gleichzeitig,
+  4 Starts/min, Wartegrund „Wartet auf freien Update-Platz").
+- Update-Script: Tray wird erst nach erfolgreichem Download beendet; bei
+  „Zu viele Versuche" bis zu 3 Versuche mit 75 s Pause; der Fehlergrund des
+  Setups steht im Output; scheitert das Setup endgültig, wird der Tray in
+  der Sitzung des angemeldeten Benutzers wieder gestartet.
+
+---
+
 ## [2.9.3] – 2026-10-19
 
 Aussagekräftige Fehlergründe, aufgeräumter Kiosk-Kopf.
