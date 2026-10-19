@@ -387,6 +387,28 @@ html, body {{
   color: var(--red);
   border-color: var(--red-border);
 }}
+.pkg-meta .op-label {{
+  color: var(--fg-3);
+  font-weight: 600;
+}}
+.btn-queued {{
+  background: transparent;
+  color: var(--fg-4);
+  border: 1px solid var(--border);
+  cursor: default;
+  padding: 5px 10px;
+}}
+.btn-queue-cancel {{
+  background: transparent;
+  color: var(--fg-3);
+  border: 1px solid var(--border);
+  padding: 5px 10px;
+}}
+.btn-queue-cancel:hover {{
+  background: var(--red-bg);
+  color: var(--red);
+  border-color: var(--red-border);
+}}
 .btn-busy {{
   background: var(--bg-hover);
   color: var(--fg-5);
@@ -976,6 +998,8 @@ let busyPkg = null;
 let busyWf = null;
 let _wfPollTimer = null;
 let _wfPendingId = null;
+let _queuePollTimer = null;
+let _queueCurrent = null;   // was gerade im Installer laeuft (Name oder 'IT-Wartung')
 
 // ─── Init ───
 function _initApp() {{
@@ -1030,6 +1054,7 @@ async function loadPackages() {{
     updateCounts();
     renderPackages();
     setOnlineState(true);
+    scheduleQueuePoll();
   }} catch (e) {{
     const msg = e.message || 'Verbindungsfehler';
     if (msg.indexOf('__TOKEN_REVOKED__') !== -1) {{
@@ -1249,6 +1274,27 @@ function renderRow(pkg) {{
     btn = `<button class="btn btn-install" onclick="doInstall('${{escAttr(pkg.name)}}')">Installieren</button>`;
   }}
 
+  // Offene Aktion aus der Warteschlange (laeuft oder wartet)
+  const op = pkg.op;
+  if (op && !isBusy) {{
+    const verb = op.action === 'uninstall' ? 'Deinstallation'
+      : op.action === 'downgrade' ? 'Versionswechsel'
+      : (pkg.installed ? 'Update' : 'Installation');
+    if (op.status === 'queued') {{
+      let t = verb + ' wartet';
+      if (op.position) t += ' \\u00B7 Position ' + op.position;
+      if (op.reason) t += ' \\u00B7 ' + op.reason;
+      else if (_queueCurrent) t += ' \\u00B7 nach \\u201E' + _queueCurrent + '\\u201C';
+      meta = `<span class="op-label">${{escHtml(t)}}</span>`;
+      btn = op.can_cancel
+        ? `<button class="btn btn-queue-cancel" onclick="doCancelQueued(${{Number(op.log_id)}}, '${{escAttr(pkg.name)}}')">Abbrechen</button>`
+        : `<span class="btn btn-queued">Wartet</span>`;
+    }} else {{
+      meta = `<span class="op-label">${{escHtml(verb)}} l\\u00E4uft \\u2026</span>`;
+      btn = `<button class="btn btn-busy">L\\u00E4uft\\u2026</button>`;
+    }}
+  }}
+
   return `
     <div class="${{rowClass}}" data-name="${{escAttr(pkg.name)}}">
       <div class="pkg-avatar">${{escHtml(initial)}}</div>
@@ -1403,6 +1449,83 @@ function showDowngradeConfirm(displayName, targetVer) {{
 }}
 
 // ─── UI Helpers ───
+
+// ─── Warteschlange ───
+function scheduleQueuePoll() {{
+  if (_queuePollTimer) {{ clearTimeout(_queuePollTimer); _queuePollTimer = null; }}
+  if (!(packages || []).some(p => p.op)) {{ _queueCurrent = null; return; }}
+  _queuePollTimer = setTimeout(pollQueue, 4000);
+}}
+
+// Leichtgewichtig: /queue statt /packages (das macht ggf. einen Tactical-
+// Roundtrip). Erst wenn ein Eintrag fertig ist, wird die Liste neu geladen.
+async function pollQueue() {{
+  _queuePollTimer = null;
+  let q = null;
+  try {{ q = await pywebview.api.get_queue(); }} catch (e) {{}}
+  if (!q) {{ scheduleQueuePoll(); return; }}
+  const cur = (q.installer && q.installer.current) || null;
+  let finished = false, changed = cur !== _queueCurrent;
+  _queueCurrent = cur;
+  const byId = {{}};
+  (q.items || []).forEach(i => {{ byId[i.log_id] = i; }});
+  (packages || []).forEach(p => {{
+    if (!p.op) return;
+    const i = byId[p.op.log_id];
+    if (!i) {{ finished = true; return; }}
+    const pos = i.position || null, reason = i.reason || null;
+    if (i.status !== p.op.status || pos !== (p.op.position || null) || reason !== (p.op.reason || null)) {{
+      p.op.status = i.status; p.op.position = pos; p.op.reason = reason;
+      if (i.status !== 'queued') p.op.can_cancel = false;
+      changed = true;
+    }}
+  }});
+  if (finished) {{
+    // Status kommt nach dem Callback per Re-Scan — einmal sofort, einmal spaeter
+    await loadPackages();
+    setTimeout(loadPackages, 15000);
+    return;
+  }}
+  if (changed && activeTab !== 'actions') renderPackages();
+  scheduleQueuePoll();
+}}
+
+async function doCancelQueued(logId, name) {{
+  const pkg = (packages || []).find(p => p.name === name);
+  const dn = (pkg && pkg.display_name) || name;
+  const proceed = await showCancelQueuedConfirm(dn);
+  if (!proceed) return;
+  try {{
+    const r = await pywebview.api.cancel_queue_item(logId);
+    showToast((r && r.message) || 'Aus der Warteschlange entfernt.', !!(r && r.ok));
+  }} catch (e) {{
+    showToast(e.message || 'Abbrechen fehlgeschlagen', false);
+  }}
+  loadPackages();
+}}
+
+function showCancelQueuedConfirm(displayName) {{
+  return new Promise(resolve => {{
+    const ov = document.createElement('div');
+    ov.className = 'proc-modal-overlay';
+    ov.innerHTML = `
+      <div class="proc-modal">
+        <div class="proc-modal-icon">\\u00D7</div>
+        <div class="proc-modal-title">${{escHtml(displayName)}} aus der Warteschlange nehmen?</div>
+        <div class="proc-modal-body">
+          Die Aktion wurde noch nicht gestartet und wird dann nicht ausgef\\u00FChrt.
+        </div>
+        <div class="proc-modal-actions">
+          <button class="proc-btn proc-btn-cancel">Behalten</button>
+          <button class="proc-btn proc-btn-retry">Entfernen</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    const cleanup = (val) => {{ ov.remove(); resolve(val); }};
+    ov.querySelector('.proc-btn-cancel').onclick = () => cleanup(false);
+    ov.querySelector('.proc-btn-retry').onclick = () => cleanup(true);
+  }});
+}}
 
 function showLoading() {{
   document.getElementById('content').innerHTML = `
@@ -1665,6 +1788,7 @@ class PackageApi:
                     "process_check": getattr(p, "process_check", "") or "",
                     "plugin_host": getattr(p, "plugin_host", None),
                     "plugin_host_label": getattr(p, "plugin_host_label", None),
+                    "op": getattr(p, "op", None),
                 }
                 for p in pkgs
             ]
@@ -1733,6 +1857,21 @@ class PackageApi:
             return self._api.downgrade_package(name)
         except Exception as e:
             raise Exception(_format_http_error(e))
+
+    def get_queue(self) -> dict | None:
+        """Warteschlange dieses Geraets (fuer das Polling im Fenster)."""
+        try:
+            return self._api.get_queue()
+        except Exception:
+            return None
+
+    def cancel_queue_item(self, log_id: int) -> dict:
+        """Eigenen wartenden Eintrag abbrechen. Returns {ok, message}."""
+        try:
+            ok, msg = self._api.cancel_queue_item(int(log_id))
+            return {"ok": ok, "message": msg}
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
 
     def get_reinstall_url(self) -> str:
         """Optional reinstall URL aus Client-Config (default leer)."""
