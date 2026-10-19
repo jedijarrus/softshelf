@@ -599,69 +599,112 @@ async def _dispatch_install_step(
             logger.exception("workflow run %d: Deadline-Verlaengerung fehlgeschlagen", run_id)
 
 
+def _script_code(run_id: int, raw_code: str) -> str:
+    """Wrapper fuer den User-Code eines Script-Steps.
+
+    User-Code als temp .ps1 schreiben und via powershell.exe -File
+    ausfuehren. Damit beendet 'exit N' nur den inneren Prozess und
+    der aeussere (Callback-Wrapper) kann den exit code melden.
+    Base64-Transport statt Heredoc: ein Here-String-Literal bricht, sobald
+    der User-Code selbst eine Zeile hat die mit '@ beginnt (oder ein eigenes
+    Here-String enthaelt) — der Rest liefe dann im Wrapper-Kontext.
+    UTF-8-BOM voranstellen: powershell.exe -File liest BOM-loses UTF-8 als
+    ANSI — Umlaute im User-Script waeren sonst kaputt."""
+    import base64 as _b64
+    code_b64 = _b64.b64encode(raw_code.encode("utf-8")).decode("ascii")
+    lines = [
+        f"$_wfTmp = [System.IO.Path]::Combine($env:TEMP, 'softshelf-wf-{run_id}.ps1')",
+        "[System.IO.File]::WriteAllBytes($_wfTmp, "
+        f"[byte[]](0xEF,0xBB,0xBF) + [Convert]::FromBase64String('{code_b64}'))",
+        "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $_wfTmp 2>&1",
+        "$global:LASTEXITCODE = $LASTEXITCODE",
+        "Remove-Item $_wfTmp -Force -ErrorAction SilentlyContinue",
+    ]
+    return chr(10).join(lines) + chr(10)
+
+
 async def _dispatch_script_step(
     run_id: int, agent_id: str, hostname: str, payload: dict
 ):
-    """Dispatched einen script-Step: baut ein PS-Script aus dem eingebetteten
-    Code, legt einen action_log-Eintrag an und startet die Delivery."""
+    """Reiht einen script-Step in die Installer-Lane ein. Ein Script kann
+    selbst msiexec/winget aufrufen und darf deshalb nicht parallel zu einer
+    Installation laufen. Den Code holt deliver_script_step() erst beim
+    Zustellen aus dem step_snapshot."""
     raw_code = payload.get("code") or ""
     if not raw_code.strip():
         logger.error("workflow run %d script-step: kein Code in payload", run_id)
         await database.update_workflow_run(run_id, status="failed")
         return
 
-    # User-Code als temp .ps1 schreiben und via powershell.exe -File
-    # ausfuehren. Damit beendet 'exit N' nur den inneren Prozess und
-    # der aeussere (Callback-Wrapper) kann den exit code melden.
-    # Base64-Transport statt Heredoc: ein @'…'@-Literal bricht, sobald der
-    # User-Code selbst eine Zeile hat die mit '@ beginnt (oder ein eigenes
-    # Here-String enthaelt) — der Rest liefe dann im Wrapper-Kontext.
-    import base64 as _b64
-    code_b64 = _b64.b64encode(raw_code.encode("utf-8")).decode("ascii")
-    code = (
-        f"$_wfTmp = [System.IO.Path]::Combine($env:TEMP, 'softshelf-wf-{run_id}.ps1')\n"
-        # UTF-8-BOM voranstellen: powershell.exe -File liest BOM-loses UTF-8
-        # als ANSI — Umlaute im User-Script waeren sonst kaputt.
-        f"[System.IO.File]::WriteAllBytes($_wfTmp, "
-        f"[byte[]](0xEF,0xBB,0xBF) + [Convert]::FromBase64String('{code_b64}'))\n"
-        f"& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $_wfTmp 2>&1\n"
-        f"$global:LASTEXITCODE = $LASTEXITCODE\n"
-        f"Remove-Item $_wfTmp -Force -ErrorAction SilentlyContinue\n"
+    import action_queue
+    run = await database.get_workflow_run(run_id) or {}
+    step = int(run.get("current_step") or 0)
+    prio = database.PRIO_INTERACTIVE if step == 0 else database.PRIO_CONTINUATION
+    res = await action_queue.enqueue(
+        agent_id, hostname,
+        {"name": f"workflow:{run_id}:script",
+         "display_name": f"Workflow-Script (Step {step + 1})", "type": "script"},
+        "run", priority=prio, triggered_by=f"workflow:{run_id}",
+        request={"step": step}, workflow_run_id=run_id,
     )
+    if res.get("duplicate"):
+        logger.info("workflow run %d script-step %d: bereits offen (log %s)",
+                    run_id, step + 1, res.get("log_id"))
+        return
+    logger.info(
+        "workflow run %d script-step %d: %s", run_id, step + 1,
+        "gestartet" if res.get("started") else f"eingereiht (Position {res.get('position')})",
+    )
+    if not res.get("started"):
+        try:
+            cur = (await database.get_workflow_run(run_id) or {}).get("step_deadline_at")
+            base = (datetime.strptime(cur, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                    if cur else _now_utc())
+            new_dl = (base + timedelta(hours=_QUEUE_WAIT_MAX_H)).strftime("%Y-%m-%d %H:%M:%S")
+            await database.update_workflow_run(run_id, step_deadline_at=new_dl)
+        except Exception:
+            logger.exception("workflow run %d: Deadline-Verlaengerung fehlgeschlagen", run_id)
+
+
+async def deliver_script_step(row: dict) -> bool:
+    """Vom Queue-Drain aufgerufen: baut den Script-Step aus dem step_snapshot
+    und stellt ihn zu. False = Eintrag ohne Zustellung abgeschlossen."""
+    run_id = row["workflow_run_id"]
+    run = await database.get_workflow_run(run_id)
+    try:
+        step = int(json.loads(row.get("request") or "{}").get("step"))
+    except Exception:
+        step = -1
+    if not run or step != int(run.get("current_step") or 0):
+        await database.complete_action_log(
+            row["id"], "cancelled", error_summary="Workflow ist bereits weiter",
+        )
+        return False
+    try:
+        steps = json.loads(run.get("step_snapshot") or "[]")
+        raw_code = (steps[step].get("payload") or {}).get("code") or ""
+    except Exception:
+        raw_code = ""
+    if not raw_code.strip():
+        await database.complete_action_log(
+            row["id"], "error", error_summary="Script-Step ohne Code",
+        )
+        return False
 
     job_id = _generate_job_id()
-    try:
-        cmd = await _build_script_and_bootstrap(code, job_id)
-    except Exception as e:
-        logger.exception("workflow run %d script-step: _build_script_and_bootstrap: %s", run_id, e)
-        await database.update_workflow_run(run_id, status="failed")
-        return
-
-    # current_step aus DB lesen fuer display_name
-    _run_now = await database.get_workflow_run(run_id)
-    _step_num = ((_run_now or {}).get("current_step") or 0) + 1
-
-    log_id = await database.create_action_log(
-        agent_id=agent_id,
-        hostname=hostname,
-        package_name=f"workflow:{run_id}:script",
-        display_name=f"Workflow-Script (Step {_step_num})",
-        pkg_type="script",
-        action="run",
-        job_id=job_id,
-        workflow_run_id=run_id,
-    )
-
+    cmd = await _build_script_and_bootstrap(_script_code(run_id, raw_code), job_id)
+    await database.repurpose_queued_action_log(row["id"], job_id=job_id, action="run")
     _spawn_bg(_deliver_command_bg(
-        agent_id=agent_id,
-        hostname=hostname,
-        package_name=f"workflow:{run_id}:script",
+        agent_id=row["agent_id"],
+        hostname=row.get("hostname") or "",
+        package_name=row["package_name"],
         display_name="Workflow-Script",
         cmd=cmd,
         action="run",
         pkg_type="script",
-        log_id=log_id,
+        log_id=row["id"],
     ))
+    return True
     logger.info("workflow run %d script-step: job_id=%s dispatched", run_id, job_id[:8])
 
 
