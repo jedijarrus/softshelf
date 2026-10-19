@@ -7,6 +7,45 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.9.3] – 2026-10-19
+
+Aussagekräftige Fehlergründe, aufgeräumter Kiosk-Kopf.
+
+### Changed
+
+- winget/choco-Fehler: Der Fehlertext enthält die aussagekräftigen Zeilen aus
+  dem Output (z. B. „Files modified by the installer are currently in use…“)
+  statt nur „winget beendete mit ExitCode …“. Wrapper-Meldungen und
+  Fortschrittsbalken werden ausgefiltert.
+- Kiosk-Verlauf: „Technische Details“ zeigen den kompletten Output. Klartext
+  für die winget-Installationscodes 0x8A1501xx (Programm noch geöffnet,
+  Neustart nötig, kein Speicherplatz, …).
+- Übersprungene Installationen speichern ihren Grund. Der Neustart-Check
+  nennt, was aussteht (Windows Update / Windows-Komponenten); im Kiosk steht
+  „Übersprungen: Auf dem Gerät steht ein Neustart aus …“.
+- Tray 2.9.3: Kopfzeile nur noch mit Tabs (Unterstrich auf der Trennlinie,
+  scrollt statt abzuschneiden), Verbindungsstatus in der Fußzeile neben der
+  Version, Fehlerzähler am Verlauf-Tab rot.
+
+### Fixed
+
+- Agent-Detail „Alle updaten" hat praktisch nie etwas getan: Das Banner zählt
+  alle Einträge mit Update, der Button baute seine Liste aber separat — nicht
+  freigegebene winget-Programme wurden übersprungen, choco-Pakete lowercase
+  gesucht (nicht gefunden), eigene Pakete ignoriert. Jetzt nimmt der Button
+  genau die Liste des Banners: freigegebene Pakete über den normalen Weg,
+  nicht freigegebene winget-Programme per `winget upgrade --id` (ohne
+  `--scope machine`). Alles läuft über die Warteschlange, der Toast nennt
+  eingereihte und übersprungene Updates.
+
+### Hinweis
+
+- Der Neustart-Check prüft `PendingFileRenameOperations` faktisch nicht
+  (`Test-Path` auf einen Registry-Wert ist immer falsch). Unverändert
+  belassen — eingeschaltet würde er auf vielen Geräten dauerhaft blockieren.
+
+---
+
 ## [2.9.2] – 2026-10-19
 
 Kiosk-Verlauf mit Fehlergrund, Exit-Codes bei eigenen Paketen.

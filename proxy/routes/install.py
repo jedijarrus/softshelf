@@ -340,11 +340,12 @@ async def _build_install_command(pkg: dict, agent_id: str) -> str:
     pre_check = ""
     if check_reboot:
         pre_check += (
-            "$rebootPending = (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') -or "
-            "(Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired') -or "
-            "(Test-Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\PendingFileRenameOperations')\n"
+            "$rbWhy = @()\n"
+            "if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') { $rbWhy += 'Windows-Komponenten' }\n"
+            "if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired') { $rbWhy += 'Windows Update' }\n"
+            "$rebootPending = $rbWhy.Count -gt 0\n"
             "if($rebootPending){\n"
-            "    $_sfOutput.Add('Uebersprungen: Neustart steht aus')\n"
+            "    $_sfOutput.Add(\"Uebersprungen: Neustart steht aus ($($rbWhy -join ', '))\")\n"
             "    $_sfExitCode = 0\n"
             "    $_sfSuccess = 'skipped'\n"
             "    throw 'Reboot pending'\n"
@@ -1444,6 +1445,35 @@ async def kiosk_queue(token: dict = Depends(verify_machine_token)):
 
 # Klartext fuer den Kiosk-Verlauf. Nur dokumentierte Codes: MSI
 # (Windows Installer) und winget (APPINSTALLER_CLI_ERROR_*).
+# Wrapper-/Fortschrittszeilen, die im Fehlertext nichts zu suchen haben
+_OUTPUT_NOISE = (
+    "command gestartet", "sende ergebnis", "starte winget", "starte choco",
+    "this application is licensed", "microsoft is not responsible",
+    "downloading ", "successfully verified", "starting package install",
+    "found ", "chocolatey v", "installing the following", "by installing, you accept",
+)
+
+
+def _meaningful_lines(output: str | None, max_lines: int = 3) -> list[str]:
+    """Letzte aussagekraeftige Zeilen eines Agent-Outputs (ohne Wrapper-
+    Meldungen, Fortschrittsbalken und Leerzeilen)."""
+    keep = []
+    for ln in (output or "").splitlines():
+        t = ln.strip()
+        if not t or t.lower().startswith(_OUTPUT_NOISE):
+            continue
+        if not any(ch.isalnum() for ch in t) or any(ch in t for ch in "\u2588\u2593\u2592\u2591"):
+            continue  # Fortschrittsbalken (winget: "██████  148 MB / 148 MB")
+        keep.append(t[:300])
+    return keep[-max_lines:]
+
+
+def _with_output_lines(output: str | None, headline: str) -> str:
+    """Fehlertext = aussagekraeftige Output-Zeilen + Code-Zeile."""
+    lines = _meaningful_lines(output)
+    return "\n".join(lines + [headline])[:500] if lines else headline
+
+
 _EXIT_REASON = {
     1602: "Installation wurde abgebrochen.",
     1603: "Schwerer Fehler im Installer.",
@@ -1456,9 +1486,23 @@ _EXIT_REASON = {
     1638: "Eine andere Version ist bereits installiert.",
     -1978335212: "Paket in der Quelle nicht gefunden.",
     -1978335216: "Kein passender Installer für dieses Gerät.",
+    # winget Installationsfehler 0x8A1501xx
+    -1978334975: "Das Programm ist noch geöffnet — bitte schließen und erneut versuchen.",
+    -1978334974: "Es lief gerade eine andere Installation.",
+    -1978334973: "Dateien sind in Benutzung — betroffene Programme schließen und erneut versuchen.",
+    -1978334971: "Nicht genug Speicherplatz.",
+    -1978334969: "Keine Netzwerkverbindung.",
+    -1978334967: "Neustart nötig, um die Installation abzuschließen.",
+    -1978334966: "Vor der Installation ist ein Neustart nötig.",
+    -1978334963: "Bereits installiert.",
+    -1978334962: "Eine neuere Version ist bereits installiert.",
+    -1978334961: "Durch eine Richtlinie blockiert.",
+    -1978334959: "Das Programm ist noch geöffnet — bitte schließen und erneut versuchen.",
 }
 # (Muster im technischen Text, Klartext) — erster Treffer gewinnt
 _TEXT_REASON = (
+    ("neustart steht aus", "Übersprungen: Auf dem Gerät steht ein Neustart aus. Bitte neu starten und erneut versuchen."),
+    ("in use by a different application", "Das Programm ist noch geöffnet — bitte schließen und erneut versuchen."),
     ("nicht geantwortet", "Zeitüberschreitung: Der Installer hat nicht rechtzeitig geantwortet."),
     ("unable to find package", "Paket in der Quelle nicht gefunden."),
     ("no package found", "Paket in der Quelle nicht gefunden."),
@@ -1497,6 +1541,18 @@ def _kiosk_reason(entry: dict) -> str | None:
     return f"Fehlgeschlagen (Code {ec})." if ec not in (None, 0) else "Fehlgeschlagen."
 
 
+def _history_detail(entry: dict) -> str | None:
+    """Technische Details fuer den Verlauf: der Agent-Output (ohne die
+    Wrapper-Zeilen), bei fehlendem Output der Fehlertext."""
+    if entry.get("status") not in ("error", "skipped", "cancelled"):
+        return None
+    out = entry.get("stdout") or ""
+    lines = [ln.rstrip() for ln in out.splitlines()
+             if ln.strip() and ln.strip().lower() not in ("command gestartet", "sende ergebnis...")]
+    text = "\n".join(lines).strip() or (entry.get("error_summary") or "").strip()
+    return text[-2000:] or None
+
+
 @router.get("/history")
 async def kiosk_history(token: dict = Depends(verify_machine_token)):
     """Verlauf des eigenen Geraets fuer den Tray-Tab 'Verlauf': was lief,
@@ -1513,7 +1569,7 @@ async def kiosk_history(token: dict = Depends(verify_machine_token)):
             "status_label": _HISTORY_STATUS.get(r["status"], r["status"]),
             "own": (r.get("triggered_by") or "").startswith("kiosk"),
             "reason": _kiosk_reason(r),
-            "detail": (r.get("error_summary") or "")[-400:] or None,
+            "detail": _history_detail(r),
             "exit_code": r.get("exit_code"),
             "created_at": r.get("created_at"),
             "completed_at": r.get("completed_at"),
@@ -1658,6 +1714,36 @@ async def dispatch_winget_adhoc_uninstall(
     _spawn_bg(_deliver_command_bg(
         agent_id, hostname, winget_id, display_name,
         cmd, "uninstall", "winget", log_id=log_id,
+        run_as_user=_is_msstore_id(winget_id),
+    ))
+    return log_id
+
+
+async def dispatch_winget_adhoc_upgrade(
+    agent_id: str, hostname: str, winget_id: str, *,
+    existing_log_id: int | None = None, triggered_by: str | None = None,
+) -> int:
+    """`winget upgrade --id` fuer ein Paket ausserhalb der Whitelist
+    (Agent-Detail 'Alle updaten': der Scan meldet ein Update fuer Software,
+    die nicht ueber Softshelf verteilt wird). Ohne --scope machine — sonst
+    sieht winget per-user installierte Pakete nicht. Returns log_id."""
+    _check_winget_id(winget_id)
+    pkg = await database.get_package(winget_id)
+    display_name = pkg["display_name"] if pkg else winget_id
+    inner_cmd = _build_winget_command(
+        "upgrade", winget_id, None, include_scope_machine=False,
+    )
+    job_id = _generate_job_id()
+    cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+    log_id = await _register_or_reuse_log(
+        existing_log_id, agent_id=agent_id, hostname=hostname,
+        package_name=winget_id, display_name=display_name,
+        pkg_type="winget", action="upgrade", job_id=job_id,
+        triggered_by=triggered_by,
+    )
+    _spawn_bg(_deliver_command_bg(
+        agent_id, hostname, winget_id, display_name,
+        cmd, "upgrade", "winget", log_id=log_id,
         run_as_user=_is_msstore_id(winget_id),
     ))
     return log_id
@@ -2433,6 +2519,11 @@ async def receive_callback(job_id: str, body: CallbackPayload):
     if not body.success:
         lines = (body.output or "").strip().splitlines()
         error_summary = "\n".join(lines[-5:])[:500] if lines else "Unbekannter Fehler"
+    elif status == "skipped":
+        # Script schreibt den Grund als 'Uebersprungen: ...'
+        skip = [ln.strip() for ln in (body.output or "").splitlines()
+                if ln.strip().lower().startswith("uebersprungen")]
+        error_summary = skip[-1][:300] if skip else None
 
     await database.complete_action_log(
         entry["id"], status,
@@ -2447,10 +2538,10 @@ async def receive_callback(job_id: str, body: CallbackPayload):
     if status == "success" and ec and ec != 0:
         if pkg_type == "choco" and ec not in _CHOCO_SUCCESS_CODES:
             status = "error"
-            error_summary = f"choco beendete mit ExitCode {ec}"
+            error_summary = _with_output_lines(body.output, f"choco beendete mit ExitCode {ec}")
         elif pkg_type == "winget" and ec not in _WINGET_SUCCESS_CODES:
             status = "error"
-            error_summary = f"winget beendete mit ExitCode {ec}"
+            error_summary = _with_output_lines(body.output, f"winget beendete mit ExitCode {ec}")
         elif pkg_type == "custom" and ec not in _CUSTOM_SUCCESS_CODES:
             # Abweichender Exit-Code, aber Post-Verify findet das Produkt:
             # - 1603 bei already-installed (MSI)

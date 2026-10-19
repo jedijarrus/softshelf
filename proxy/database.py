@@ -4679,7 +4679,7 @@ async def list_agent_history(agent_id: str, limit: int = 40, days: int = 30) -> 
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT id, package_name, display_name, pkg_type, action, status, "
-            "       exit_code, error_summary, triggered_by, workflow_run_id, "
+            "       exit_code, error_summary, stdout, triggered_by, workflow_run_id, "
             "       created_at, completed_at "
             "FROM action_log WHERE agent_id = ? "
             "AND pkg_type != 'script' AND action NOT IN ('run', 'reboot') "

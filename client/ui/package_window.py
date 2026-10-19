@@ -98,20 +98,14 @@ html, body {{
 
 /* ─── Header ─── */
 .header {{
-  padding: 14px 20px 0;
+  padding: 8px 12px 0;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }}
-.header-top {{
+.footer-status {{
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}}
-.header-status {{
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  gap: 6px;
 }}
 .status-dot {{
   width: 6px;
@@ -137,9 +131,13 @@ html, body {{
 .tabs {{
   display: flex;
   gap: 0;
+  margin-bottom: -1px;          /* aktiver Unterstrich liegt auf der Header-Linie */
+  overflow-x: auto;             /* bei schmalem Fenster scrollen statt abschneiden */
+  scrollbar-width: none;
 }}
+.tabs::-webkit-scrollbar {{ display: none; }}
 .tab {{
-  padding: 8px 14px;
+  padding: 10px 11px;
   font-size: 12px;
   color: var(--fg-4);
   cursor: pointer;
@@ -166,6 +164,11 @@ html, body {{
   font-weight: 600;
   margin-left: 4px;
   border: 1px solid var(--amber-border);
+}}
+.tab-badge.error {{
+  background: var(--red-bg);
+  color: var(--red);
+  border-color: var(--red-border);
 }}
 
 /* ─── Search ─── */
@@ -958,18 +961,12 @@ html, body {{
   </div>
 
   <div class="header">
-    <div class="header-top">
-      <div class="tabs" id="tabs">
-        <div class="tab active" data-tab="all">Alle</div>
-        <div class="tab" data-tab="updates">Updates <span class="tab-badge" id="updateBadge" style="display:none">0</span></div>
-        <div class="tab" data-tab="installed">Installiert</div>
-        <div class="tab" data-tab="actions" id="tabActions" style="display:none">Aktionen</div>
-        <div class="tab" data-tab="history">Verlauf <span class="tab-badge" id="historyBadge" style="display:none">0</span></div>
-      </div>
-      <div class="header-status">
-        <div class="status-dot" id="statusDot"></div>
-        <span class="status-text" id="statusText">Verbinde...</span>
-      </div>
+    <div class="tabs" id="tabs">
+      <div class="tab active" data-tab="all">Alle</div>
+      <div class="tab" data-tab="updates">Updates <span class="tab-badge" id="updateBadge" style="display:none">0</span></div>
+      <div class="tab" data-tab="installed">Installiert</div>
+      <div class="tab" data-tab="actions" id="tabActions" style="display:none">Aktionen</div>
+      <div class="tab" data-tab="history">Verlauf <span class="tab-badge error" id="historyBadge" style="display:none">0</span></div>
     </div>
   </div>
 
@@ -989,7 +986,11 @@ html, body {{
       <button class="btn-refresh" id="btnRefresh" onclick="loadPackages()">Aktualisieren</button>
       <span class="footer-count" id="footerCount"></span>
     </div>
-    <span class="footer-version">v{version}</span>
+    <div class="footer-status">
+      <div class="status-dot" id="statusDot"></div>
+      <span class="status-text" id="statusText">Verbinde...</span>
+      <span class="footer-version">&middot; v{version}</span>
+    </div>
   </div>
 </div>
 
