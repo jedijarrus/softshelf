@@ -1503,6 +1503,38 @@ def _validate_for_queue(pkg: dict, action: str) -> None:
         raise HTTPException(status_code=400, detail="Für dieses Paket ist keine Deinstallation hinterlegt.")
 
 
+async def dispatch_winget_adhoc_uninstall(
+    agent_id: str, hostname: str, winget_id: str, *,
+    existing_log_id: int | None = None, triggered_by: str | None = None,
+) -> int:
+    """`winget uninstall --id` fuer ein beliebiges Paket — auch ausserhalb
+    der Whitelist (Agent-Detail: unerwuenschte Software aufraeumen).
+    Wird vom Queue-Drain mit existing_log_id aufgerufen. Returns log_id."""
+    _check_winget_id(winget_id)
+    pkg = await database.get_package(winget_id)
+    display_name = pkg["display_name"] if pkg else winget_id
+    # Paritaet zu dispatch_uninstall_for_agent: hinterlegter Override greift
+    # auch hier, msstore-IDs brauchen --source msstore + User-Kontext.
+    inner_cmd = _build_winget_command(
+        "uninstall", winget_id, display_name=display_name,
+        uninstall_override=((pkg or {}).get("uninstall_cmd") or "").strip(),
+    )
+    job_id = _generate_job_id()
+    cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
+    log_id = await _register_or_reuse_log(
+        existing_log_id, agent_id=agent_id, hostname=hostname,
+        package_name=winget_id, display_name=display_name,
+        pkg_type="winget", action="uninstall", job_id=job_id,
+        triggered_by=triggered_by,
+    )
+    _spawn_bg(_deliver_command_bg(
+        agent_id, hostname, winget_id, display_name,
+        cmd, "uninstall", "winget", log_id=log_id,
+        run_as_user=_is_msstore_id(winget_id),
+    ))
+    return log_id
+
+
 async def _enqueue_dispatch(
     agent_id: str, hostname: str, pkg: dict, action: str, *,
     triggered_by: str | None, request: dict | None = None,
