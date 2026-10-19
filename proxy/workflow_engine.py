@@ -47,6 +47,11 @@ async def _public_proxy_url() -> str:
     return f"http://{cfg.host}:{cfg.port}"
 
 
+# Wie lange ein Install-Step in der Warteschlange warten darf, bevor er
+# als timed_out gilt (zusaetzlich zum eigentlichen Step-Timeout).
+_QUEUE_WAIT_MAX_H = 6
+
+
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -533,34 +538,65 @@ async def _dispatch_install_step(
 
     version_pin = payload.get("version_pin") or None
 
+    # Ueber die Warteschlange: ein Workflow-Install darf nicht parallel zu
+    # einer Kiosk- oder Admin-Installation laufen (Windows-Installer-Mutex).
+    # Erster Step reiht sich gleichrangig mit Benutzerklicks ein (E6),
+    # Folgesteps laufen mit Vorrang, damit der Run nicht zerfasert.
+    import action_queue
+    run = await database.get_workflow_run(run_id) or {}
+    prio = (database.PRIO_INTERACTIVE if int(run.get("current_step") or 0) == 0
+            else database.PRIO_CONTINUATION)
     try:
-        result = await dispatch_install_for_agent(
-            agent_id,
-            hostname,
-            pkg,
-            version_pin=version_pin,
+        res = await action_queue.enqueue(
+            agent_id, hostname, pkg, "install",
+            priority=prio, triggered_by=f"workflow:{run_id}",
+            request={"version_pin": version_pin},
             workflow_run_id=run_id,
         )
-        logger.info(
-            "workflow run %d install-step: %s %s dispatched (action=%s)",
-            run_id, result.get("type"), package_name, result.get("action"),
-        )
     except Exception as e:
-        # 409 = es laeuft bereits eine Aktion fuer dieses Paket auf dem Agent
-        # (z.B. ein noch laufender Retry) — das ist KEIN fataler Step-Fehler,
-        # der laufende Vorgang advanced den Run selbst per Callback.
-        from fastapi import HTTPException as _HTTPExc
-        if isinstance(e, _HTTPExc) and e.status_code == 409:
-            logger.info(
-                "workflow run %d install-step %r: Aktion laeuft bereits (409) "
-                "— kein Re-Dispatch, Run bleibt running", run_id, package_name,
-            )
-            return
         logger.exception(
-            "workflow run %d install-step fuer %r fehlgeschlagen: %s",
+            "workflow run %d install-step fuer %r: Einreihen fehlgeschlagen: %s",
             run_id, package_name, e,
         )
         await database.update_workflow_run(run_id, status="failed")
+        return
+
+    if res.get("duplicate"):
+        # Fuer das Paket ist schon etwas offen. Gleiche Absicht → uebernehmen,
+        # dann advanced dessen Callback diesen Run. Andere Absicht (z.B. ein
+        # offener Uninstall) → Step scheitert sichtbar statt still zu haengen.
+        if res.get("action") in ("install", "upgrade", "reinstall") and res.get("log_id"):
+            adopted = await database.adopt_for_workflow(res["log_id"], run_id, prio)
+            logger.info(
+                "workflow run %d install-step %r: offenen Eintrag %s %s",
+                run_id, package_name, res["log_id"],
+                "uebernommen" if adopted else "gehoert schon zum Run",
+            )
+        else:
+            logger.warning(
+                "workflow run %d install-step %r: andere Aktion offen (%s) — Step scheitert",
+                run_id, package_name, res.get("action"),
+            )
+            await database.update_workflow_run(run_id, status="failed")
+            return
+    else:
+        logger.info(
+            "workflow run %d install-step: %s %s %s",
+            run_id, pkg.get("type"), package_name,
+            "gestartet" if res.get("started") else f"eingereiht (Position {res.get('position')})",
+        )
+
+    # Wartezeit in der Queue darf den Step nicht in den Timeout treiben:
+    # Deadline um die maximale Wartezeit verlaengern, solange nicht gestartet.
+    if not res.get("started"):
+        try:
+            cur = (await database.get_workflow_run(run_id) or {}).get("step_deadline_at")
+            base = (datetime.strptime(cur, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                    if cur else _now_utc())
+            new_dl = (base + timedelta(hours=_QUEUE_WAIT_MAX_H)).strftime("%Y-%m-%d %H:%M:%S")
+            await database.update_workflow_run(run_id, step_deadline_at=new_dl)
+        except Exception:
+            logger.exception("workflow run %d: Deadline-Verlaengerung fehlgeschlagen", run_id)
 
 
 async def _dispatch_script_step(
