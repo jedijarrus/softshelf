@@ -216,9 +216,15 @@ async def _deliver(row: dict) -> bool:
             import workflow_engine
             return await workflow_engine.deliver_script_step(row)
 
-        # winget-Uninstall aus dem Agent-Detail: braucht keinen Whitelist-Eintrag
+        # winget ad-hoc aus dem Agent-Detail: braucht keinen Whitelist-Eintrag
         if req.get("adhoc") and action == "uninstall":
             await inst.dispatch_winget_adhoc_uninstall(
+                agent_id, hostname, row["package_name"],
+                existing_log_id=log_id, triggered_by=row.get("triggered_by"),
+            )
+            return True
+        if req.get("adhoc") and action == "upgrade":
+            await inst.dispatch_winget_adhoc_upgrade(
                 agent_id, hostname, row["package_name"],
                 existing_log_id=log_id, triggered_by=row.get("triggered_by"),
             )

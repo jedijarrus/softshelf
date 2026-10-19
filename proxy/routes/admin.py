@@ -5203,51 +5203,69 @@ async def bulk_install_on_agent(agent_id: str, body: BulkInstallBody):
 
 
 @router.post("/admin/api/agents/{agent_id}/update-all", dependencies=[Depends(_require_admin)])
-async def update_all_on_agent(agent_id: str):
-    """Alle Pakete dieses Agents die ein Update verfuegbar haben upgraden.
-    Liest die effektiv updateable-Liste aus dem agent-software endpoint
-    (winget_state + choco_state + custom version-tracking)."""
-    from routes.install import dispatch_install_for_agent
+async def update_all_on_agent(agent_id: str, admin: dict = Depends(_require_admin)):
+    """Alle Updates dieses Agents einreihen — genau die Liste, die das Banner
+    im Agent-Detail zeigt (get_agent_software, update_available).
+
+    Frueher wurde die Liste hier separat aus winget/choco-State gebaut:
+    nicht freigegebene winget-Programme wurden uebersprungen, choco-Namen
+    lowercase gesucht (nicht gefunden), eigene Pakete gar nicht beachtet —
+    der Button meldete meist '0 Updates gestartet'.
+
+    - freigegebene Pakete (winget/choco/eigene): normaler Install-Pfad
+    - nicht freigegebene winget-Programme: ad-hoc `winget upgrade --id`
+    Beides laeuft ueber die Warteschlange, also nacheinander."""
+    from routes.install import dispatch_install_for_agent, _check_winget_id
+    import action_queue
 
     if not _AGENT_ID_RE.fullmatch(agent_id):
         raise HTTPException(status_code=400, detail="Ungueltige Agent-ID")
     agent = await _resolve_agent(agent_id)
+    hostname = agent["hostname"]
+    trig = f"admin:{(admin or {}).get('username') or 'admin'}"
 
-    queued = 0
-    package_names: list[str] = []
-
-    # winget: alle Eintraege wo available_version != installed_version
-    winget_state = await database.get_agent_winget_state(agent_id)
-    for wid, st in winget_state.items():
-        inst = (st.get("installed_version") or "").strip()
-        avail = (st.get("available_version") or "").strip()
-        if inst and avail and inst != avail:
-            pkg = await database.get_package(wid)
-            if pkg and (pkg.get("type") == "winget"):
-                package_names.append(wid)
-
-    # choco: dito
-    choco_state = await database.get_agent_choco_state(agent_id)
-    for cname, st in choco_state.items():
-        inst = (st.get("installed_version") or "").strip()
-        avail = (st.get("available_version") or "").strip()
-        if inst and avail and inst != avail:
-            pkg = await database.get_package(cname)
-            if pkg and (pkg.get("type") or "choco") == "choco":
-                package_names.append(cname)
-
-    for pkg_name in package_names:
-        pkg = await database.get_package(pkg_name)
-        if not pkg:
+    sw = await get_agent_software(agent_id)
+    queued: list[str] = []
+    skipped: list[str] = []
+    for it in sw.get("items", []):
+        if not it.get("update_available") or it.get("os_managed"):
             continue
+        name = it.get("name") or it.get("package_name") or it.get("winget_id")
         try:
-            await dispatch_install_for_agent(agent_id, agent["hostname"], pkg, triggered_by="admin:update-all")
-            queued += 1
+            if it.get("managed") and it.get("package_name"):
+                pkg = await database.get_package(it["package_name"])
+                if not pkg:
+                    skipped.append(f"{name}: nicht mehr freigegeben")
+                    continue
+                r = await dispatch_install_for_agent(agent_id, hostname, pkg, triggered_by=trig)
+                dup = bool(r.get("duplicate"))
+            elif it.get("winget_id"):
+                wid = _check_winget_id(it["winget_id"])
+                r = await action_queue.enqueue(
+                    agent_id, hostname,
+                    {"name": wid, "display_name": name, "type": "winget"},
+                    "upgrade", priority=database.PRIO_INTERACTIVE,
+                    triggered_by=trig, request={"adhoc": True},
+                )
+                dup = bool(r.get("duplicate"))
+            else:
+                skipped.append(f"{name}: keine Update-Quelle")
+                continue
         except HTTPException as e:
-            logger.warning("Update-all dispatch failed pkg=%s: %s", pkg_name, e.detail)
+            skipped.append(f"{name}: {e.detail}")
+            continue
+        if dup:
+            skipped.append(f"{name}: bereits offen")
+        else:
+            queued.append(name)
 
-    return {"ok": True, "queued": queued, "packages": package_names,
-            "agent": agent["hostname"]}
+    msg = f"{len(queued)} Update{'' if len(queued) == 1 else 's'} eingereiht"
+    if skipped:
+        msg += f", {len(skipped)} übersprungen"
+    if skipped:
+        logger.info("update-all %s: uebersprungen: %s", hostname, "; ".join(skipped))
+    return {"ok": True, "queued": len(queued), "packages": queued,
+            "skipped": skipped, "message": msg, "agent": hostname}
 
 
 @router.post("/admin/api/packages/{name}/update-all", dependencies=[Depends(_require_admin)])

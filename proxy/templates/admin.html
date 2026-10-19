@@ -12465,7 +12465,9 @@ async function agentUpdateAll(btn) {
   btn.innerHTML = '…';
   try {
     const r = await api('POST', `/admin/api/agents/${encodeURIComponent(_currentAgent.agent_id)}/update-all`);
-    toast(`${r.queued||0} Updates gestartet`);
+    toast(r.message || `${r.queued||0} Updates eingereiht`);
+    if (r.skipped && r.skipped.length) console.info('Update-all übersprungen:', r.skipped);
+    loadAgentQueue(_currentAgent.agent_id);
     setTimeout(() => openAgentDetail(_currentAgent.agent_id, _currentAgent.hostname), 2500);
   } catch (e) {
     btn.disabled = false;
