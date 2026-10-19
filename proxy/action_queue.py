@@ -197,6 +197,19 @@ async def _deliver(row: dict) -> bool:
 
         from routes import install as inst
 
+        # Workflow-Zeile: nur zustellen, solange der Run laeuft. Abgebrochene
+        # oder beendete Runs duerfen nicht nachtraeglich installieren; bei
+        # Pause reiht resume() den Step ohnehin neu ein.
+        run_id = row.get("workflow_run_id")
+        if run_id:
+            run = await database.get_workflow_run(run_id)
+            if not run or run.get("status") not in ("pending", "running"):
+                await database.complete_action_log(
+                    log_id, "cancelled",
+                    error_summary="Workflow ist nicht mehr aktiv",
+                )
+                return False
+
         # winget-Uninstall aus dem Agent-Detail: braucht keinen Whitelist-Eintrag
         if req.get("adhoc") and action == "uninstall":
             await inst.dispatch_winget_adhoc_uninstall(

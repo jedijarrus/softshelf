@@ -4661,6 +4661,23 @@ async def set_lane_queue_reason(agent_id: str, lane: str, reason: str | None) ->
         await db.commit()
 
 
+async def adopt_for_workflow(log_id: int, run_id: int, priority: int) -> bool:
+    """Haengt einen offenen Nicht-Workflow-Eintrag an einen Workflow-Run.
+    Dessen Final-Callback advanced dann den Run — sonst wartete der
+    Install-Step auf einen Callback, der den Run nie erreicht. Wartet der
+    Eintrag noch, bekommt er die (hoehere) Workflow-Prioritaet."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET workflow_run_id = ?, "
+            "priority = MIN(priority, ?) "
+            "WHERE id = ? AND workflow_run_id IS NULL "
+            "AND status IN ('queued','pending','running')",
+            (run_id, int(priority), log_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
 async def count_open_actions(agent_id: str) -> int:
     """Offene (wartende oder laufende) Eintraege eines Agents — Schutz gegen
     eine vom Kiosk aus beliebig gefuellte Warteschlange."""
