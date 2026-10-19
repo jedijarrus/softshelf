@@ -4311,15 +4311,19 @@ async def update_action_log_status(log_id: int, status: str):
 
 async def repurpose_queued_action_log(
     log_id: int, job_id: str | None, metadata: str | None = None,
+    action: str | None = None,
 ) -> bool:
     """Existierenden queued/pending action_log fuer einen frischen Dispatch
     nutzen: setzt job_id + metadata, status='pending'. Vom Queue-Tick verwendet
-    damit der bestehende Eintrag (mit urspruenglichem created_at) erhalten bleibt."""
+    damit der bestehende Eintrag (mit urspruenglichem created_at) erhalten bleibt.
+    `action` uebernimmt die tatsaechlich dispatchte Aktion (winget entscheidet
+    erst beim Zustellen zwischen install und upgrade)."""
     async with _db() as db:
         cur = await db.execute(
-            "UPDATE action_log SET job_id = ?, metadata = ?, status = 'pending' "
+            "UPDATE action_log SET job_id = ?, metadata = ?, status = 'pending', "
+            "action = COALESCE(?, action) "
             "WHERE id = ?",
-            (job_id, metadata, log_id),
+            (job_id, metadata, action, log_id),
         )
         await db.commit()
         return cur.rowcount > 0
@@ -4648,6 +4652,18 @@ async def set_lane_queue_reason(agent_id: str, lane: str, reason: str | None) ->
             (reason[:60] if reason else None, agent_id, lane),
         )
         await db.commit()
+
+
+async def count_open_actions(agent_id: str) -> int:
+    """Offene (wartende oder laufende) Eintraege eines Agents — Schutz gegen
+    eine vom Kiosk aus beliebig gefuellte Warteschlange."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM action_log WHERE agent_id = ? "
+            "AND status IN ('queued','pending','running')",
+            (agent_id,),
+        ) as cur:
+            return (await cur.fetchone())[0]
 
 
 async def count_queued_with_reason(reason: str) -> int:
