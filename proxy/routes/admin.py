@@ -3346,7 +3346,20 @@ async def queue_command(body: QueueCommandBody, admin: dict = Depends(_require_a
 @router.post("/admin/api/action-log/{log_id}/cancel-queued",
              dependencies=[Depends(_require_admin)])
 async def cancel_queued_action_endpoint(log_id: int):
-    """Bricht einen vorgemerkten (queued) Befehl ab. Nur fuer status=queued."""
+    """Bricht einen vorgemerkten (queued) Befehl ab. Nur fuer status=queued.
+    Workflow-Steps nicht einzeln: der Run wartete sonst bis zum Timeout auf
+    einen Callback, der nie kommt — dafuer den Workflow abbrechen."""
+    async with database._db() as db:
+        async with db.execute(
+            "SELECT workflow_run_id FROM action_log WHERE id = ? AND status = 'queued'",
+            (log_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    if row and row[0]:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Teil von Workflow-Run #{row[0]} — bitte den Workflow abbrechen.",
+        )
     ok = await database.cancel_queued_action(log_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Kein vorgemerkter Eintrag mit dieser ID.")

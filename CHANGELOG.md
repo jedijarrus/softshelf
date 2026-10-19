@@ -7,6 +7,51 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.9.0] – 2026-10-19
+
+Installations-Warteschlange pro Agent: nie mehr zwei Installer gleichzeitig.
+
+### Added
+
+- **Warteschlange pro Agent** (`action_queue.py`). Jede Installation,
+  Deinstallation, jedes Update, jeder Downgrade und jedes Workflow-Skript wird
+  eingereiht; pro Agent läuft genau eine davon. Erweiterungen und
+  Client-Updates haben eigene Spuren und warten nicht auf Installer.
+  Abgesichert per Partial-UNIQUE-Index `uq_action_log_lane`.
+- Abarbeitung ereignisgesteuert: nach Einreihen, Callback, Zustellfehler und
+  Watchdog. Der 60-s-Tick ist nur Sicherheitsnetz.
+- Prioritäten: Workflow-Fortsetzungen → Klicks (Kiosk/Admin) →
+  Bulk/Profil/Rollout → Hintergrundjobs. Gleiche Priorität = FIFO.
+- Doppelklick-Schutz: gleiche Aktion für dasselbe Paket liefert den offenen
+  Eintrag zurück, eine widersprüchliche Aktion → 409.
+- Kiosk: `GET /api/v1/queue` (eigene Einträge mit Position, fremde als
+  „IT-Wartung"), `POST /api/v1/queue/{id}/cancel` für eigene wartende
+  Einträge. `/api/v1/packages` liefert pro Paket das Feld `op`.
+- Admin: Sektion „Warteschlange" im Agent-Detail mit „Vorziehen" und
+  „Abbrechen". Endpoints `GET /admin/api/agents/{id}/queue` und
+  `POST /admin/api/action-log/{id}/prioritize`.
+
+### Changed
+
+- Workflow-Install- und Skript-Steps laufen durch die Warteschlange. Eine
+  bereits offene gleiche Aktion wird vom Workflow übernommen. Die Step-Frist
+  verlängert sich um bis zu 6 h, solange der Step noch wartet.
+- Action-Log: Status `queued` heißt jetzt „Wartet".
+- `/api/v1/packages` liefert bei Tactical-Ausfall eine leere Installed-Liste
+  statt 502.
+
+### Fixed
+
+- Ein Workflow-Neustart unterbricht keine laufende Installation mehr: der
+  Reboot wartet bis zu 60 min auf das Ende und erzwingt ihn erst danach.
+- Kiosk respektiert `hide_uninstall` und vollständig ausgeblendete Pakete
+  auch serverseitig. Maximal 10 offene Kiosk-Aktionen pro Gerät.
+- Watchdog misst ab Zustellung, nicht ab Einreihen.
+- Offene Action-Log-Einträge lassen sich nicht mehr löschen (gab sonst den
+  Slot frei, während die Installation weiterlief).
+
+---
+
 ## [2.8.2] – 2026-08-11
 
 Entra-SSO: App-Rollen-Gate + Admin-Rollenzuweisung.
