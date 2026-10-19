@@ -4627,6 +4627,38 @@ async def set_queue_reason(log_id: int, reason: str | None) -> None:
         await db.commit()
 
 
+async def lane_has_queued(agent_id: str, lane: str) -> bool:
+    """Billiger Vorab-Check, damit der Drain keinen Tactical-Pre-Flight fuer
+    leere Lanes macht."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT 1 FROM action_log WHERE agent_id = ? AND lane = ? "
+            "AND status = 'queued' LIMIT 1",
+            (agent_id, lane),
+        ) as cur:
+            return (await cur.fetchone()) is not None
+
+
+async def set_lane_queue_reason(agent_id: str, lane: str, reason: str | None) -> None:
+    """Warte-Grund fuer alle wartenden Eintraege einer Lane setzen."""
+    async with _db() as db:
+        await db.execute(
+            "UPDATE action_log SET queue_reason = ? "
+            "WHERE agent_id = ? AND lane = ? AND status = 'queued'",
+            (reason[:60] if reason else None, agent_id, lane),
+        )
+        await db.commit()
+
+
+async def count_queued_with_reason(reason: str) -> int:
+    async with _db() as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM action_log WHERE status = 'queued' AND queue_reason = ?",
+            (reason,),
+        ) as cur:
+            return (await cur.fetchone())[0]
+
+
 async def agents_with_queued() -> list[str]:
     """Agents mit mindestens einem wartenden Eintrag, aeltester zuerst."""
     async with _db() as db:

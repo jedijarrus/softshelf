@@ -380,7 +380,7 @@ async def _rollout_auto_advance_tick():
 
 
 _queue_tactical_fail_streak = 0
-_QUEUE_TACTICAL_WARN_AFTER = 3  # nach 3 Ticks (~6 min) lautes Warning
+_QUEUE_TACTICAL_WARN_AFTER = 6  # nach 6 Ticks (~6 min) lautes Warning
 
 
 async def _log_cleanup_job():
@@ -415,18 +415,17 @@ async def _action_log_watchdog():
 
 
 async def _queued_actions_tick():
-    """Alle 2 Min: pruefe queued action_log-Eintraege. Wenn der Ziel-Agent
-    laut Tactical online ist → promote auf 'pending' und dispatch ueber den
-    normalen Pfad (dispatch_install_for_agent / dispatch_uninstall_for_agent).
-    Agent offline → skippen, naechster Tick versucht es erneut.
+    """Alle 60 s: Netz unter der ereignisgesteuerten Warteschlange.
 
-    Bei Tactical-API-Fehler im check skippen wir konservativ — wir wollen
-    keinen Dispatch ohne Online-Beweis. Wenn N Ticks in Folge nur API-Errors
-    sehen, lautes Warning damit Tactical-Down nicht stiller Queue-Inflater wird.
+    Zugestellt wird ausschliesslich ueber action_queue.kick() — der Kick
+    beansprucht pro Agent und Lane hoechstens einen Eintrag (DB-erzwungen) und
+    reicht ihn an die bestehenden dispatch_*_for_agent weiter. Normalerweise
+    kickt schon das Einreihen bzw. der Final-Callback des Vorgaengers; der
+    Tick faengt Offline-Agents und verlorene Kicks auf.
     """
     global _queue_tactical_fail_streak
     try:
-        # Aufraeumen: agent geloescht oder Eintrag aelter als 7 Tage.
+        # Aufraeumen: Agent geloescht oder Eintrag aelter als 7 Tage.
         try:
             gone = await database.cancel_queued_for_missing_agents()
             if gone:
@@ -437,115 +436,19 @@ async def _queued_actions_tick():
         except Exception as e:
             logger.warning("queue-tick: cleanup failed: %s", e)
 
-        queued = await database.list_queued_actions()
-        if not queued:
-            _queue_tactical_fail_streak = 0
-            return
-        tc = get_rmm_client()
-        all_failed = True
-        from routes.install import (
-            dispatch_install_for_agent, dispatch_uninstall_for_agent,
-        )
-        for entry in queued:
-            agent_id = entry["agent_id"]
-            try:
-                info = await tc.check_agent_status(agent_id)
-                if (info or {}).get("status") not in ("check_failed",):
-                    all_failed = False
-            except Exception as e:
-                logger.warning("queue-tick: check_agent_status %s: %s", agent_id[:12], e)
-                continue
-            if (info or {}).get("status") != "online":
-                continue
-            # client_update braucht keinen Paket-Lookup — re-call der Endpoint-Logik.
-            if entry.get("pkg_type") == "client_update":
-                from routes.admin import _do_client_update, _check_client_update_prereqs
-                # Prereqs VOR promote checken — bei transient failure (z.B.
-                # Build kurzzeitig weg) bleibt der Eintrag queued und der
-                # naechste Tick versucht es erneut.
-                try:
-                    await _check_client_update_prereqs()
-                except Exception as e:
-                    logger.warning(
-                        "queue-tick: client-update prereqs failed for %s: %s",
-                        entry["id"], e,
-                    )
-                    continue
-                ag = await database.get_agent(agent_id)
-                if not ag:
-                    await database.cancel_queued_action(entry["id"])
-                    logger.info(
-                        "queue-tick: cancel queued %s — agent %s nicht mehr in DB",
-                        entry["id"], agent_id[:12],
-                    )
-                    continue
-                promoted = await database.promote_queued_to_pending(entry["id"])
-                if not promoted:
-                    continue
-                try:
-                    await _do_client_update(agent_id, ag, existing_log_id=entry["id"])
-                    logger.info(
-                        "queue-tick: client-update dispatched action_log %s agent=%s",
-                        entry["id"], agent_id[:12],
-                    )
-                except Exception as e:
-                    logger.exception("queue-tick: client-update failed for %s: %s", entry["id"], e)
-                    await database.complete_action_log(
-                        entry["id"], "error", error_summary=str(e)[:300],
-                    )
-                continue
+        import action_queue
+        await action_queue.tick()
 
-            # Serialisierung: nur EIN Installer-Op gleichzeitig pro Agent.
-            # Laeuft schon einer, ueberspringen wir diesen Eintrag — der
-            # naechste Tick versucht es erneut, sobald der Slot frei ist.
-            # Verhindert dass die Queue alle gequeueten Installs auf einmal
-            # promotet und sie sich am Installer-Lock gegenseitig deadlocken.
-            if entry["action"] in ("install", "uninstall") and \
-                    await database.agent_has_inflight_install(agent_id):
-                continue
-
-            pkg = await database.get_package(entry["package_name"])
-            if not pkg:
-                logger.warning(
-                    "queue-tick: paket %s nicht mehr in whitelist — cancel queued %s",
-                    entry["package_name"], entry["id"],
-                )
-                await database.cancel_queued_action(entry["id"])
-                continue
-            promoted = await database.promote_queued_to_pending(entry["id"])
-            if not promoted:
-                # Race: anderer Tick / manueller Cancel hat den Eintrag schon angefasst
-                continue
-            try:
-                # allow_duplicate: der Dedup-Check wuerde sonst den soeben
-                # promoteten Eintrag SELBST finden (pending < 30min) und mit
-                # 409 abbrechen. Dedup ist durch den queued-Eintrag erledigt.
-                if entry["action"] == "uninstall":
-                    await dispatch_uninstall_for_agent(
-                        agent_id, entry["hostname"], pkg, existing_log_id=entry["id"],
-                        allow_duplicate=True,
-                    )
-                else:
-                    await dispatch_install_for_agent(
-                        agent_id, entry["hostname"], pkg, existing_log_id=entry["id"],
-                        allow_duplicate=True,
-                    )
-                logger.info(
-                    "queue-tick: dispatched action_log %s (%s %s) agent=%s",
-                    entry["id"], entry["action"], entry["package_name"], agent_id[:12],
-                )
-            except Exception as e:
-                logger.exception("queue-tick: dispatch failed for %s: %s", entry["id"], e)
-                await database.complete_action_log(
-                    entry["id"], "error", error_summary=str(e)[:300],
-                )
-        if all_failed and queued:
+        # Laute Warnung, wenn Tactical dauerhaft nicht antwortet — sonst
+        # waechst die Queue still, ohne dass etwas zugestellt wird.
+        stuck = await database.count_queued_with_reason("rmm_unreachable")
+        if stuck:
             _queue_tactical_fail_streak += 1
             if _queue_tactical_fail_streak >= _QUEUE_TACTICAL_WARN_AFTER:
                 logger.error(
-                    "queue-tick: Tactical-API liefert seit %d Ticks nur check_failed — "
-                    "Queue waechst evtl. ohne Dispatch. Tactical-Verbindung pruefen.",
-                    _queue_tactical_fail_streak,
+                    "queue-tick: Tactical-API seit %d Ticks nicht erreichbar, %d "
+                    "Eintraege warten. Tactical-Verbindung pruefen.",
+                    _queue_tactical_fail_streak, stuck,
                 )
         else:
             _queue_tactical_fail_streak = 0
@@ -740,11 +643,10 @@ async def lifespan(app: FastAPI):
         coalesce=True,
         misfire_grace_time=120,
     )
-    # Alle 2 Min: queued action_log Eintraege dispatchen wenn Agent ueber
-    # Tactical online ist (Offline-Queue, v2.6.x).
+    # Alle 60 s: Netz der Installations-Warteschlange (action_queue.tick).
     scheduler.add_job(
         _queued_actions_tick,
-        IntervalTrigger(minutes=2),
+        IntervalTrigger(seconds=60),
         id="_queued_actions_tick",
         name="_queued_actions_tick",
         max_instances=1,
