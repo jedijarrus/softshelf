@@ -1483,6 +1483,74 @@ async def uninstall_package(
 
 # ── Shared dispatch helpers (für admin-driven bulk + profile apply) ───────────
 
+_INTENT_FAMILY = {"install": "install", "upgrade": "install", "reinstall": "install",
+                  "uninstall": "uninstall", "downgrade": "downgrade"}
+
+
+def _validate_for_queue(pkg: dict, action: str) -> None:
+    """Billige Vorab-Pruefung beim Einreihen, damit offensichtliche Fehler
+    sofort als HTTP-Fehler zurueckkommen statt erst beim Zustellen."""
+    name = pkg["name"]
+    ptype = pkg.get("type") or "choco"
+    if ptype == "winget":
+        _check_winget_id(name)
+    elif not _is_safe_package_name(name):
+        raise HTTPException(status_code=400, detail="Ungültiger Paketname")
+    if action in ("install", "upgrade", "reinstall") and ptype in ("custom", "plugin") \
+            and not pkg.get("sha256"):
+        raise HTTPException(status_code=400, detail=f"{ptype}-Paket ohne aktive Version")
+    if action == "uninstall" and ptype == "custom" and not (pkg.get("uninstall_cmd") or "").strip():
+        raise HTTPException(status_code=400, detail="Für dieses Paket ist keine Deinstallation hinterlegt.")
+
+
+async def _enqueue_dispatch(
+    agent_id: str, hostname: str, pkg: dict, action: str, *,
+    triggered_by: str | None, request: dict | None = None,
+) -> dict:
+    """Frischer Aufruf eines dispatch_*_for_agent (kein Queue-Drain, kein
+    Workflow-Step): nur einreihen, zugestellt wird ueber action_queue.
+
+    Rueckgabe kompatibel zum frueheren Gate-Ergebnis (queued, log_id,
+    queued_reason, message), die Aufrufer verteilen es per **result."""
+    _validate_for_queue(pkg, action)
+    res = await action_queue.enqueue(
+        agent_id, hostname, pkg, action,
+        priority=database.priority_for(triggered_by),
+        triggered_by=triggered_by, request=request,
+    )
+    name = pkg.get("display_name") or pkg["name"]
+    out = {"action": action, "package_name": pkg["name"],
+           "type": pkg.get("type") or "choco", "log_id": res.get("log_id")}
+    if res.get("duplicate"):
+        open_action = res.get("action") or ""
+        if _INTENT_FAMILY.get(open_action, open_action) != _INTENT_FAMILY.get(action, action):
+            raise HTTPException(
+                status_code=409,
+                detail=(f"Für '{name}' auf {hostname} ist bereits eine andere Aktion "
+                        f"offen ({open_action}). Bitte abwarten."),
+            )
+        out.update({
+            "duplicate": True, "queued": res.get("status") == "queued",
+            "status": res.get("status"),
+            "message": f"Für '{name}' auf {hostname} ist diese Aktion bereits offen.",
+        })
+        return out
+    if res.get("started"):
+        out.update({"queued": False, "status": "started"})
+        return out
+    reason = res.get("reason") or "agent_busy"
+    if reason in ("agent_offline", "agent_unknown", "rmm_unreachable"):
+        msg = f"'{name}' ist vorgemerkt — {hostname} ist gerade nicht erreichbar, startet bei Verbindung."
+    elif res.get("current"):
+        msg = (f"'{name}' ist auf {hostname} in der Warteschlange (Position "
+               f"{res.get('position')}), startet nach '{res['current']}'.")
+    else:
+        msg = f"'{name}' ist auf {hostname} in der Warteschlange (Position {res.get('position')})."
+    out.update({"queued": True, "status": "queued", "position": res.get("position"),
+                "queued_reason": reason, "message": msg})
+    return out
+
+
 async def _register_or_reuse_log(
     existing_log_id: int | None,
     *, agent_id: str, hostname: str, package_name: str, display_name: str,
@@ -1700,6 +1768,13 @@ async def dispatch_downgrade_for_agent(
     if not pin:
         raise HTTPException(status_code=400, detail="Paket hat keinen version_pin — Downgrade nicht moeglich")
 
+    # Frischer Aufruf: nur einreihen (siehe dispatch_install_for_agent).
+    if existing_log_id is None:
+        return await _enqueue_dispatch(
+            agent_id, hostname, pkg, "downgrade", triggered_by=triggered_by,
+            request={"version_pin": pin},
+        )
+
     if not allow_duplicate:
         existing = await database.has_pending_action(agent_id, package_name)
         if existing:
@@ -1828,6 +1903,18 @@ async def dispatch_install_for_agent(
     package_name = pkg["name"]
     ptype = pkg.get("type") or "choco"
 
+    # Frischer Aufruf (kein Queue-Drain, kein Workflow-Step): nur einreihen.
+    # Zugestellt wird ueber action_queue — hoechstens ein Installer-Op pro
+    # Agent, DB-erzwungen. version_pin/force reisen im request mit, damit
+    # z.B. ein Rollout-Pin beim Warten nicht verloren geht.
+    if existing_log_id is None and workflow_run_id is None:
+        return await _enqueue_dispatch(
+            agent_id, hostname, pkg, "install", triggered_by=triggered_by,
+            request={"version_pin": version_pin, "force": bool(force)},
+        )
+
+    # Ab hier: Zustellung durch den Queue-Drain (existing_log_id) oder ein
+    # Workflow-Step (eigene Orchestrierung).
     if not allow_duplicate:
         existing = await database.has_pending_action(agent_id, package_name)
         if existing:
@@ -1839,36 +1926,6 @@ async def dispatch_install_for_agent(
                     f"action={existing['action']}). Warte bis sie abgeschlossen ist."
                 ),
             )
-
-    # Auto-Queue wenn Agent offline (bulk/profile-Pfade). Single-Admin-Clicks
-    # nutzen das nicht — die machen Pre-Flight am Endpoint-Level und fragen den User.
-    if queue_if_offline and not existing_log_id:
-        qres = await _try_queue_if_offline(
-            agent_id, hostname, pkg, "install", triggered_by=triggered_by,
-        )
-        if qres is not None:
-            return {"action": "install", "package_name": package_name,
-                    "type": ptype, **qres}
-
-    # Serialisierung pro Agent: laeuft bereits ein Installer-Op auf diesem
-    # Agent, queuen wir statt parallel zu feuern. Parallele winget/MSI
-    # deadlocken am globalen Windows-Installer-Lock (siehe Bulk-Apply-Hang
-    # 2026-06). Der Queue-Tick (_queued_actions_tick) draint die Queue
-    # serialisiert ab, sobald der Slot frei ist. Workflow-Dispatches und
-    # Queue-Drains (existing_log_id) umgehen das Gate — die orchestrieren sich
-    # selbst bzw. SIND der Drain.
-    if (not workflow_run_id and not existing_log_id and not allow_duplicate
-            and await database.agent_has_inflight_install(agent_id)):
-        qlog = await database.create_queued_action_log(
-            agent_id=agent_id, hostname=hostname,
-            package_name=package_name, display_name=pkg["display_name"],
-            pkg_type=ptype, action="install", triggered_by=triggered_by,
-        )
-        return {
-            "action": "install", "package_name": package_name, "type": ptype,
-            "queued": True, "log_id": qlog, "queued_reason": "agent_busy",
-            "message": f"Agent {hostname} installiert gerade — eingereiht, laeuft serialisiert nach.",
-        }
 
     # workflow_run_id setzt auch triggered_by, wenn nicht explizit gesetzt
     if not triggered_by and workflow_run_id:
@@ -2006,6 +2063,7 @@ async def dispatch_upgrade_for_agent(
     hostname: str,
     pkg: dict,
     version_pin: str | None = None,
+    triggered_by: str | None = None,
 ) -> dict:
     """Spawned eine reine Upgrade-Operation. Fuer winget = upgrade-action,
     fuer choco = install (idempotent, nimmt latest), fuer custom = install
@@ -2016,6 +2074,7 @@ async def dispatch_upgrade_for_agent(
     """
     return await dispatch_install_for_agent(
         agent_id, hostname, pkg, version_pin=version_pin,
+        triggered_by=triggered_by,
     )
 
 
@@ -2038,6 +2097,12 @@ async def dispatch_uninstall_for_agent(
     """
     package_name = pkg["name"]
     ptype = pkg.get("type") or "choco"
+
+    # Frischer Aufruf: nur einreihen (siehe dispatch_install_for_agent).
+    if existing_log_id is None:
+        return await _enqueue_dispatch(
+            agent_id, hostname, pkg, "uninstall", triggered_by=triggered_by,
+        )
 
     if not allow_duplicate:
         existing = await database.has_pending_action(agent_id, package_name)
