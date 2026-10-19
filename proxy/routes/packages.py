@@ -19,6 +19,10 @@ import winget_catalog
 from auth import verify_machine_token
 from rmm import get_rmm_client
 
+import logging
+
+logger = logging.getLogger("softshelf.packages")
+
 router = APIRouter()
 
 
@@ -45,6 +49,9 @@ class Package(BaseModel):
     # im Kiosk ("Notepad++ Plugin" statt nur "plugin").
     plugin_host: str | None = None
     plugin_host_label: str | None = None
+    # Offene Aktion aus der Warteschlange: {log_id, status, action, position,
+    # reason} — None wenn nichts ansteht. Alte Trays ignorieren das Feld.
+    op: dict | None = None
 
 
 @router.get("/packages", response_model=list[Package])
@@ -70,11 +77,17 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
     )
     # plugin/winget brauchen Tactical-Scan nicht, sind nur Self-Tracking.
     installed_meta: dict[str, tuple[str, str]] = {}
+    tactical_ok = True
     if needs_tactical:
         try:
             installed_list = await get_rmm_client().get_installed_software(agent_id)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Tactical RMM nicht erreichbar: {e}")
+        except Exception:
+            # Tactical gestoert (z.B. abgelaufenes Zertifikat): der Kiosk
+            # bleibt benutzbar. choco/winget/plugin kommen aus den lokalen
+            # States, fuer custom springt das eigene Install-Tracking ein.
+            logger.exception("packages: Tactical-Softwarescan fuer %s fehlgeschlagen", agent_id[:12])
+            installed_list = []
+            tactical_ok = False
         installed_meta = {
             item.get("name", "").lower(): (item.get("version", ""), item.get("publisher", ""))
             for item in installed_list
@@ -241,6 +254,8 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
             needle = row["name"]
 
         is_installed, version, publisher = _find(needle)
+        if not tactical_ok and ptype == "custom" and tracked_by_pkg.get(row["name"]):
+            is_installed = True
 
         installed_label = None
         current_label = None
@@ -318,6 +333,18 @@ async def list_packages(token: dict = Depends(verify_machine_token)):
             # Kein aktiver Rollout ODER Rollout hat Ring dieses Agents noch nicht erreicht
             p.update_available = False
             p.current_version_label = None  # Version-Info verstecken damit UI nicht verwirrt
+
+    # Offene Aktionen aus der Warteschlange an die Pakete haengen
+    from routes.install import _QUEUE_REASON_TEXT
+    open_ops = await database.open_action_by_package(agent_id)
+    for p in result:
+        o = open_ops.get(p.name)
+        if o:
+            p.op = {
+                "log_id": o["id"], "status": o["status"], "action": o["action"],
+                "position": o["position"] or None,
+                "reason": _QUEUE_REASON_TEXT.get(o.get("queue_reason") or ""),
+            }
 
     # "Hidden in Kiosk"-Filter (3-state):
     #   0 = sichtbar (default)

@@ -1404,6 +1404,53 @@ if ($choco) {{
 
 # _run_choco_one, _run_choco_command_bg, _run_one_winget, _run_winget_command_bg
 # entfernt — alle Pakettypen nutzen jetzt _deliver_command_bg + Callback.
+_QUEUE_REASON_TEXT = {
+    "agent_offline": "Gerät nicht erreichbar",
+    "agent_unknown": "Gerät nicht erreichbar",
+    "rmm_unreachable": "Verwaltung nicht erreichbar",
+    "delivery_failed": "Zustellung wird wiederholt",
+    "dispatch_error": "Zustellung wird wiederholt",
+    "client_build_missing": "Update noch nicht bereit",
+}
+
+
+@router.get("/queue")
+async def kiosk_queue(token: dict = Depends(verify_machine_token)):
+    """Warteschlange des eigenen Geraets fuer den Tray. Eigene Kiosk-Aktionen
+    mit Namen und Abbruch-Moeglichkeit, alles andere als 'IT-Wartung'."""
+    agent_id = token["agent_id"]
+    items, current = [], None
+    for r in await database.list_agent_queue(agent_id):
+        own = (r.get("triggered_by") or "").startswith("kiosk") and not r.get("workflow_run_id")
+        name = (r.get("display_name") or r["package_name"]) if own else "IT-Wartung"
+        if r["status"] != "queued" and (r.get("lane") or "installer") == "installer" and current is None:
+            current = name
+        items.append({
+            "log_id": r["id"],
+            "package_name": r["package_name"] if own else None,
+            "display_name": name,
+            "action": r["action"] if own else None,
+            "status": r["status"],
+            "position": r["position"] or None,
+            "reason": _QUEUE_REASON_TEXT.get(r.get("queue_reason") or ""),
+            "own": own,
+            "can_cancel": own and r["status"] == "queued",
+            "since": r.get("since"),
+        })
+    return {"installer": {"busy": current is not None, "current": current}, "items": items}
+
+
+@router.post("/queue/{log_id}/cancel")
+async def kiosk_queue_cancel(log_id: int, token: dict = Depends(verify_machine_token)):
+    """Eigenen, noch wartenden Kiosk-Eintrag abbrechen."""
+    if not await database.cancel_own_kiosk_action(token["agent_id"], log_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Kann nicht abgebrochen werden — die Aktion läuft bereits oder wurde nicht von Ihnen gestartet.",
+        )
+    return {"ok": True}
+
+
 @router.post("/install", response_model=SoftwareResponse)
 async def install_package(
     body: SoftwareRequest,
