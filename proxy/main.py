@@ -1210,18 +1210,15 @@ async def workflow_reboot_now(run_id: int, request: Request):
     # Nur wenn Run noch aktiv ist — cancelled/completed/timed_out = kein Reboot
     if run["status"] != "running":
         return {"ok": False, "reason": f"Run ist {run['status']}, kein Reboot"}
-    # Shutdown via Tactical dispatchen
-    try:
-        tc = get_rmm_client()
-        await tc.run_command(agent_id, 'shutdown /r /t 5 /d p:4:1', timeout=10)
-    except Exception as e:
-        logger.warning("reboot-now: shutdown dispatch failed: %s", e)
-    # reboot_pending entfernen damit Client Dialog nicht nochmal zeigt
-    import json
-    state = json.loads(run.get("step_state") or "{}")
-    state["reboot_triggered"] = True
-    await database.update_workflow_run(run_id, step_state=json.dumps(state))
-    return {"ok": True, "action": "reboot_now"}
+    # Nicht blind neu starten: laeuft gerade eine Installation, wartet der
+    # Neustart darauf (sonst reisst er sie ab). request_reboot startet sofort,
+    # wenn der Installer-Slot frei ist.
+    import workflow_engine
+    res = await workflow_engine.request_reboot(run)
+    if res["triggered"]:
+        return {"ok": True, "action": "reboot_now"}
+    return {"ok": True, "action": "reboot_after_install",
+            "waiting_for": res.get("waiting_for")}
 
 
 @app.post("/api/v1/workflow/defer/{run_id}")

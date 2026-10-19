@@ -4592,8 +4592,16 @@ async def claim_next(agent_id: str, lane: str) -> dict | None:
                 "  SELECT 1 FROM action_log h "
                 "  WHERE h.agent_id = ? AND h.status IN ('pending','running') "
                 f"  AND (h.lane = ?{legacy_guard})) "
+                # Neustart-Sperre: steht ein Workflow-Neustart an, wird nichts
+                # Neues mehr begonnen — sonst schiebt jede weitere Installation
+                # den Neustart hinaus oder wird von ihm abgerissen. Faellt mit
+                # dem Weiterschalten des Runs (step_state = '{}').
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM workflow_runs r "
+                "  WHERE r.agent_id = ? AND r.status = 'running' "
+                "  AND json_extract(r.step_state, '$.reboot_requested') = 1) "
                 "RETURNING *",
-                params,
+                params + [agent_id],
             ) as cur:
                 # fetchall statt fetchone: bei RETURNING ist das Statement erst
                 # nach dem letzten Step abgeschlossen.
@@ -4661,6 +4669,36 @@ async def set_lane_queue_reason(agent_id: str, lane: str, reason: str | None) ->
             (reason[:60] if reason else None, agent_id, lane),
         )
         await db.commit()
+
+
+async def installer_lane_holder(agent_id: str) -> dict | None:
+    """Der Eintrag, der gerade den Installer-Slot eines Agents belegt (inkl.
+    offener Altzeilen ohne Lane) — oder None. Vor einem Neustart pruefen,
+    damit keine laufende Installation abgerissen wird."""
+    ph = ",".join("?" * len(INSTALLER_ACTIONS))
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, package_name, display_name, action, claimed_at, created_at "
+            "FROM action_log WHERE agent_id = ? AND status IN ('pending','running') "
+            f"AND (lane = 'installer' OR (lane IS NULL AND action IN ({ph}))) "
+            "ORDER BY id LIMIT 1",
+            (agent_id, *INSTALLER_ACTIONS),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def get_runs_with_reboot_request() -> list[dict]:
+    """Laufende Runs mit angefordertem, aber noch nicht ausgeloestem Neustart."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM workflow_runs WHERE status = 'running' "
+            "AND json_extract(step_state, '$.reboot_requested') = 1 "
+            "AND COALESCE(json_extract(step_state, '$.reboot_triggered'), 0) = 0"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
 
 async def adopt_for_workflow(log_id: int, run_id: int, priority: int) -> bool:
@@ -5370,8 +5408,9 @@ async def get_pending_actions_for_agent(agent_id: str) -> list[dict]:
     except Exception:
         state = {}
 
-    # Nicht anzeigen wenn Reboot schon getriggert wurde
-    if state.get("reboot_triggered"):
+    # Nicht anzeigen wenn Reboot schon getriggert oder angefordert wurde
+    # (angefordert = wartet auf Ende der laufenden Installation)
+    if state.get("reboot_triggered") or state.get("reboot_requested"):
         return []
 
     # Nicht anzeigen wenn noch im Verschieben-Zeitfenster

@@ -380,6 +380,107 @@ async def resume(run_id: int, from_step: int | None = None):
     await dispatch_current_step(run_id)
 
 
+# Wie lange ein angeforderter Neustart auf das Ende einer laufenden
+# Installation wartet, bevor er trotzdem ausgefuehrt wird (Entscheidung E5).
+_REBOOT_WAIT_FOR_INSTALL_MAX_MIN = 60
+
+
+async def request_reboot(run: dict, *, forced: bool = False) -> dict:
+    """Neustart fuer einen Run anfordern statt sofort auszuloesen.
+
+    Ist der Installer-Slot frei, wird sofort neu gestartet. Laeuft gerade
+    eine Installation, wartet der Neustart darauf (process_pending_reboots,
+    minuetlich) — bis hoechstens _REBOOT_WAIT_FOR_INSTALL_MAX_MIN. Solange
+    der Neustart ansteht, beansprucht die Warteschlange nichts Neues.
+    Returns {"triggered": bool, "waiting_for": str|None}."""
+    state = _parse_json(run.get("step_state"), {})
+    state["reboot_requested"] = True
+    state.setdefault("reboot_requested_at", _now_utc().strftime("%Y-%m-%d %H:%M:%S"))
+    if forced:
+        state["reboot_forced"] = True
+    await database.update_workflow_run(
+        run["id"], step_state=json.dumps(state),
+        # Wartezeit auf die Installation darf den Run nicht timed_out setzen
+        step_deadline_at=(_now_utc() + timedelta(
+            minutes=_REBOOT_WAIT_FOR_INSTALL_MAX_MIN + 60)).strftime("%Y-%m-%d %H:%M:%S"),
+    )
+    fresh = await database.get_workflow_run(run["id"]) or run
+    triggered = await _try_execute_reboot(fresh)
+    holder = None if triggered else await database.installer_lane_holder(run["agent_id"])
+    return {"triggered": triggered,
+            "waiting_for": (holder or {}).get("display_name") or (holder or {}).get("package_name")}
+
+
+async def _try_execute_reboot(run: dict) -> bool:
+    """Fuehrt einen angeforderten Neustart aus, wenn der Installer-Slot frei
+    ist oder die Wartezeit abgelaufen ist. True = Shutdown abgesetzt."""
+    state = _parse_json(run.get("step_state"), {})
+    if not state.get("reboot_requested") or state.get("reboot_triggered"):
+        return False
+    holder = await database.installer_lane_holder(run["agent_id"])
+    forced_now = False
+    if holder:
+        try:
+            req_at = datetime.strptime(
+                state.get("reboot_requested_at") or "", "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=timezone.utc)
+        except ValueError:
+            req_at = _now_utc()
+        waited = (_now_utc() - req_at).total_seconds() / 60
+        if waited < _REBOOT_WAIT_FOR_INSTALL_MAX_MIN:
+            return False
+        # E5: nach der Wartezeit trotzdem — die Installation haengt mit
+        # hoher Wahrscheinlichkeit. Sichtbar als Fehler im Aktionsprotokoll.
+        logger.warning(
+            "workflow run %d: Neustart wartet seit %d min auf %s — erzwinge",
+            run["id"], int(waited), holder.get("package_name"),
+        )
+        await database.complete_action_log(
+            holder["id"], "error",
+            error_summary="Abgebrochen durch Workflow-Neustart nach "
+                          f"{_REBOOT_WAIT_FOR_INSTALL_MAX_MIN} min Wartezeit",
+        )
+        forced_now = True
+
+    from rmm import get_rmm_client
+    brand = (await runtime_value("admin_portal_title")) or "Softshelf"
+    safe_brand = brand.replace('"', "'")[:80]
+    if state.get("reboot_forced") or forced_now:
+        cmd = f'shutdown /r /t 60 /c "{safe_brand}: Erzwungener Neustart" /d p:4:1'
+    elif state.get("reboot_waited"):
+        cmd = f'shutdown /r /t 60 /c "{safe_brand}: Neustart nach Abschluss der Installation" /d p:4:1'
+    else:
+        cmd = 'shutdown /r /t 5 /d p:4:1'
+    try:
+        await get_rmm_client().run_command(run["agent_id"], cmd, timeout=10)
+    except Exception:
+        logger.exception("workflow run %d: Shutdown-Zustellung fehlgeschlagen", run["id"])
+        return False
+    state["reboot_triggered"] = True
+    await database.update_workflow_run(
+        run["id"], step_state=json.dumps(state),
+        step_deadline_at=(_now_utc() + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S"),
+    )
+    logger.info("workflow run %d: Neustart ausgeloest (%s)", run["id"], cmd.split(" /c ")[0])
+    return True
+
+
+async def process_pending_reboots() -> None:
+    """Minuetlich: angeforderte Neustarts ausfuehren, sobald der Agent
+    keine Installation mehr laufen hat (oder die Wartezeit abgelaufen ist)."""
+    for run in await database.get_runs_with_reboot_request():
+        try:
+            state = _parse_json(run.get("step_state"), {})
+            if not state.get("reboot_waited"):
+                # Merken, dass gewartet wurde → Shutdown mit Vorwarnung statt /t 5
+                state["reboot_waited"] = True
+                await database.update_workflow_run(run["id"], step_state=json.dumps(state))
+                run = await database.get_workflow_run(run["id"]) or run
+            await _try_execute_reboot(run)
+        except Exception:
+            logger.exception("process_pending_reboots: run %s", run.get("id"))
+
+
 async def check_timeouts():
     """APScheduler-Job: prueft ueberfaellige Workflow-Runs und markiert sie als timed_out.
 
@@ -389,6 +490,11 @@ async def check_timeouts():
     Zusaetzlich: Force-Reboot fuer Reboot-Steps die zu lange pending sind
     (force_after_hours abgelaufen, kein Client hat reagiert).
     """
+    # Angeforderte Neustarts zuerst — unabhaengig davon, ob etwas ueberfaellig ist
+    try:
+        await process_pending_reboots()
+    except Exception:
+        logger.exception("check_timeouts: process_pending_reboots")
     try:
         overdue = await database.get_overdue_workflow_runs()
         if not overdue:
@@ -403,30 +509,22 @@ async def check_timeouts():
                     logger.info("workflow run %d: skip force-reboot (status=%s)",
                                 run["id"], (fresh or {}).get("status"))
                     continue
-                # Force-Reboot: Client hat nicht reagiert, Deadline abgelaufen
+                # Force-Reboot: Client hat nicht reagiert, Deadline abgelaufen.
+                # Nicht sofort: als Anforderung, die auf eine laufende
+                # Installation wartet (E5, hoechstens 60 min).
                 logger.warning(
                     "workflow run %d: reboot force-trigger (deadline abgelaufen)",
                     run["id"],
                 )
                 try:
-                    from rmm import get_rmm_client
-                    tc = get_rmm_client()
-                    brand = (await runtime_value("admin_portal_title")) or "Softshelf"
-                    safe_brand = brand.replace('"', "'")[:80]
-                    await tc.run_command(
-                        fresh["agent_id"],
-                        f'shutdown /r /t 60 /c "{safe_brand}: Erzwungener Neustart" /d p:4:1',
-                        timeout=10,
-                    )
-                    state["reboot_triggered"] = True
-                    await database.update_workflow_run(
-                        run["id"], step_state=json.dumps(state),
-                        step_deadline_at=(
-                            datetime.now(timezone.utc) + timedelta(hours=1)
-                        ).strftime("%Y-%m-%d %H:%M:%S"),
-                    )
+                    res = await request_reboot(fresh, forced=True)
+                    if not res["triggered"]:
+                        logger.info(
+                            "workflow run %d: erzwungener Neustart wartet auf %s",
+                            run["id"], res.get("waiting_for"),
+                        )
                 except Exception as e:
-                    logger.exception("force-reboot dispatch failed for run %d: %s", run["id"], e)
+                    logger.exception("force-reboot request failed for run %d: %s", run["id"], e)
                     await database.update_workflow_run(run["id"], status="timed_out")
             else:
                 logger.warning(
