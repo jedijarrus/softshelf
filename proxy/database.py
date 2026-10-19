@@ -4671,6 +4671,25 @@ async def set_lane_queue_reason(agent_id: str, lane: str, reason: str | None) ->
         await db.commit()
 
 
+async def list_agent_history(agent_id: str, limit: int = 40, days: int = 30) -> list[dict]:
+    """Letzte Paket-Aktionen eines Agents fuer den Kiosk-Tab 'Verlauf'.
+    Workflow-Skripte und Neustarts bleiben draussen (interne Schritte,
+    Skript-Ausgaben koennen Interna enthalten)."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, package_name, display_name, pkg_type, action, status, "
+            "       exit_code, error_summary, triggered_by, workflow_run_id, "
+            "       created_at, completed_at "
+            "FROM action_log WHERE agent_id = ? "
+            "AND pkg_type != 'script' AND action NOT IN ('run', 'reboot') "
+            "AND created_at > datetime('now', ?) "
+            "ORDER BY id DESC LIMIT ?",
+            (agent_id, f"-{int(days)} days", int(limit)),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
 async def list_agent_queue(agent_id: str) -> list[dict]:
     """Offene Eintraege eines Agents mit Position je Lane — fuer Kiosk- und
     Admin-Anzeige. Laufende zuerst, dann Wartende in Abarbeitungsreihenfolge."""

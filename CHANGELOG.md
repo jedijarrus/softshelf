@@ -7,6 +7,32 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.9.2] – 2026-10-19
+
+Kiosk-Verlauf mit Fehlergrund, Exit-Codes bei eigenen Paketen.
+
+### Added
+
+- Tray: Tab **„Verlauf"** mit den Aktionen der letzten 30 Tage (Status, Zeit,
+  „durch IT"), bei Fehlern ein Grund in Klartext plus aufklappbare technische
+  Details. Zähler am Tab für Fehler der letzten 24 h. Schlägt eine eigene
+  Aktion fehl, erscheint zusätzlich ein Hinweis mit dem Grund.
+- Endpoint `GET /api/v1/history` (Machine-Token). Klartext für gängige
+  MSI-/winget-Codes und typische Meldungen (Zeitüberschreitung, Paket nicht
+  gefunden, Download fehlgeschlagen). Workflow-Skripte bleiben ausgeblendet.
+
+### Fixed
+
+- Eigene Pakete: 1641 zählt wie 3010 als Erfolg. Ein abweichender Exit-Code
+  zählt als Erfolg, wenn Post-Verify das Produkt findet und es vorher nicht
+  installiert war (bzw. bei 1603 und 129). Betraf SAP-Frontend-Installer
+  (SAP GUI, Adobe LiveCycle Designer): SAPSetup endet mit 129, wenn es Arbeit
+  für den nächsten Neustart eingeplant hat — die Installation war erfolgreich,
+  wurde aber als Fehler gemeldet. Ein gescheitertes Update über eine alte
+  Version bleibt ein Fehler.
+
+---
+
 ## [2.9.1] – 2026-10-19
 
 Tray-Client 2.9.1 (nur Client, Backend unverändert 2.9.0).

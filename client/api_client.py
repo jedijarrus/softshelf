@@ -209,6 +209,19 @@ class KioskApiClient:
             pass
         return None
 
+    def get_history(self) -> list[dict] | None:
+        """Verlauf dieses Geraets (letzte Aktionen mit Ergebnis). None bei Fehler."""
+        try:
+            with self._client() as c:
+                r = _get_with_retry(c, f"{self._base}/api/v1/history", timeout=8)
+                if r.status_code == 200:
+                    data = r.json()
+                    items = data.get("items") if isinstance(data, dict) else None
+                    return items if isinstance(items, list) else []
+        except Exception:
+            pass
+        return None
+
     def cancel_queue_item(self, log_id: int) -> tuple[bool, str]:
         """Eigenen wartenden Eintrag abbrechen. Returns (ok, message)."""
         try:
