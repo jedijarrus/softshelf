@@ -14,6 +14,7 @@ Custom Icon: on start, tries to load branding icon from server
 (/api/v1/icon). Falls back to generated icon if not available.
 """
 import io
+import logging
 import os
 import sys
 import threading
@@ -30,6 +31,8 @@ except Exception:
     _BAKED_ICON_B64 = ""
 
 HEALTH_INTERVAL = 60  # seconds between health checks
+
+logger = logging.getLogger("softshelf.tray")
 
 
 def _decode_baked_icon() -> "Image.Image | None":
@@ -173,10 +176,12 @@ class KioskTray:
                     if already:
                         continue
                     try:
+                        logger.info("Neustart-Anforderung fuer Workflow-Run %s", rid)
                         self._handle_reboot_request(action)
                         with self._reboot_runs_lock:
                             self._shown_reboot_runs.add(rid)
                     except Exception:
+                        logger.exception("Neustart-Dialog fuer Run %s fehlgeschlagen", rid)
                         # Dialog konnte nicht erstellt werden — nicht zur
                         # shown-Liste hinzufuegen, damit der naechste Poll
                         # einen erneuten Versuch unternimmt.
@@ -191,6 +196,11 @@ class KioskTray:
 
     def _on_health_changed(self, online: bool):
         """Called from health thread on every poll."""
+        if self._is_online != online:
+            if online:
+                logger.info("Server erreichbar")
+            else:
+                logger.warning("Server nicht erreichbar: %s", self._api.last_error or "?")
         if self._is_online is None:
             self._is_online = online
             self._update_tray_visuals()
@@ -270,10 +280,12 @@ class KioskTray:
     def _on_open(self, icon, item):
         """Tray click: open/show the main package window."""
         from ui.package_window import show_main_window
+        logger.info("Tray-Klick: Fenster oeffnen")
         show_main_window(self._api, app_name=self._app_name)
 
     def _on_quit(self, icon, item):
         """Tray quit: clean up everything and exit."""
+        logger.info("Beenden ueber Tray-Menue")
         self._stop_health.set()
         if self._health_thread:
             self._health_thread.join(timeout=6)

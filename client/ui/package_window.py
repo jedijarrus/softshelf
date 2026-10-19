@@ -5,6 +5,7 @@ Design: Hybrid List + Tabs (Option C from brainstorm).
 All HTML/CSS/JS embedded as Python string. No external files.
 """
 import json
+import logging
 import threading
 from html import escape as _h
 
@@ -12,6 +13,9 @@ import webview
 
 from api_client import KioskApiClient, Package
 from _version import __version__
+import diag
+
+logger = logging.getLogger("softshelf.window")
 
 
 # ──────────────────────────────────────────────────────────── HTML Template ────
@@ -1026,6 +1030,12 @@ function _initApp() {{
   loadWorkflows();
   pollActiveRun();
 }}
+// JS-Fehler ins Client-Log (tray.log) — sonst sieht sie niemand
+function _logJs(msg) {{
+  try {{ if (window.pywebview && pywebview.api && pywebview.api.log_js) pywebview.api.log_js(String(msg).slice(0, 500)); }} catch (e) {{}}
+}}
+window.addEventListener('error', e => _logJs((e.message || 'Fehler') + ' @' + (e.lineno || '?') + ':' + (e.colno || '?')));
+window.addEventListener('unhandledrejection', e => _logJs('Promise: ' + ((e.reason && e.reason.message) || e.reason)));
 // pywebview Bridge ist erst nach 'pywebviewready' verfuegbar
 if (window.pywebview) {{ _initApp(); }}
 else {{ window.addEventListener('pywebviewready', _initApp); }}
@@ -1795,7 +1805,9 @@ class PackageApi:
             _PKG_CACHE = result
             return result
         except Exception as e:
-            raise Exception(_format_http_error(e))
+            msg = _format_http_error(e)
+            logger.warning("Paketliste nicht ladbar: %s", msg)
+            raise Exception(msg)
 
     def check_running_processes(self, names_csv: str) -> list[str]:
         """Lokale Prozesspruefung. Liefert Liste der gerade laufenden
@@ -1839,24 +1851,39 @@ class PackageApi:
 
     def install_package(self, name: str) -> str:
         """Trigger install via proxy."""
+        logger.info("Installieren: %s", name)
         try:
-            return self._api.install_package(name)
+            msg = self._api.install_package(name)
+            logger.info("Installieren %s: %s", name, msg)
+            return msg
         except Exception as e:
-            raise Exception(_format_http_error(e))
+            msg = _format_http_error(e)
+            logger.warning("Installieren %s fehlgeschlagen: %s", name, msg)
+            raise Exception(msg)
 
     def uninstall_package(self, name: str) -> str:
         """Trigger uninstall via proxy."""
+        logger.info("Deinstallieren: %s", name)
         try:
-            return self._api.uninstall_package(name)
+            msg = self._api.uninstall_package(name)
+            logger.info("Deinstallieren %s: %s", name, msg)
+            return msg
         except Exception as e:
-            raise Exception(_format_http_error(e))
+            msg = _format_http_error(e)
+            logger.warning("Deinstallieren %s fehlgeschlagen: %s", name, msg)
+            raise Exception(msg)
 
     def downgrade_package(self, name: str) -> str:
         """Trigger Downgrade auf die gepinnte Version via proxy."""
+        logger.info("Versionswechsel: %s", name)
         try:
-            return self._api.downgrade_package(name)
+            msg = self._api.downgrade_package(name)
+            logger.info("Versionswechsel %s: %s", name, msg)
+            return msg
         except Exception as e:
-            raise Exception(_format_http_error(e))
+            msg = _format_http_error(e)
+            logger.warning("Versionswechsel %s fehlgeschlagen: %s", name, msg)
+            raise Exception(msg)
 
     def get_queue(self) -> dict | None:
         """Warteschlange dieses Geraets (fuer das Polling im Fenster)."""
@@ -1869,9 +1896,14 @@ class PackageApi:
         """Eigenen wartenden Eintrag abbrechen. Returns {ok, message}."""
         try:
             ok, msg = self._api.cancel_queue_item(int(log_id))
+            logger.info("Warteschlange abbrechen %s: ok=%s %s", log_id, ok, msg)
             return {"ok": ok, "message": msg}
         except Exception as e:
             return {"ok": False, "message": str(e)}
+
+    def log_js(self, msg: str) -> None:
+        """JS-Fehler aus dem Fenster ins Client-Log."""
+        logger.warning("JS: %s", str(msg)[:500])
 
     def get_reinstall_url(self) -> str:
         """Optional reinstall URL aus Client-Config (default leer)."""
@@ -1915,16 +1947,31 @@ def show_main_window(api_client: KioskApiClient, app_name: str = "Softshelf"):
     global _main_window
 
     with _window_lock:
-        if _main_window is not None:
-            try:
-                _main_window.show()
-                _main_window.restore()
-                _main_window.on_top = True
-                _main_window.on_top = False
-                return
-            except Exception:
-                _main_window = None
+        existing = _main_window
+    if existing is not None:
+        # Ausserhalb des Locks: show()/restore() laufen per Invoke auf dem
+        # GUI-Thread, und _on_main_closed (GUI-Seite) braucht den Lock.
+        # Kein `on_top = True/False` mehr — pywebview setzt TopMost direkt
+        # aus diesem Thread und haelt dabei den GIL; laedt das Fenster
+        # gerade, verklemmt sich der ganze Prozess (Tray + Fenster).
+        try:
+            existing.show()
+            existing.restore()
+            hwnd = diag.find_window(existing.title)
+            if hwnd:
+                diag.bring_to_front(hwnd)
+            logger.info("Fenster nach vorne geholt")
+            return
+        except Exception:
+            logger.exception("Fenster nach vorne holen fehlgeschlagen — neu erzeugen")
+            with _window_lock:
+                if _main_window is existing:
+                    _main_window = None
 
+    with _window_lock:
+        if _main_window is not None:
+            return  # parallel von einem anderen Klick erzeugt
+        logger.info("Fenster erzeugen")
         html = _HTML.format(
             app_name=_h(app_name),
             version=_h(__version__),
@@ -1941,10 +1988,20 @@ def show_main_window(api_client: KioskApiClient, app_name: str = "Softshelf"):
             text_select=False,
         )
         _main_window.events.closed += _on_main_closed
+        _main_window.events.shown += _on_main_shown
+
+
+def _on_main_shown(window):
+    """Fenster ist da: Handle fuer die Haenger-Erkennung registrieren."""
+    hwnd = diag.find_window(window.title)
+    if hwnd:
+        diag.watch_window(hwnd, window.title)
+    logger.info("Fenster angezeigt (hwnd=%s)", hex(hwnd) if hwnd else "?")
 
 
 def _on_main_closed():
     global _main_window
+    logger.info("Fenster geschlossen")
     with _window_lock:
         _main_window = None
 
