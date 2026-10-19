@@ -210,6 +210,11 @@ async def _deliver(row: dict) -> bool:
                 )
                 return False
 
+        # Workflow-Script: Code kommt aus dem step_snapshot des Runs
+        if row.get("pkg_type") == "script":
+            import workflow_engine
+            return await workflow_engine.deliver_script_step(row)
+
         # winget-Uninstall aus dem Agent-Detail: braucht keinen Whitelist-Eintrag
         if req.get("adhoc") and action == "uninstall":
             await inst.dispatch_winget_adhoc_uninstall(

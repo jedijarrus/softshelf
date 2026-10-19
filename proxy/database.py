@@ -41,14 +41,16 @@ def lane_for(pkg_type: str | None, action: str | None) -> str:
     """Ordnet eine Operation ihrer Lane zu.
     - extension: eigene light-Lane, beruehrt kein MSI, laeuft parallel zu Installs
     - client_update: eigene client-Lane, Setup.exe nutzt kein MSI
-    - run/reboot: none — haelt keinen Installer-Slot
+    - reboot: none — haelt keinen Installer-Slot
+    - Workflow-Script (pkg_type script): installer — ein Script kann selbst
+      msiexec/winget aufrufen
     - alles andere (inkl. plugin, Entscheidung E1): installer
     """
     if action == "client_update" or pkg_type == "client_update":
         return "client"
     if pkg_type == "extension":
         return "light"
-    if action in ("run", "reboot"):
+    if action == "reboot" or (action == "run" and pkg_type != "script"):
         return "none"
     return "installer"
 
