@@ -721,6 +721,33 @@ def _script_code(run_id: int, raw_code: str) -> str:
     return chr(10).join(lines) + chr(10)
 
 
+async def _script_step_title(run: dict, step: int) -> str:
+    """Anzeigename eines Script-Steps im Action-Log: Workflow-Name plus
+    Step-Bezeichnung aus dem Editor, z.B. 'WLAN-Fix · Registry setzen'.
+    Ohne Bezeichnung 'WLAN-Fix · Schritt 2/3', bei nur einem Step nur der
+    Workflow-Name."""
+    try:
+        steps = json.loads(run.get("step_snapshot") or "[]")
+    except Exception:
+        steps = []
+    label = ""
+    if 0 <= step < len(steps):
+        label = str(steps[step].get("label") or "").strip()
+    name = ""
+    if run.get("workflow_id"):
+        wf = await database.get_workflow(int(run["workflow_id"]))
+        name = str((wf or {}).get("name") or "").strip()
+    name = name or "Workflow"
+    total = len(steps)
+    if label:
+        title = f"{name} · {label}"
+    elif total > 1:
+        title = f"{name} · Schritt {step + 1}/{total}"
+    else:
+        title = name
+    return title[:120]
+
+
 async def _dispatch_script_step(
     run_id: int, agent_id: str, hostname: str, payload: dict
 ):
@@ -741,7 +768,7 @@ async def _dispatch_script_step(
     res = await action_queue.enqueue(
         agent_id, hostname,
         {"name": f"workflow:{run_id}:script",
-         "display_name": f"Workflow-Script (Step {step + 1})", "type": "script"},
+         "display_name": await _script_step_title(run, step), "type": "script"},
         "run", priority=prio, triggered_by=f"workflow:{run_id}",
         request={"step": step}, workflow_run_id=run_id,
     )
@@ -796,7 +823,7 @@ async def deliver_script_step(row: dict) -> bool:
         agent_id=row["agent_id"],
         hostname=row.get("hostname") or "",
         package_name=row["package_name"],
-        display_name="Workflow-Script",
+        display_name=row.get("display_name") or await _script_step_title(run, step),
         cmd=cmd,
         action="run",
         pkg_type="script",
