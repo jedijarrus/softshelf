@@ -647,6 +647,71 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_admin_invitations_token "
             "ON admin_invitations(token)"
         )
+
+        # Mitteilungen an Benutzer (v2.10): Zielgruppen, Mitteilungen,
+        # Ausgaben (je Termin einer Serie) und Quittungen je Geraet+User.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS target_groups (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                kind        TEXT NOT NULL CHECK(kind IN ('static','dynamic')),
+                agent_ids   TEXT NOT NULL DEFAULT '[]',
+                rules       TEXT NOT NULL DEFAULT '[]',
+                created_by  TEXT,
+                created_at  TEXT DEFAULT (datetime('now')),
+                updated_at  TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                header           TEXT NOT NULL DEFAULT 'IT informiert',
+                title            TEXT NOT NULL,
+                body             TEXT NOT NULL DEFAULT '',
+                severity         TEXT NOT NULL DEFAULT 'info'
+                                 CHECK(severity IN ('info','wichtig','kritisch')),
+                link_url         TEXT,
+                link_label       TEXT,
+                target_group_id  INTEGER REFERENCES target_groups(id),
+                schedule         TEXT NOT NULL DEFAULT '{"mode":"once"}',
+                show_hours       INTEGER NOT NULL DEFAULT 24,
+                valid_from       TEXT NOT NULL,
+                valid_until      TEXT,
+                status           TEXT NOT NULL DEFAULT 'active'
+                                 CHECK(status IN ('active','paused','cancelled')),
+                created_by       TEXT,
+                created_at       TEXT DEFAULT (datetime('now')),
+                updated_at       TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS message_occurrences (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                fire_at     TEXT NOT NULL,
+                expires_at  TEXT NOT NULL,
+                UNIQUE(message_id, fire_at)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_msg_occ_window "
+            "ON message_occurrences(fire_at, expires_at)"
+        )
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS message_receipts (
+                occurrence_id  INTEGER NOT NULL REFERENCES message_occurrences(id) ON DELETE CASCADE,
+                agent_id       TEXT NOT NULL,
+                win_user       TEXT NOT NULL DEFAULT '',
+                delivered_at   TEXT,
+                shown_at       TEXT,
+                acked_at       TEXT,
+                PRIMARY KEY (occurrence_id, agent_id, win_user)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_msg_receipts_agent "
+            "ON message_receipts(agent_id, win_user)"
+        )
         await db.commit()
 
         # Migration: custom-package-Felder + winget-Felder
@@ -5528,3 +5593,361 @@ async def get_pending_actions_for_agent(agent_id: str) -> list[dict]:
         "step": step_idx,
     }
     return [action]
+
+
+# ── Mitteilungen (v2.10) ──────────────────────────────────────────────────────
+
+_TARGET_GROUP_COLS = "id, name, kind, agent_ids, rules, created_by, created_at, updated_at"
+_MESSAGE_COLS = (
+    "id, header, title, body, severity, link_url, link_label, target_group_id, "
+    "schedule, show_hours, valid_from, valid_until, status, created_by, "
+    "created_at, updated_at"
+)
+
+
+async def list_target_groups() -> list[dict]:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT {_TARGET_GROUP_COLS} FROM target_groups ORDER BY name"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_target_group(group_id: int) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT {_TARGET_GROUP_COLS} FROM target_groups WHERE id = ?", (group_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def create_target_group(name: str, kind: str, agent_ids: str, rules: str,
+                              created_by: str | None) -> int:
+    async with _db() as db:
+        cur = await db.execute(
+            "INSERT INTO target_groups (name, kind, agent_ids, rules, created_by) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (name, kind, agent_ids, rules, created_by),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def update_target_group(group_id: int, name: str, kind: str,
+                              agent_ids: str, rules: str):
+    async with _db() as db:
+        await db.execute(
+            "UPDATE target_groups SET name = ?, kind = ?, agent_ids = ?, rules = ?, "
+            "updated_at = datetime('now') WHERE id = ?",
+            (name, kind, agent_ids, rules, group_id),
+        )
+        await db.commit()
+
+
+async def delete_target_group(group_id: int):
+    """Zurueckgezogene Mitteilungen verlieren den Bezug (FK), aktive/pausierte
+    blockieren das Loeschen schon im Endpoint."""
+    async with _db() as db:
+        await db.execute(
+            "UPDATE messages SET target_group_id = NULL "
+            "WHERE target_group_id = ? AND status = 'cancelled'",
+            (group_id,),
+        )
+        await db.execute("DELETE FROM target_groups WHERE id = ?", (group_id,))
+        await db.commit()
+
+
+async def count_messages_for_group(group_id: int) -> int:
+    """Nicht zurueckgezogene Mitteilungen, die diese Gruppe nutzen."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM messages WHERE target_group_id = ? "
+            "AND status != 'cancelled'",
+            (group_id,),
+        ) as cur:
+            return (await cur.fetchone())[0]
+
+
+async def list_messages() -> list[dict]:
+    """Mitteilungen mit Ausgaben- und Quittungszaehlern (ueber alle Ausgaben)."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT {', '.join('m.' + c.strip() for c in _MESSAGE_COLS.split(','))}, "
+            "g.name AS target_group_name, "
+            "(SELECT COUNT(*) FROM message_occurrences o WHERE o.message_id = m.id) "
+            "  AS occurrence_count, "
+            "(SELECT MAX(o.fire_at) FROM message_occurrences o WHERE o.message_id = m.id) "
+            "  AS last_fire_at, "
+            "(SELECT COUNT(*) FROM message_receipts r JOIN message_occurrences o "
+            "   ON o.id = r.occurrence_id WHERE o.message_id = m.id) AS delivered, "
+            "(SELECT COUNT(*) FROM message_receipts r JOIN message_occurrences o "
+            "   ON o.id = r.occurrence_id WHERE o.message_id = m.id "
+            "   AND r.shown_at IS NOT NULL) AS shown, "
+            "(SELECT COUNT(*) FROM message_receipts r JOIN message_occurrences o "
+            "   ON o.id = r.occurrence_id WHERE o.message_id = m.id "
+            "   AND r.acked_at IS NOT NULL) AS acked "
+            "FROM messages m LEFT JOIN target_groups g ON g.id = m.target_group_id "
+            "ORDER BY m.id DESC"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_message(message_id: int) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT {_MESSAGE_COLS} FROM messages WHERE id = ?", (message_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def create_message(**fields) -> int:
+    cols = ", ".join(fields)
+    marks = ", ".join("?" for _ in fields)
+    async with _db() as db:
+        cur = await db.execute(
+            f"INSERT INTO messages ({cols}) VALUES ({marks})", tuple(fields.values())
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+_MESSAGE_UPDATABLE = {
+    "header", "title", "body", "severity", "link_url", "link_label",
+    "target_group_id", "schedule", "show_hours", "valid_from", "valid_until", "status",
+}
+
+
+async def update_message(message_id: int, **fields):
+    fields = {k: v for k, v in fields.items() if k in _MESSAGE_UPDATABLE}
+    if not fields:
+        return
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    async with _db() as db:
+        await db.execute(
+            f"UPDATE messages SET {sets}, updated_at = datetime('now') WHERE id = ?",
+            (*fields.values(), message_id),
+        )
+        await db.commit()
+
+
+async def list_active_messages() -> list[dict]:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT {_MESSAGE_COLS} FROM messages WHERE status = 'active'"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_last_occurrence(message_id: int) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, message_id, fire_at, expires_at FROM message_occurrences "
+            "WHERE message_id = ? ORDER BY fire_at DESC LIMIT 1",
+            (message_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def create_occurrence(message_id: int, fire_at: str, expires_at: str) -> int | None:
+    """Idempotent ueber UNIQUE(message_id, fire_at). None = gab es schon."""
+    async with _db() as db:
+        cur = await db.execute(
+            "INSERT OR IGNORE INTO message_occurrences (message_id, fire_at, expires_at) "
+            "VALUES (?, ?, ?)",
+            (message_id, fire_at, expires_at),
+        )
+        await db.commit()
+        return cur.lastrowid if cur.rowcount else None
+
+
+async def expire_open_occurrences(message_id: int):
+    """Laufende Ausgaben sofort beenden (Mitteilung pausiert/zurueckgezogen)."""
+    async with _db() as db:
+        await db.execute(
+            "UPDATE message_occurrences SET expires_at = datetime('now') "
+            "WHERE message_id = ? AND expires_at > datetime('now')",
+            (message_id,),
+        )
+        await db.commit()
+
+
+async def list_occurrences(message_id: int, limit: int = 20) -> list[dict]:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT o.id, o.fire_at, o.expires_at, "
+            "(SELECT COUNT(*) FROM message_receipts r WHERE r.occurrence_id = o.id) AS delivered, "
+            "(SELECT COUNT(*) FROM message_receipts r WHERE r.occurrence_id = o.id "
+            "   AND r.shown_at IS NOT NULL) AS shown, "
+            "(SELECT COUNT(*) FROM message_receipts r WHERE r.occurrence_id = o.id "
+            "   AND r.acked_at IS NOT NULL) AS acked "
+            "FROM message_occurrences o WHERE o.message_id = ? "
+            "ORDER BY o.fire_at DESC LIMIT ?",
+            (message_id, limit),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def list_receipts(occurrence_id: int) -> list[dict]:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT r.agent_id, COALESCE(a.hostname, r.agent_id) AS hostname, "
+            "r.win_user, r.delivered_at, r.shown_at, r.acked_at "
+            "FROM message_receipts r LEFT JOIN agents a ON a.agent_id = r.agent_id "
+            "WHERE r.occurrence_id = ? ORDER BY hostname, r.win_user",
+            (occurrence_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_live_occurrences() -> list[dict]:
+    """Ausgaben im Anzeigefenster, deren Mitteilung aktiv ist — inkl. Inhalt."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT o.id AS occurrence_id, o.fire_at, o.expires_at, m.id AS message_id, "
+            "m.header, m.title, m.body, m.severity, m.link_url, m.link_label, "
+            "m.target_group_id "
+            "FROM message_occurrences o JOIN messages m ON m.id = o.message_id "
+            "WHERE m.status = 'active' AND o.fire_at <= datetime('now') "
+            "AND o.expires_at > datetime('now') ORDER BY o.fire_at"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_occurrence(occurrence_id: int) -> dict | None:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT o.id AS occurrence_id, o.message_id, o.fire_at, o.expires_at, "
+            "m.target_group_id, m.severity, m.status "
+            "FROM message_occurrences o JOIN messages m ON m.id = o.message_id "
+            "WHERE o.id = ?",
+            (occurrence_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def get_receipts_for_user(agent_id: str, win_user: str,
+                                occurrence_ids: list[int]) -> dict[int, dict]:
+    if not occurrence_ids:
+        return {}
+    marks = ",".join("?" for _ in occurrence_ids)
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT occurrence_id, delivered_at, shown_at, acked_at "
+            f"FROM message_receipts WHERE agent_id = ? AND win_user = ? "
+            f"AND occurrence_id IN ({marks})",
+            (agent_id, win_user, *occurrence_ids),
+        ) as cur:
+            return {r["occurrence_id"]: dict(r) for r in await cur.fetchall()}
+
+
+async def touch_receipt(occurrence_id: int, agent_id: str, win_user: str, event: str):
+    """event: delivered | shown | acked. Setzt den Zeitstempel nur einmal
+    (erster Zeitpunkt zaehlt); acked impliziert shown."""
+    col = {"delivered": "delivered_at", "shown": "shown_at", "acked": "acked_at"}[event]
+    async with _db() as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO message_receipts "
+            "(occurrence_id, agent_id, win_user, delivered_at) "
+            "VALUES (?, ?, ?, datetime('now'))",
+            (occurrence_id, agent_id, win_user),
+        )
+        await db.execute(
+            f"UPDATE message_receipts SET {col} = COALESCE({col}, datetime('now')) "
+            "WHERE occurrence_id = ? AND agent_id = ? AND win_user = ?",
+            (occurrence_id, agent_id, win_user),
+        )
+        if event == "acked":
+            await db.execute(
+                "UPDATE message_receipts SET shown_at = COALESCE(shown_at, datetime('now')) "
+                "WHERE occurrence_id = ? AND agent_id = ? AND win_user = ?",
+                (occurrence_id, agent_id, win_user),
+            )
+        await db.commit()
+
+
+async def get_message_history_for_user(agent_id: str, win_user: str,
+                                       days: int = 30) -> list[dict]:
+    """Zugestellte Mitteilungen dieses Users (Kiosk-Tab), neueste zuerst."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT o.id AS occurrence_id, o.fire_at, m.header, m.title, m.body, "
+            "m.severity, m.link_url, m.link_label, r.shown_at, r.acked_at "
+            "FROM message_receipts r "
+            "JOIN message_occurrences o ON o.id = r.occurrence_id "
+            "JOIN messages m ON m.id = o.message_id "
+            "WHERE r.agent_id = ? AND r.win_user = ? "
+            "AND o.fire_at >= datetime('now', ?) "
+            "ORDER BY o.fire_at DESC LIMIT 100",
+            (agent_id, win_user, f"-{int(days)} days"),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+# Zielgruppen-Auswertung: Rohdaten fuer messages.evaluate_group
+
+async def get_target_agents() -> list[dict]:
+    """Alle nicht gebannten Agents mit den Feldern, die Regeln brauchen."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT a.agent_id, a.hostname, a.ring, a.client_version "
+            "FROM agents a LEFT JOIN agent_blocklist b ON b.agent_id = a.agent_id "
+            "WHERE b.agent_id IS NULL"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_software_rows(ident: str) -> list[dict]:
+    """Installationszeilen einer Software ueber alle Quellen (winget, choco,
+    eigene Pakete). ident = winget-ID, choco-Name oder Paketname."""
+    out: list[dict] = []
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT agent_id, installed_version, available_version FROM agent_winget_state "
+            "WHERE winget_id = ? COLLATE NOCASE",
+            (ident,),
+        ) as cur:
+            out += [dict(r, source="winget") for r in await cur.fetchall()]
+        async with db.execute(
+            "SELECT agent_id, installed_version, available_version FROM agent_choco_state "
+            "WHERE choco_name = ? COLLATE NOCASE",
+            (ident,),
+        ) as cur:
+            out += [dict(r, source="choco") for r in await cur.fetchall()]
+        async with db.execute(
+            "SELECT i.agent_id, v.version_label AS installed_version, "
+            "CASE WHEN p.current_version_id IS NOT NULL "
+            "      AND (i.version_id IS NULL OR i.version_id != p.current_version_id) "
+            "     THEN 1 ELSE 0 END AS custom_outdated "
+            "FROM agent_installations i JOIN packages p ON p.name = i.package_name "
+            "LEFT JOIN package_versions v ON v.id = i.version_id "
+            "WHERE i.package_name = ? COLLATE NOCASE",
+            (ident,),
+        ) as cur:
+            out += [dict(r, source="custom") for r in await cur.fetchall()]
+    return out
+
+
+async def get_profile_agent_ids(profile_id: int) -> set[str]:
+    async with _db() as db:
+        async with db.execute(
+            "SELECT agent_id FROM agent_profiles WHERE profile_id = ?", (profile_id,)
+        ) as cur:
+            return {r[0] for r in await cur.fetchall()}

@@ -36,11 +36,13 @@ from middleware.csrf import csrf_middleware
 from middleware.rate_limit import rate_limit_middleware
 from middleware.rate_limit import is_trusted_peer as _is_trusted_peer
 from routes import packages, install, admin, register, workflows_kiosk, health
+from routes import messages_admin, messages_kiosk
+import messages as _messages
 from rmm import get_rmm_client
 
 logger = logging.getLogger("softshelf")
 
-VERSION = "2.9.4"
+VERSION = "2.10.0"
 
 # Build-Timestamp = mtime der main.py beim Docker COPY. Aenderet sich nur
 # bei einem Image-Rebuild, nicht bei Container-Restart. Damit kann der
@@ -646,6 +648,16 @@ async def lifespan(app: FastAPI):
         coalesce=True,
         misfire_grace_time=120,
     )
+    # Alle 60 s: faellige Mitteilungs-Ausgaben anlegen (v2.10).
+    scheduler.add_job(
+        _messages.tick,
+        IntervalTrigger(seconds=60),
+        id="_messages_tick",
+        name="_messages_tick",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=120,
+    )
     # Alle 60 s: Netz der Installations-Warteschlange (action_queue.tick).
     scheduler.add_job(
         _queued_actions_tick,
@@ -707,7 +719,9 @@ app.include_router(packages.router, prefix="/api/v1")
 app.include_router(install.router,  prefix="/api/v1")
 app.include_router(register.router, prefix="/api/v1")
 app.include_router(workflows_kiosk.router, prefix="/api/v1")
+app.include_router(messages_kiosk.router, prefix="/api/v1")
 app.include_router(admin.router)
+app.include_router(messages_admin.router)
 app.include_router(health.router)
 
 
@@ -769,6 +783,15 @@ async def health(request: Request):
             win_user = request.headers.get("x-softshelf-user", "").strip()[:60]
             if win_user and re.fullmatch(r'[^\x00-\x1f\x7f<>"\'`]{1,60}', win_user):
                 await database.update_agent_user(agent_id, win_user)
+            else:
+                win_user = ""
+            # Mitteilungen (v2.10) — aeltere Trays ignorieren das Feld
+            try:
+                msgs = await _messages.pending_for_agent(agent_id, win_user)
+                if msgs:
+                    result["messages"] = msgs
+            except Exception:
+                logger.exception("Mitteilungen fuer %s nicht ermittelbar", agent_id)
 
             # Tray-Telemetrie via Header (v2.4). Leise schlucken bei
             # Validierungsfehlern damit das Health-Polling nicht bricht.

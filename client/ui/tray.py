@@ -82,6 +82,11 @@ class KioskTray:
         self._stop_health = threading.Event()
         self._health_thread: threading.Thread | None = None
         self._shown_reboot_runs: set = set()
+        # Mitteilungen (v2.10): in dieser Tray-Sitzung schon angezeigt bzw.
+        # gerade offen; Quittungen, die noch nicht beim Server angekommen sind.
+        self._shown_messages: set = set()
+        self._pending_receipts: dict = {}
+        self._messages_lock = threading.Lock()
         # Lock: Health-Thread (add) und Reboot-Dialog-Callback (discard)
         # teilen sich das Set.
         self._reboot_runs_lock = threading.Lock()
@@ -156,10 +161,12 @@ class KioskTray:
             while not self._stop_health.is_set():
                 ok = False
                 pending: list = []
+                messages: list = []
                 try:
                     data = self._api.health_check_full()
                     ok = data.get("status") == "ok"
                     pending = data.get("pending_actions", []) or []
+                    messages = data.get("messages", []) or []
                 except Exception:
                     ok = False
                 # I11: Reboot-Dialog aus dem aeusseren Try-Block ausgelagert
@@ -186,6 +193,13 @@ class KioskTray:
                         # shown-Liste hinzufuegen, damit der naechste Poll
                         # einen erneuten Versuch unternimmt.
                         pass
+                if ok:
+                    self._flush_receipts()
+                    if messages:
+                        try:
+                            self._handle_messages(messages)
+                        except Exception:
+                            logger.exception("Mitteilungen konnten nicht angezeigt werden")
                 self._on_health_changed(ok)
                 if self._stop_health.wait(HEALTH_INTERVAL):
                     return
@@ -275,6 +289,84 @@ class KioskTray:
             on_done=on_done,
         )
 
+    # ─── Mitteilungen (v2.10) ───
+
+    def _handle_messages(self, messages: list):
+        """Neue Mitteilungen anzeigen. Info = Windows-Benachrichtigung,
+        Wichtig/Kritisch = eigenes Fenster (ui.message_dialog, eins nach
+        dem anderen). Kritisch kommt vom Server so lange wieder, bis es
+        bestaetigt ist — wird es ohne Bestaetigung geschlossen, darf es beim
+        naechsten Poll erneut erscheinen."""
+        from ui.message_dialog import enqueue_message
+
+        for msg in messages:
+            oid = msg.get("id")
+            if not isinstance(oid, int):
+                continue
+            with self._messages_lock:
+                if oid in self._shown_messages:
+                    continue
+                self._shown_messages.add(oid)
+            severity = msg.get("severity") or "info"
+            logger.info("Mitteilung %s (%s): %s", oid, severity, msg.get("title"))
+            if severity == "info":
+                self._show_info_notification(msg)
+                self._receipt(oid, "shown")
+                continue
+            enqueue_message(
+                msg, app_name=self._app_name,
+                on_shown=lambda o=oid: self._receipt(o, "shown"),
+                on_done=lambda result, o=oid: self._on_message_done(o, result),
+            )
+        self._notify_messages_changed()
+
+    def _show_info_notification(self, msg: dict):
+        title = (msg.get("title") or msg.get("header") or self._app_name)[:63]
+        body = (msg.get("body") or msg.get("header") or "").strip()
+        if len(body) > 250:
+            body = body[:247] + "..."
+        try:
+            if self._icon:
+                self._icon.notify(body or title, title)
+        except Exception:
+            logger.exception("Windows-Benachrichtigung fehlgeschlagen")
+
+    def _on_message_done(self, oid: int, result: str):
+        """result: acked | closed | timeout | closed_unacked"""
+        if result == "acked":
+            self._receipt(oid, "acked")
+        elif result == "closed_unacked":
+            # Kritisch ohne Bestaetigung geschlossen → beim naechsten Poll erneut
+            with self._messages_lock:
+                self._shown_messages.discard(oid)
+        self._notify_messages_changed()
+
+    def _receipt(self, oid: int, event: str):
+        """Quittung senden; bei Fehler beim naechsten Poll erneut versuchen."""
+        def job():
+            if not self._api.send_message_receipt(oid, event):
+                with self._messages_lock:
+                    # acked schlaegt shown — nie zurueckstufen
+                    if self._pending_receipts.get(oid) != "acked":
+                        self._pending_receipts[oid] = event
+        threading.Thread(target=job, daemon=True, name="KioskMsgReceipt").start()
+
+    def _flush_receipts(self):
+        with self._messages_lock:
+            todo = dict(self._pending_receipts)
+            self._pending_receipts.clear()
+        for oid, event in todo.items():
+            if not self._api.send_message_receipt(oid, event):
+                with self._messages_lock:
+                    self._pending_receipts.setdefault(oid, event)
+
+    def _notify_messages_changed(self):
+        try:
+            from ui.package_window import refresh_messages
+            refresh_messages()
+        except Exception:
+            pass
+
     # ─── pystray Callbacks (run in pystray thread) ───
 
     def _on_open(self, icon, item):
@@ -293,8 +385,10 @@ class KioskTray:
         # Destroy all webview windows
         from ui.package_window import destroy_main_window
         from ui.reboot_dialog import destroy_reboot_window
+        from ui.message_dialog import destroy_message_window
         destroy_main_window()
         destroy_reboot_window()
+        destroy_message_window()
 
         if self._icon:
             self._icon.stop()
