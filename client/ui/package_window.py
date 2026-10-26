@@ -6,6 +6,7 @@ All HTML/CSS/JS embedded as Python string. No external files.
 """
 import json
 import logging
+import os
 import threading
 from html import escape as _h
 
@@ -759,6 +760,33 @@ html, body {{
 .hist-detail {{ display: none; font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--fg-3); white-space: pre-wrap; word-break: break-word; margin-top: 6px; padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); }}
 .hist-detail.open {{ display: block; }}
 
+/* ─── Mitteilungen (v2.10) ─── */
+.msg-item {{
+  border: 1px solid var(--border);
+  border-left: 3px solid #2563eb;
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  background: var(--bg);
+}}
+.msg-item.sev-wichtig {{ border-left-color: #b45309; }}
+.msg-item.sev-kritisch {{ border-left-color: #dc2626; }}
+.msg-item.new {{ background: var(--bg-soft); }}
+.msg-item-head {{ display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }}
+.msg-kicker {{ font-size: 11px; font-weight: 600; color: var(--fg-4); }}
+.msg-when {{ font-size: 11px; color: var(--fg-4); flex-shrink: 0; }}
+.msg-item-title {{ font-size: 13.5px; font-weight: 600; color: var(--fg); margin-top: 2px; }}
+.msg-item-body {{ font-size: 12.5px; color: var(--fg-3); margin-top: 6px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }}
+.msg-item-foot {{ display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 10px; }}
+.msg-item-foot:empty {{ display: none; }}
+.msg-link, .msg-ack {{
+  font: inherit; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--fg); cursor: pointer;
+}}
+.msg-link:hover {{ background: var(--bg-soft); }}
+.msg-ack {{ background: var(--fg); border-color: var(--fg); color: #fff; font-weight: 600; }}
+.msg-acked {{ font-size: 11px; color: var(--green); font-weight: 600; }}
+
 /* ─── Workflow Cards (Tab Aktionen) ─── */
 .wf-card {{
   border: 1px solid var(--border);
@@ -967,6 +995,7 @@ html, body {{
       <div class="tab" data-tab="installed">Installiert</div>
       <div class="tab" data-tab="actions" id="tabActions" style="display:none">Aktionen</div>
       <div class="tab" data-tab="history">Verlauf <span class="tab-badge error" id="historyBadge" style="display:none">0</span></div>
+      <div class="tab" data-tab="messages" id="tabMessages" style="display:none">Mitteilungen <span class="tab-badge" id="messagesBadge" style="display:none">0</span></div>
     </div>
   </div>
 
@@ -1028,6 +1057,8 @@ let _wfPendingId = null;
 let _queuePollTimer = null;
 let _queueCurrent = null;   // was gerade im Installer laeuft (Name oder 'IT-Wartung')
 let history = null;         // null = noch nicht geladen
+let messages = null;        // Mitteilungen (v2.10); null = noch nicht geladen
+let messagesLastSeen = '';
 
 // ─── Init ───
 function _initApp() {{
@@ -1042,6 +1073,9 @@ function _initApp() {{
       }} else if (activeTab === 'history') {{
         renderHistory();
         loadHistory();
+      }} else if (activeTab === 'messages') {{
+        renderMessages();
+        loadMessages();
       }} else {{
         renderPackages();
       }}
@@ -1052,11 +1086,13 @@ function _initApp() {{
     searchQuery = e.target.value.toLowerCase();
     if (activeTab === 'actions') renderActions();
     else if (activeTab === 'history') renderHistory();
+    else if (activeTab === 'messages') renderMessages();
     else renderPackages();
   }});
   loadPackages();
   loadWorkflows();
   loadHistory();
+  loadMessages();
   pollActiveRun();
 }}
 // JS-Fehler ins Client-Log (tray.log) — sonst sieht sie niemand
@@ -1191,6 +1227,7 @@ function getFilteredPackages() {{
 function renderPackages() {{
   if (activeTab === 'actions') {{ renderActions(); return; }}
   if (activeTab === 'history') {{ renderHistory(); return; }}
+  if (activeTab === 'messages') {{ renderMessages(); return; }}
   const content = document.getElementById('content');
   const filtered = getFilteredPackages();
 
@@ -1567,6 +1604,88 @@ function renderHistory() {{
         ${{extra}}
       </div>`;
   }}).join('');
+}}
+
+// ─── Mitteilungen (v2.10) ───
+async function loadMessages() {{
+  try {{
+    const r = await pywebview.api.get_messages();
+    if (r && Array.isArray(r.items)) {{
+      messages = r.items;
+      messagesLastSeen = r.last_seen || '';
+    }}
+  }} catch (e) {{}}
+  const tab = document.getElementById('tabMessages');
+  if (tab && messages && messages.length) tab.style.display = '';
+  updateMessagesBadge();
+  if (activeTab === 'messages') renderMessages();
+}}
+
+function _msgIsNew(m) {{
+  return !messagesLastSeen || String(m.fire_at || '') > messagesLastSeen;
+}}
+
+function updateMessagesBadge() {{
+  const badge = document.getElementById('messagesBadge');
+  if (!badge) return;
+  const n = (messages || []).filter(m => _msgIsNew(m) || (m.severity === 'kritisch' && !m.acked)).length;
+  badge.textContent = n;
+  badge.style.display = n > 0 && activeTab !== 'messages' ? 'inline-block' : 'none';
+}}
+
+function renderMessages() {{
+  const content = document.getElementById('content');
+  if (messages === null) {{
+    content.innerHTML = `<div class="loading"><div class="spinner"></div><div class="loading-text">Mitteilungen werden geladen...</div></div>`;
+    return;
+  }}
+  let items = messages.slice();
+  if (searchQuery) items = items.filter(m => ((m.title || '') + ' ' + (m.body || '')).toLowerCase().includes(searchQuery));
+  if (!items.length) {{
+    content.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">\u2709</div>
+        <div class="empty-title">Keine Mitteilungen</div>
+        <div class="empty-detail">Hier erscheinen Hinweise der IT aus den letzten 30 Tagen.</div>
+      </div>`;
+    return;
+  }}
+  content.innerHTML = items.map(m => {{
+    const sev = ['info', 'wichtig', 'kritisch'].includes(m.severity) ? m.severity : 'info';
+    const needsAck = sev === 'kritisch' && !m.acked;
+    let foot = '';
+    if (m.link_url) foot += `<button class="msg-link" onclick="openMessageLink(${{Number(m.id)}})">${{escHtml(m.link_label || '\u00D6ffnen')}}</button>`;
+    if (needsAck) foot += `<button class="msg-ack" onclick="ackMessage(${{Number(m.id)}}, this)">Verstanden</button>`;
+    else if (sev === 'kritisch') foot += `<span class="msg-acked">Best\u00E4tigt</span>`;
+    return `
+      <div class="msg-item sev-${{sev}}${{_msgIsNew(m) ? ' new' : ''}}">
+        <div class="msg-item-head">
+          <span class="msg-kicker">${{escHtml(m.header || '')}}</span>
+          <span class="msg-when">${{escHtml(_fmtWhen(m.fire_at))}}</span>
+        </div>
+        <div class="msg-item-title">${{escHtml(m.title || '')}}</div>
+        ${{m.body ? `<div class="msg-item-body">${{escHtml(m.body)}}</div>` : ''}}
+        <div class="msg-item-foot">${{foot}}</div>
+      </div>`;
+  }}).join('');
+  updateMessagesBadge();
+  try {{ pywebview.api.messages_seen(); }} catch (e) {{}}
+}}
+
+async function ackMessage(id, btn) {{
+  if (btn) btn.disabled = true;
+  let ok = false;
+  try {{ ok = await pywebview.api.ack_message(id); }} catch (e) {{}}
+  if (!ok) {{
+    if (btn) btn.disabled = false;
+    showToast('Best\u00E4tigung fehlgeschlagen \u2014 bitte erneut versuchen.', false);
+    return;
+  }}
+  await loadMessages();
+}}
+
+function openMessageLink(id) {{
+  try {{ pywebview.api.open_message_link(id); }} catch (e) {{}}
 }}
 
 // ─── Warteschlange ───
@@ -1999,6 +2118,36 @@ class PackageApi:
             logger.warning("Versionswechsel %s fehlgeschlagen: %s", name, msg)
             raise Exception(msg)
 
+    def get_messages(self) -> dict:
+        """Mitteilungen dieses Benutzers (Tab 'Mitteilungen') + Zeitpunkt
+        der zuletzt im Tab gesehenen Mitteilung (fuer den Zaehler)."""
+        try:
+            items = self._api.get_messages()
+        except Exception:
+            logger.exception("Mitteilungen nicht ladbar")
+            items = None
+        if items is not None:
+            self._messages = {m.get("id"): m for m in items if isinstance(m, dict)}
+        return {"items": items, "last_seen": _read_messages_seen()}
+
+    def messages_seen(self):
+        newest = max((str(m.get("fire_at") or "") for m in getattr(self, "_messages", {}).values()),
+                     default="")
+        if newest:
+            _write_messages_seen(newest)
+
+    def ack_message(self, occurrence_id: int) -> bool:
+        ok = self._api.send_message_receipt(int(occurrence_id), "acked")
+        logger.info("Mitteilung %s im Kiosk bestaetigt: %s", occurrence_id, ok)
+        return ok
+
+    def open_message_link(self, occurrence_id: int):
+        m = getattr(self, "_messages", {}).get(int(occurrence_id)) or {}
+        url = str(m.get("link_url") or "")
+        if url.lower().startswith("https://"):
+            import webbrowser
+            webbrowser.open(url)
+
     def get_history(self) -> list[dict] | None:
         """Verlauf dieses Geraets (Tab 'Verlauf')."""
         try:
@@ -2137,6 +2286,41 @@ def set_online_state(online: bool):
             )
         except Exception:
             pass
+
+
+def refresh_messages():
+    """Vom Tray: neue Mitteilung angekommen/bestaetigt → Tab neu laden."""
+    if _main_window is not None:
+        try:
+            _main_window.evaluate_js("if(typeof loadMessages==='function')loadMessages()")
+        except Exception:
+            pass
+
+
+def _messages_seen_path() -> str | None:
+    d = diag.log_dir()
+    return os.path.join(os.path.dirname(d), "messages_seen.txt") if d else None
+
+
+def _read_messages_seen() -> str:
+    try:
+        p = _messages_seen_path()
+        if p and os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                return f.read().strip()[:19]
+    except Exception:
+        pass
+    return ""
+
+
+def _write_messages_seen(ts: str):
+    try:
+        p = _messages_seen_path()
+        if p:
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(ts[:19])
+    except Exception:
+        pass
 
 
 def destroy_main_window():

@@ -7,6 +7,44 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [2.10.0] – 2026-10-26
+
+Mitteilungen an die Benutzer (Server + Tray 2.10.0).
+
+### Added
+
+- **Mitteilungen** (Admin → Verwaltung → Mitteilungen): Hinweise an die
+  Benutzer in drei Stufen — *Info* (Windows-Benachrichtigung), *Wichtig*
+  (Hinweisfenster unten rechts, schließt nach 60 s oder per Klick) und
+  *Kritisch* (Fenster in der Bildschirmmitte, muss mit „Verstanden"
+  bestätigt werden und erscheint bis dahin nach jeder Anmeldung erneut).
+  Kopfzeile, Titel, Text und optionaler https-Link frei wählbar; Editor mit
+  Live-Vorschau.
+- **Zeitplan**: einmalig (sofort oder geplant) oder wiederkehrend
+  (täglich/werktags, wöchentlich an Wochentagen, monatlich am Tag X oder
+  „erster Montag"), jeweils mit Uhrzeit (Europe/Berlin), optionalem Ende und
+  Anzeigedauer je Ausgabe. Jeder Termin ist eine eigene Ausgabe mit eigenen
+  Quittungen; nach Ausfallzeiten wird nur der jüngste Termin nachgeholt.
+- **Zielgruppen**: Standard „Alle Geräte"; zusätzlich feste Gerätelisten oder
+  dynamische Gruppen nach Regeln (Software installiert / nicht installiert /
+  veraltet / Version kleiner als, Tray-Version, Profil, Ring,
+  Hostname-Muster). Dynamische Gruppen werden bei der Zustellung ausgewertet
+  — „Postman veraltet" verschwindet nach dem Update von selbst.
+- **Quittungen** pro Gerät und Windows-Benutzer (zugestellt / gesehen /
+  bestätigt) im Detail jeder Ausgabe, inklusive Liste der Geräte, die die
+  Mitteilung noch nicht bekommen haben, und Hinweis auf Zielgeräte mit zu
+  altem Tray.
+- Pausieren, Fortsetzen, Zurückziehen und Duplizieren von Mitteilungen.
+- **Kiosk-Tab „Mitteilungen"** mit Zähler für Neues; kritische Mitteilungen
+  lassen sich dort ebenfalls bestätigen.
+- Neue Endpoints: `GET /api/v1/messages`,
+  `POST /api/v1/messages/{id}/receipt`, `/admin/api/messages*`,
+  `/admin/api/target-groups*`. Offene Mitteilungen kommen über den
+  bestehenden Health-Poll (`messages`), ältere Trays ignorieren das Feld.
+- Ersetzt Benachrichtigungs-Skripte per RMM (z. B. BurntToast-Toasts).
+
+---
+
 ## [2.9.4] – 2026-10-19
 
 Tray-Massenupdate robust (nur Backend, Tray bleibt 2.9.3).

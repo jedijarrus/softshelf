@@ -237,6 +237,30 @@ class KioskApiClient:
         except Exception as e:
             return False, str(e)
 
+    def get_messages(self) -> list[dict] | None:
+        """Mitteilungs-Verlauf dieses Benutzers (Kiosk-Tab). None bei Fehler."""
+        try:
+            with self._client() as c:
+                r = _get_with_retry(c, f"{self._base}/api/v1/messages", timeout=8)
+                if r.status_code == 200:
+                    data = r.json()
+                    return data if isinstance(data, list) else []
+        except Exception:
+            pass
+        return None
+
+    def send_message_receipt(self, occurrence_id: int, event: str) -> bool:
+        """Quittung 'shown' oder 'acked' fuer eine Mitteilung."""
+        try:
+            with self._client() as c:
+                r = c.post(
+                    f"{self._base}/api/v1/messages/{int(occurrence_id)}/receipt",
+                    json={"event": event}, timeout=8,
+                )
+                return r.status_code == 200
+        except Exception:
+            return False
+
     def get_client_config(self) -> dict:
         """
         Holt Client-Metadaten vom Proxy (app_name, version).

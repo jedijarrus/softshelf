@@ -40,6 +40,7 @@
         <li><a href="#wf-run">Im Kiosk freigeben</a></li>
       </ol>
     </li>
+    <li><a href="#mitteilungen">Mitteilungen</a></li>
     <li><a href="#compliance">Compliance</a></li>
     <li><a href="#verteilung">Verteilung & Updates</a></li>
     <li><a href="#fehler">Fehler &amp; Acknowledgement</a></li>
@@ -730,6 +731,52 @@
 </div>
 </section>
 
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+
+<section id="mitteilungen">
+<h1>Mitteilungen</h1>
+
+<p>Hinweise an die Benutzer — erscheinen über den Tray am Rechner und zusätzlich im Kiosk im Tab <b>Mitteilungen</b>. Voraussetzung: Tray ab Version 2.10.0. Die Detailansicht einer Mitteilung zeigt, wie viele Zielgeräte noch einen älteren Tray haben.</p>
+
+<h3>Stufen</h3>
+<ul>
+  <li><b>Info</b> — Windows-Benachrichtigung am Bildschirmrand. Gilt als gesehen, sobald sie angezeigt wurde.</li>
+  <li><b>Wichtig</b> — Hinweisfenster unten rechts mit Kopfzeile, Titel, Text und optionalem Link-Button. Schließt per Klick oder nach 60&nbsp;Sekunden (der Timer pausiert, solange die Maus darauf steht). Erscheint pro Benutzer einmal.</li>
+  <li><b>Kritisch</b> — Fenster in der Bildschirmmitte, immer im Vordergrund, ohne Schließen-Kreuz. Geht nur mit <code>Verstanden</code> weg und erscheint bis dahin nach jeder Anmeldung erneut. Im Kiosk-Tab lässt sie sich ebenfalls bestätigen.</li>
+</ul>
+<p>Mehrere Mitteilungen erscheinen nacheinander; kritische ziehen vor.</p>
+
+<h3>Zeitplan</h3>
+<ul>
+  <li><b>Einmalig</b>: sofort oder ab einem Zeitpunkt (<code>Anzeigen ab</code>).</li>
+  <li><b>Täglich</b> (optional nur werktags), <b>wöchentlich</b> an gewählten Wochentagen oder <b>monatlich</b> (am Tag X oder z.&nbsp;B. „ersten Montag") — jeweils mit Uhrzeit, deutsche Zeit.</li>
+  <li><b>Anzeigedauer</b> je Ausgabe (Standard 24&nbsp;Std.): Geräte, die in dieser Zeit online kommen, bekommen die Mitteilung noch — danach verfällt die Ausgabe. So bekommt niemand nach dem Urlaub drei alte Clean-Desk-Hinweise auf einmal.</li>
+  <li><b>Gültig bis</b> beendet die Serie bzw. die einmalige Mitteilung.</li>
+</ul>
+<p>Ein Minuten-Job legt fällige Ausgaben an. Jede Ausgabe hat eigene Quittungen. War der Server aus, wird nur der jüngste verpasste Termin nachgeholt.</p>
+
+<h3>Zielgruppen</h3>
+<p>Ohne Auswahl geht eine Mitteilung an <b>alle Geräte</b>. Unter <b>Mitteilungen → Zielgruppen</b> lassen sich wiederverwendbare Gruppen anlegen:</p>
+<ul>
+  <li><b>Feste Geräteliste</b> — Auswahl einzelner Geräte.</li>
+  <li><b>Dynamisch</b> — alle Regeln müssen zutreffen: Software installiert / nicht installiert / veraltet / Version kleiner als (winget-ID, choco-Name oder Paketname), Tray-Version kleiner als, Profil, Rollout-Ring, Hostname-Muster (<code>PC-*</code>).</li>
+</ul>
+<p>Dynamische Gruppen werden bei jeder Zustellung neu ausgewertet (max. 60&nbsp;s Cache). Beispiel: Zielgruppe „Software veraltet: Postman.Postman" + Mitteilung „Bitte Postman im Kiosk aktualisieren" — wer aktualisiert hat, fällt automatisch raus. <code>Vorschau</code> im Gruppen-Editor zeigt, auf welche Geräte die Regeln gerade zutreffen.</p>
+
+<h3>Quittungen</h3>
+<p>Pro Gerät und Windows-Benutzer: <b>zugestellt</b> (Tray hat die Mitteilung abgeholt), <b>gesehen</b> (angezeigt), <b>bestätigt</b> (nur Kritisch). Die Detailansicht listet je Ausgabe die Quittungen und die Geräte, die die Mitteilung noch nicht bekommen haben.</p>
+
+<h3>Pausieren, Zurückziehen, Duplizieren</h3>
+<ul>
+  <li><b>Pausieren</b> beendet laufende Ausgaben sofort und stoppt neue; <b>Fortsetzen</b> nimmt die Serie wieder auf.</li>
+  <li><b>Zurückziehen</b> ist endgültig. Für einen Neustart <b>Duplizieren</b> — die Kopie öffnet sich im Editor und wird beim Speichern aktiv.</li>
+  <li>Bereits offene Fenster am Rechner bleiben bis zum Schließen stehen.</li>
+</ul>
+<div class="doc-callout">
+  Die Mitteilungen ersetzen Benachrichtigungs-Skripte per RMM (z.&nbsp;B. BurntToast-Toasts) — mit Zielgruppen, Zeitplan und Rückmeldung, wer die Mitteilung gesehen hat.
+</div>
 </section>
 
 <!-- ═══════════════════════════════════════════════════════════════════ -->

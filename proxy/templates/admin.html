@@ -5687,6 +5687,73 @@ body.help-active [data-help]:not(.tab)::after {
   body.help-active [data-help]::after { display: none !important; }
   body.help-active [data-help-block]::after { display: none !important; }
 }
+
+/* ── Mitteilungen (v2.10) ── */
+.msg-switch { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; margin-right: 4px; }
+.msg-switch-btn { background: var(--bg); border: 0; padding: 5px 12px; font-size: 12px; color: var(--fg-4); cursor: pointer; font-family: inherit; }
+.msg-switch-btn + .msg-switch-btn { border-left: 1px solid var(--border); }
+.msg-switch-btn.active { background: var(--bg-hover); color: var(--fg-2); font-weight: 600; }
+.msg-table { border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); overflow-x: auto; }
+.msg-row {
+  display: grid;
+  grid-template-columns: minmax(240px, 2fr) 96px minmax(130px, 1fr) minmax(160px, 1fr) 120px 130px;
+  gap: 10px; align-items: center;
+  padding: 10px var(--row-pad-x); min-height: var(--row-h);
+  border-bottom: 1px solid var(--border); font-size: 12.5px; cursor: pointer;
+}
+.msg-row.tg-row { grid-template-columns: minmax(260px, 2fr) 110px 120px 170px; }
+.msg-row:last-child { border-bottom: none; }
+.msg-row:hover:not(.msg-head) { background: var(--bg-hover); }
+.msg-row.msg-head {
+  cursor: default; background: var(--bg-soft); border-bottom: 1px solid var(--border-strong);
+  font-family: var(--mono); font-size: 10.5px; color: var(--fg-5);
+  text-transform: uppercase; letter-spacing: .04em; font-weight: 600; min-height: var(--row-head-h);
+}
+.msg-title { font-weight: 600; color: var(--fg-2); }
+.msg-sub { color: var(--fg-5); font-size: 11.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg-sev { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.msg-sev::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--fg-5); }
+.msg-sev.sev-info::before { background: var(--blue); }
+.msg-sev.sev-wichtig::before { background: var(--amber); }
+.msg-sev.sev-kritisch::before { background: var(--red); }
+.msg-state { display: inline-block; font-size: 11.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--fg-4); }
+.msg-state.st-aktiv { color: var(--green); background: var(--green-bg); border-color: var(--green-bd); }
+.msg-state.st-geplant { color: var(--blue); background: var(--blue-bg); border-color: var(--blue-bd); }
+.msg-state.st-pausiert { color: var(--amber); background: var(--amber-bg); border-color: var(--amber-bd); }
+.msg-progress { font-family: var(--mono); font-size: 11.5px; color: var(--fg-4); }
+.msg-editor { display: grid; grid-template-columns: 1fr 300px; gap: 22px; }
+@media (max-width: 900px) { .msg-editor { grid-template-columns: 1fr; } }
+.msg-editor .field { margin-bottom: 12px; }
+.msg-count-hint { float: right; font-weight: 400; color: var(--fg-5); font-size: 11px; }
+.msg-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.msg-days label { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; margin-right: 10px; font-weight: 400; }
+.msg-preview-wrap { position: sticky; top: 0; align-self: start; }
+.msg-preview-label { font-family: var(--mono); font-size: 10.5px; color: var(--fg-5); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; font-weight: 600; }
+.msg-preview { border: 1px solid #e4e4e7; border-radius: 10px; background: #fff; box-shadow: 0 8px 24px rgba(0,0,0,.08); overflow: hidden; color: #18181b; }
+.msg-preview .mp-bar { height: 3px; background: #2563eb; }
+.msg-preview.sev-wichtig .mp-bar { background: #ca8a04; }
+.msg-preview.sev-kritisch .mp-bar { background: #dc2626; }
+.msg-preview .mp-body { padding: 14px 16px 12px; }
+.msg-preview .mp-header { font-size: 11px; color: #71717a; font-weight: 600; letter-spacing: .02em; }
+.msg-preview .mp-title { font-size: 14px; font-weight: 600; margin-top: 4px; }
+.msg-preview .mp-text { font-size: 12.5px; color: #3f3f46; margin-top: 6px; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; line-height: 1.5; }
+.msg-preview .mp-actions { display: flex; gap: 8px; justify-content: flex-end; padding: 0 16px 14px; }
+.msg-preview .mp-btn { font-size: 12px; padding: 5px 10px; border-radius: 6px; border: 1px solid #e4e4e7; background: #fff; color: #18181b; }
+.msg-preview .mp-btn.primary { background: #18181b; color: #fff; border-color: #18181b; }
+.msg-preview-note { font-size: 11.5px; color: var(--fg-5); margin-top: 8px; line-height: 1.45; }
+.msg-kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 12px; font-size: 12.5px; margin-bottom: 16px; }
+.msg-kv .k { color: var(--fg-5); }
+.msg-occ { border: 1px solid var(--border); border-radius: var(--r); }
+.msg-occ-row { display: grid; grid-template-columns: 1.2fr 1.2fr 90px 90px 90px; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px; cursor: pointer; }
+.msg-occ-row:last-child { border-bottom: none; }
+.msg-occ-row:hover, .msg-occ-row.sel { background: var(--bg-hover); }
+.msg-warn { border: 1px solid var(--amber-bd); background: var(--amber-bg); color: var(--fg-2); border-radius: var(--r); padding: 8px 12px; font-size: 12px; margin-bottom: 14px; }
+.tg-rule { display: grid; grid-template-columns: 210px 1fr auto; gap: 8px; margin-bottom: 8px; align-items: center; }
+.tg-rule .tg-rule-args { display: flex; gap: 6px; }
+.tg-agents { max-height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: var(--r); padding: 6px 10px; }
+.tg-agents label { display: flex; gap: 8px; align-items: center; font-size: 12.5px; padding: 3px 0; font-weight: 400; }
+.tg-preview { font-size: 12px; color: var(--fg-4); margin-top: 12px; }
+.tg-preview .hosts { font-family: var(--mono); font-size: 11px; color: var(--fg-5); margin-top: 4px; max-height: 90px; overflow: auto; }
 </style>
 </head>
 <body>
@@ -5763,6 +5830,10 @@ body.help-active [data-help]:not(.tab)::after {
   <button class="tab" data-tab="rollouts" data-help="Phased Rollout mit Ring-System" onclick="switchTab('rollouts',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
     Rollouts
+  </button>
+  <button class="tab" data-tab="messages" data-help="Mitteilungen an die Benutzer im Tray" onclick="switchTab('messages',this)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    Mitteilungen
   </button>
 
   <div class="sidebar-group-label">Flotte</div>
@@ -5877,6 +5948,24 @@ body.help-active [data-help]:not(.tab)::after {
     <div id="wf-list" class="pkg-grid" style="margin-top:16px">
       <div class="empty-state">Noch keine Workflows.</div>
     </div>
+  </section>
+
+  <!-- MITTEILUNGEN (v2.10) -->
+  <section class="tab-pane" id="tab-messages">
+    <div class="section-head">
+      <div><h1 class="section-title" data-help-block="Hinweise an die Benutzer: als Benachrichtigung, Hinweisfenster oder Pflicht-Bestätigung — einmalig oder wiederkehrend, an alle Geräte oder an Zielgruppen.">Mitteilungen</h1>
+        <div class="section-sub" id="msg-count">&mdash;</div></div>
+      <div class="section-actions">
+        <div class="msg-switch">
+          <button class="msg-switch-btn active" id="msg-view-msgs" onclick="msgSwitchView('msgs')">Mitteilungen</button>
+          <button class="msg-switch-btn" id="msg-view-groups" onclick="msgSwitchView('groups')">Zielgruppen</button>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="loadMessages()">Aktualisieren</button>
+        <button class="btn btn-primary btn-sm" id="msg-new-btn" onclick="msgNew()">Neue Mitteilung</button>
+      </div>
+    </div>
+    <div id="msg-list" style="margin-top:16px"></div>
+    <div id="tg-list" style="margin-top:16px;display:none"></div>
   </section>
 
   <!-- SCHEDULED (Wartungsfenster) -->
@@ -7405,6 +7494,121 @@ body.help-active [data-help]:not(.tab)::after {
   </div>
 </div>
 
+<!-- MITTEILUNG DETAIL (v2.10) -->
+<div class="modal" id="msg-detail-modal">
+  <div class="modal-card" style="max-width:760px">
+    <div class="modal-head"><h3 class="modal-title" id="msg-detail-title">Mitteilung</h3></div>
+    <div class="modal-body" id="msg-detail-body"></div>
+    <div class="modal-actions" id="msg-detail-actions"></div>
+  </div>
+</div>
+
+<!-- MITTEILUNG BEARBEITEN (v2.10) -->
+<div class="modal" id="msg-modal">
+  <div class="modal-card" style="max-width:920px">
+    <div class="modal-head"><h3 class="modal-title" id="msg-modal-title">Neue Mitteilung</h3></div>
+    <div class="modal-body">
+      <div class="msg-editor">
+        <div>
+          <div class="field"><label>Kopfzeile</label><input class="input" id="msg-header" maxlength="60" oninput="msgPreview()"></div>
+          <div class="field"><label>Titel</label><input class="input" id="msg-title" maxlength="120" placeholder="z. B. Clean-Desk-Prinzip" oninput="msgPreview()"></div>
+          <div class="field"><label>Text <span class="msg-count-hint" id="msg-body-count"></span></label><textarea class="input" id="msg-body" rows="5" maxlength="2000" oninput="msgPreview()"></textarea></div>
+          <div class="field"><label>Stufe</label>
+            <select class="input" id="msg-severity" onchange="msgPreview()">
+              <option value="info">Info — Benachrichtigung</option>
+              <option value="wichtig">Wichtig — Hinweisfenster</option>
+              <option value="kritisch">Kritisch — muss bestätigt werden</option>
+            </select></div>
+          <div class="field"><label>Link (optional)</label>
+            <div class="msg-inline">
+              <input class="input" id="msg-link-url" style="flex:2" placeholder="https://…" maxlength="500" oninput="msgPreview()">
+              <input class="input" id="msg-link-label" style="flex:1" placeholder="Beschriftung" maxlength="40" oninput="msgPreview()">
+            </div></div>
+          <div class="field"><label>Zielgruppe</label><select class="input" id="msg-target"></select></div>
+          <div class="field"><label>Zeitplan</label>
+            <div class="msg-inline">
+              <select class="input" id="msg-mode" style="max-width:170px" onchange="_msgModeChanged()">
+                <option value="once">Einmalig</option><option value="daily">Täglich</option>
+                <option value="weekly">Wöchentlich</option><option value="monthly">Monatlich</option>
+              </select>
+              <span id="msg-sched-time" class="msg-inline">um <input class="input" type="time" id="msg-time" style="max-width:110px"> Uhr</span>
+            </div>
+            <div id="msg-sched-daily" class="msg-days" style="margin-top:8px"><label><input type="checkbox" id="msg-weekdays-only"> nur werktags (Mo–Fr)</label></div>
+            <div id="msg-sched-weekly" class="msg-days" style="margin-top:8px"><span id="msg-days"></span></div>
+            <div id="msg-sched-monthly" class="msg-inline" style="margin-top:8px">
+              <select class="input" id="msg-month-kind" style="max-width:140px" onchange="_msgModeChanged()"><option value="day">am Tag</option><option value="nth">am</option></select>
+              <select class="input" id="msg-month-day" style="max-width:80px"></select>
+              <select class="input" id="msg-month-nth" style="max-width:110px"><option value="1">ersten</option><option value="2">zweiten</option><option value="3">dritten</option><option value="4">vierten</option></select>
+              <select class="input" id="msg-month-weekday" style="max-width:130px"><option value="0">Montag</option><option value="1">Dienstag</option><option value="2">Mittwoch</option><option value="3">Donnerstag</option><option value="4">Freitag</option><option value="5">Samstag</option><option value="6">Sonntag</option></select>
+            </div>
+          </div>
+          <div class="msg-inline" style="gap:12px;align-items:flex-start">
+            <div class="field" style="flex:1"><label id="msg-valid-from-label">Anzeigen ab</label><input class="input" type="datetime-local" id="msg-valid-from"><div class="hint">leer = sofort</div></div>
+            <div class="field" style="flex:1"><label>Gültig bis</label><input class="input" type="datetime-local" id="msg-valid-until"><div class="hint">optional</div></div>
+            <div class="field" style="width:130px"><label>Anzeigedauer</label><div class="msg-inline"><input class="input" type="number" id="msg-show-hours" min="1" max="168" style="width:72px"> Std.</div><div class="hint">je Ausgabe</div></div>
+          </div>
+        </div>
+        <div class="msg-preview-wrap">
+          <div class="msg-preview-label">Vorschau</div>
+          <div class="msg-preview" id="msg-preview">
+            <div class="mp-bar"></div>
+            <div class="mp-body"><div class="mp-header" id="mp-header"></div><div class="mp-title" id="mp-title"></div><div class="mp-text" id="mp-text"></div></div>
+            <div class="mp-actions" id="mp-actions"></div>
+          </div>
+          <div class="msg-preview-note" id="msg-preview-note"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost btn-sm" onclick="closeMessageEditor()">Abbrechen</button>
+      <button class="btn btn-primary btn-sm" onclick="submitMessage()">Speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- ZIELGRUPPE (v2.10) -->
+<div class="modal" id="tg-modal">
+  <div class="modal-card" style="max-width:680px">
+    <div class="modal-head"><h3 class="modal-title" id="tg-modal-title">Neue Zielgruppe</h3></div>
+    <div class="modal-body">
+      <div class="field" style="margin-bottom:12px"><label>Name</label><input class="input" id="tg-name" maxlength="80" placeholder="z. B. Postman veraltet"></div>
+      <div class="field" style="margin-bottom:12px"><label>Art</label>
+        <div class="msg-days">
+          <label><input type="radio" name="tg-kind" value="dynamic" onchange="tgKindChanged()"> Dynamisch nach Regeln</label>
+          <label><input type="radio" name="tg-kind" value="static" onchange="tgKindChanged()"> Feste Geräteliste</label>
+        </div></div>
+      <div id="tg-dynamic">
+        <div class="hint" style="margin-bottom:8px">Alle Regeln müssen zutreffen. Die Gruppe wird bei jeder Zustellung neu ausgewertet.</div>
+        <div id="tg-rules"></div>
+        <button class="btn btn-ghost btn-sm" onclick="tgAddRule()">+ Regel</button>
+      </div>
+      <div id="tg-static">
+        <input class="input" id="tg-agent-filter" placeholder="Geräte filtern …" oninput="tgFilterAgents()" style="margin-bottom:8px">
+        <div class="tg-agents" id="tg-agents"></div>
+      </div>
+      <div class="tg-preview" id="tg-preview"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost btn-sm" id="tg-delete" style="color:var(--red);margin-right:auto" onclick="confirmDeleteTargetGroup()">Löschen</button>
+      <button class="btn btn-ghost btn-sm" onclick="tgPreview()">Vorschau</button>
+      <button class="btn btn-ghost btn-sm" onclick="closeTargetGroupEditor()">Abbrechen</button>
+      <button class="btn btn-primary btn-sm" onclick="submitTargetGroup()">Speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- MITTEILUNGEN: BESTAETIGUNG (v2.10) -->
+<div class="modal" id="msg-confirm-modal">
+  <div class="modal-card" style="max-width:440px">
+    <div class="modal-head"><h3 class="modal-title" id="msg-confirm-title"></h3></div>
+    <div class="modal-body"><p id="msg-confirm-text" style="font-size:13px;color:var(--fg-3);margin:0"></p></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost btn-sm" onclick="closeMsgConfirm()">Abbrechen</button>
+      <button class="btn btn-danger btn-sm" id="msg-confirm-go" onclick="runMsgConfirm()">OK</button>
+    </div>
+  </div>
+</div>
+
 <!-- STAGE PICKER MODAL -->
 <div class="modal" id="stage-picker-modal">
   <div class="modal-card" style="max-width:520px">
@@ -7770,6 +7974,7 @@ function switchTab(name, btn) {
   if (name === 'scheduled')    loadScheduled();
   if (name === 'rollouts')     loadRollouts();
   if (name === 'workflows')    loadWorkflows();
+  if (name === 'messages')     loadMessages();
   if (name === 'audit')        loadAudit();
   if (name === 'actions')      loadActionLog(true);
   if (name === 'health')       loadHealthAll();
@@ -17115,6 +17320,506 @@ async function deleteWorkflowRun(runId) {
 }
 
 
+
+// ── Mitteilungen (v2.10) ──────────────────────────────────────────────────
+let _msgView = 'msgs';
+let _msgList = [];
+let _tgList = [];
+let _msgEditId = null;
+let _msgActivateAfterSave = false;
+let _msgDetailId = null;
+let _tgEditId = null;
+let _msgAgents = null;
+let _msgProfiles = null;
+let _msgConfirmFn = null;
+const MSG_SEV_LABEL = {info: 'Info', wichtig: 'Wichtig', kritisch: 'Kritisch'};
+const MSG_STATE_LABEL = {aktiv: 'Aktiv', geplant: 'Geplant', beendet: 'Beendet', pausiert: 'Pausiert', zurueckgezogen: 'Zurückgezogen'};
+const MSG_DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+const TG_RULES = {
+  installed:     {label: 'Software installiert', ident: true},
+  not_installed: {label: 'Software nicht installiert', ident: true},
+  outdated:      {label: 'Software veraltet', ident: true},
+  version_lt:    {label: 'Software-Version kleiner als', ident: true, version: true},
+  tray_lt:       {label: 'Tray-Version kleiner als', version: true},
+  profile:       {label: 'Hat Profil'},
+  ring:          {label: 'Rollout-Ring'},
+  hostname:      {label: 'Hostname passt auf'},
+};
+const _m = id => document.getElementById(id);
+
+function msgSwitchView(v) {
+  _msgView = v;
+  _m('msg-view-msgs').classList.toggle('active', v === 'msgs');
+  _m('msg-view-groups').classList.toggle('active', v === 'groups');
+  _m('msg-list').style.display = v === 'msgs' ? '' : 'none';
+  _m('tg-list').style.display = v === 'groups' ? '' : 'none';
+  _m('msg-new-btn').textContent = v === 'msgs' ? 'Neue Mitteilung' : 'Neue Zielgruppe';
+  renderMsgCount();
+}
+
+function msgNew() {
+  if (_msgView === 'msgs') openMessageEditor(null);
+  else openTargetGroupEditor(null);
+}
+
+async function loadMessages() {
+  const el = _m('msg-list');
+  if (!_msgList.length) el.innerHTML = '<div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Lade</span></div>';
+  try {
+    const [msgs, groups] = await Promise.all([
+      api('GET', '/admin/api/messages'),
+      api('GET', '/admin/api/target-groups'),
+    ]);
+    _msgList = msgs || [];
+    _tgList = groups || [];
+    renderMessages();
+    renderTargetGroups();
+    renderMsgCount();
+  } catch (e) {
+    el.innerHTML = `<div class="empty"><h3>Fehler</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function renderMsgCount() {
+  const el = _m('msg-count');
+  if (!el) return;
+  if (_msgView === 'msgs') {
+    const active = _msgList.filter(m => m.state === 'aktiv').length;
+    el.textContent = `${_msgList.length} Mitteilung${_msgList.length === 1 ? '' : 'en'} · ${active} aktiv`;
+  } else {
+    el.textContent = `${_tgList.length} Zielgruppe${_tgList.length === 1 ? '' : 'n'}`;
+  }
+}
+
+function _msgTargetName(m) {
+  return m.target_group_id ? (m.target_group_name || 'Gruppe #' + m.target_group_id) : 'Alle Geräte';
+}
+
+function renderMessages() {
+  const el = _m('msg-list');
+  if (!_msgList.length) {
+    el.innerHTML = `<div class="empty"><h3>Noch keine Mitteilungen</h3><p>„Neue Mitteilung" schickt einen Hinweis an die Benutzer — als Benachrichtigung, Hinweisfenster oder mit Pflicht-Bestätigung.</p></div>`;
+    return;
+  }
+  const rows = _msgList.map(m => `
+    <div class="msg-row" onclick="openMessageDetail(${m.id})">
+      <div style="min-width:0"><div class="msg-title">${esc(m.title)}</div><div class="msg-sub">${esc(m.header)}${m.body ? ' · ' + esc(m.body.slice(0, 90)) : ''}</div></div>
+      <div><span class="msg-sev sev-${esc(m.severity)}">${esc(MSG_SEV_LABEL[m.severity] || m.severity)}</span></div>
+      <div class="msg-sub" style="margin:0">${esc(_msgTargetName(m))}</div>
+      <div class="msg-sub" style="margin:0">${esc(m.schedule_text)}${m.valid_until ? ' · bis ' + esc(fmtDt(m.valid_until)) : ''}</div>
+      <div><span class="msg-state st-${esc(m.state)}">${esc(MSG_STATE_LABEL[m.state] || m.state)}</span></div>
+      <div class="msg-progress" title="zugestellt / gesehen${m.severity === 'kritisch' ? ' / bestätigt' : ''}">${m.delivered} / ${m.shown}${m.severity === 'kritisch' ? ' / ' + m.acked : ''}</div>
+    </div>`).join('');
+  el.innerHTML = `<div class="msg-table">
+    <div class="msg-row msg-head"><div>Mitteilung</div><div>Stufe</div><div>Ziel</div><div>Zeitplan</div><div>Status</div><div>Zugest. / Ges.</div></div>
+    ${rows}</div>`;
+}
+
+// Editor
+function openMessageEditor(id, activateAfterSave) {
+  const fromDetail = _m('msg-detail-modal').classList.contains('open');
+  if (!fromDetail) _msgDetailId = null;
+  _m('msg-detail-modal').classList.remove('open');
+  _msgEditId = id;
+  _msgActivateAfterSave = !!activateAfterSave;
+  const m = id ? _msgList.find(x => x.id === id) : null;
+  const s = (m && m.schedule) || {mode: 'once'};
+  _m('msg-modal-title').textContent = m ? 'Mitteilung bearbeiten' : 'Neue Mitteilung';
+  // Neue Mitteilung: Kopfzeile der zuletzt angelegten uebernehmen
+  _m('msg-header').value = m ? m.header : ((_msgList[0] && _msgList[0].header) || 'IT informiert');
+  _m('msg-title').value = m ? m.title : '';
+  _m('msg-body').value = m ? m.body : '';
+  _m('msg-severity').value = m ? m.severity : 'info';
+  _m('msg-link-url').value = (m && m.link_url) || '';
+  _m('msg-link-label').value = (m && m.link_label) || '';
+  _m('msg-target').innerHTML = '<option value="">Alle Geräte</option>' + _tgList.map(g =>
+    `<option value="${g.id}">${esc(g.name)} (${g.member_count} Gerät${g.member_count === 1 ? '' : 'e'})</option>`).join('');
+  _m('msg-target').value = m && m.target_group_id ? String(m.target_group_id) : '';
+  _m('msg-mode').value = s.mode || 'once';
+  _m('msg-time').value = s.time || '09:00';
+  _m('msg-weekdays-only').checked = !!s.weekdays_only;
+  _m('msg-days').innerHTML = MSG_DAYS.map((d, i) =>
+    `<label><input type="checkbox" value="${i}" ${(s.days || [0]).includes(i) ? 'checked' : ''}> ${d}</label>`).join('');
+  if (!_m('msg-month-day').options.length) {
+    _m('msg-month-day').innerHTML = Array.from({length: 28}, (_, i) => `<option value="${i + 1}">${i + 1}.</option>`).join('');
+  }
+  _m('msg-month-kind').value = s.nth ? 'nth' : 'day';
+  _m('msg-month-day').value = String(s.day || 1);
+  _m('msg-month-nth').value = String(s.nth || 1);
+  _m('msg-month-weekday').value = String(s.weekday != null ? s.weekday : 0);
+  _m('msg-valid-from').value = m && m.valid_from_local && !activateAfterSave ? m.valid_from_local : '';
+  _m('msg-valid-until').value = (m && m.valid_until_local) || '';
+  _m('msg-show-hours').value = m ? m.show_hours : 24;
+  _msgModeChanged();
+  msgPreview();
+  _m('msg-modal').classList.add('open');
+  setTimeout(() => _m('msg-title').focus(), 50);
+}
+
+function closeMessageEditor() {
+  _m('msg-modal').classList.remove('open');
+  if (_msgDetailId) openMessageDetail(_msgDetailId);
+}
+
+function _msgModeChanged() {
+  const mode = _m('msg-mode').value;
+  _m('msg-sched-time').style.display = mode === 'once' ? 'none' : '';
+  _m('msg-sched-daily').style.display = mode === 'daily' ? '' : 'none';
+  _m('msg-sched-weekly').style.display = mode === 'weekly' ? '' : 'none';
+  _m('msg-sched-monthly').style.display = mode === 'monthly' ? '' : 'none';
+  const nth = _m('msg-month-kind').value === 'nth';
+  _m('msg-month-day').style.display = nth ? 'none' : '';
+  _m('msg-month-nth').style.display = nth ? '' : 'none';
+  _m('msg-month-weekday').style.display = nth ? '' : 'none';
+  _m('msg-valid-from-label').textContent = mode === 'once' ? 'Anzeigen ab' : 'Serie startet ab';
+}
+
+function _msgSchedule() {
+  const mode = _m('msg-mode').value;
+  const s = {mode};
+  if (mode === 'once') return s;
+  s.time = _m('msg-time').value || '09:00';
+  if (mode === 'daily') s.weekdays_only = _m('msg-weekdays-only').checked;
+  if (mode === 'weekly') s.days = [..._m('msg-days').querySelectorAll('input:checked')].map(c => parseInt(c.value, 10));
+  if (mode === 'monthly') {
+    if (_m('msg-month-kind').value === 'nth') {
+      s.nth = parseInt(_m('msg-month-nth').value, 10);
+      s.weekday = parseInt(_m('msg-month-weekday').value, 10);
+    } else {
+      s.day = parseInt(_m('msg-month-day').value, 10);
+    }
+  }
+  return s;
+}
+
+function msgPreview() {
+  const sev = _m('msg-severity').value;
+  _m('msg-preview').className = 'msg-preview sev-' + sev;
+  _m('mp-header').textContent = _m('msg-header').value || 'IT informiert';
+  _m('mp-title').textContent = _m('msg-title').value || 'Titel der Mitteilung';
+  _m('mp-text').textContent = _m('msg-body').value;
+  const link = _m('msg-link-url').value.trim();
+  const btns = [];
+  if (link) btns.push(`<span class="mp-btn">${esc(_m('msg-link-label').value.trim() || 'Öffnen')}</span>`);
+  btns.push(`<span class="mp-btn primary">${sev === 'kritisch' ? 'Verstanden' : 'Schließen'}</span>`);
+  _m('mp-actions').innerHTML = btns.join('');
+  const notes = {
+    info: 'Windows-Benachrichtigung am Bildschirmrand; zusätzlich im Kiosk unter „Mitteilungen".',
+    wichtig: 'Hinweisfenster unten rechts — schließt per Klick oder nach 60 Sekunden. Erscheint pro Benutzer einmal.',
+    kritisch: 'Fenster in der Bildschirmmitte, bleibt im Vordergrund bis „Verstanden" — auch nach Neustart.',
+  };
+  _m('msg-preview-note').textContent = notes[sev] || '';
+  _m('msg-body-count').textContent = `${_m('msg-body').value.length} / 2000`;
+}
+
+async function submitMessage() {
+  const body = {
+    header: _m('msg-header').value.trim(),
+    title: _m('msg-title').value.trim(),
+    body: _m('msg-body').value,
+    severity: _m('msg-severity').value,
+    link_url: _m('msg-link-url').value.trim(),
+    link_label: _m('msg-link-label').value.trim(),
+    target_group_id: _m('msg-target').value ? parseInt(_m('msg-target').value, 10) : null,
+    schedule: _msgSchedule(),
+    show_hours: parseInt(_m('msg-show-hours').value, 10) || 24,
+    valid_from: _m('msg-valid-from').value || null,
+    valid_until: _m('msg-valid-until').value || null,
+  };
+  if (!body.title) { toast('Titel fehlt', true); return; }
+  if (body.schedule.mode === 'weekly' && !body.schedule.days.length) { toast('Mindestens einen Wochentag wählen', true); return; }
+  try {
+    if (_msgEditId) {
+      await api('PATCH', `/admin/api/messages/${_msgEditId}`, body);
+      if (_msgActivateAfterSave) await api('POST', `/admin/api/messages/${_msgEditId}/status`, {status: 'active'});
+    } else {
+      await api('POST', '/admin/api/messages', body);
+    }
+    toast(_msgEditId && !_msgActivateAfterSave ? 'Mitteilung gespeichert' : 'Mitteilung angelegt');
+    _m('msg-modal').classList.remove('open');
+    await loadMessages();
+    if (_msgDetailId) openMessageDetail(_msgDetailId);
+  } catch (e) {}
+}
+
+// Detail
+async function openMessageDetail(id) {
+  _msgDetailId = id;
+  const body = _m('msg-detail-body');
+  body.innerHTML = '<div class="loading-block"><span class="spinner lg"></span><span class="loading-label">Lade</span></div>';
+  _m('msg-detail-actions').innerHTML = '';
+  _m('msg-detail-modal').classList.add('open');
+  try {
+    const m = await api('GET', `/admin/api/messages/${id}`);
+    _m('msg-detail-title').textContent = m.title;
+    const warn = m.old_tray_count
+      ? `<div class="msg-warn">${m.old_tray_count} von ${m.target_count} Zielgeräten haben einen Tray älter als 2.10.0 und zeigen die Mitteilung erst nach dem Tray-Update an.</div>`
+      : '';
+    const occ = (m.occurrences || []).map(o => `
+      <div class="msg-occ-row" id="msg-occ-${o.id}" onclick="loadOccurrence(${o.id})">
+        <div>${esc(fmtDt(o.fire_at))}</div><div style="color:var(--fg-5)">bis ${esc(fmtDt(o.expires_at))}</div>
+        <div>${o.delivered} zugest.</div><div>${o.shown} gesehen</div><div>${m.severity === 'kritisch' ? o.acked + ' best.' : ''}</div>
+      </div>`).join('');
+    body.innerHTML = `
+      ${warn}
+      <div class="msg-kv">
+        <div class="k">Status</div><div><span class="msg-state st-${esc(m.state)}">${esc(MSG_STATE_LABEL[m.state] || m.state)}</span></div>
+        <div class="k">Stufe</div><div><span class="msg-sev sev-${esc(m.severity)}">${esc(MSG_SEV_LABEL[m.severity] || m.severity)}</span></div>
+        <div class="k">Ziel</div><div>${esc(m.target_group_id ? (m.target_group_name || 'Gruppe #' + m.target_group_id) : 'Alle Geräte')} · aktuell ${m.target_count} Gerät${m.target_count === 1 ? '' : 'e'}</div>
+        <div class="k">Zeitplan</div><div>${esc(m.schedule_text)} · Anzeigedauer ${m.show_hours} Std.</div>
+        <div class="k">Gültig</div><div>ab ${esc(fmtDt(m.valid_from))}${m.valid_until ? ' bis ' + esc(fmtDt(m.valid_until)) : ''}</div>
+        <div class="k">Angelegt</div><div>${esc(fmtDt(m.created_at))} von ${esc(m.created_by || '—')}</div>
+      </div>
+      <div class="msg-preview sev-${esc(m.severity)}" style="max-width:420px;margin-bottom:18px">
+        <div class="mp-bar"></div>
+        <div class="mp-body"><div class="mp-header">${esc(m.header)}</div><div class="mp-title">${esc(m.title)}</div><div class="mp-text">${esc(m.body)}</div></div>
+      </div>
+      <div class="msg-preview-label">Ausgaben</div>
+      ${occ ? `<div class="msg-occ">${occ}</div>` : '<div class="hint">Noch keine Ausgabe — die erste entsteht zum geplanten Zeitpunkt.</div>'}
+      <div id="msg-occ-detail" style="margin-top:12px"></div>`;
+    const acts = [];
+    if (m.status !== 'cancelled') {
+      acts.push(`<button class="btn btn-ghost btn-sm" style="color:var(--red);margin-right:auto" onclick="confirmCancelMessage(${m.id})">Zurückziehen</button>`);
+      acts.push(m.status === 'paused'
+        ? `<button class="btn btn-ghost btn-sm" onclick="setMessageStatus(${m.id}, 'active')">Fortsetzen</button>`
+        : `<button class="btn btn-ghost btn-sm" onclick="setMessageStatus(${m.id}, 'paused')">Pausieren</button>`);
+      acts.push(`<button class="btn btn-ghost btn-sm" onclick="openMessageEditor(${m.id})">Bearbeiten</button>`);
+    }
+    acts.push(`<button class="btn btn-ghost btn-sm" onclick="duplicateMessage(${m.id})">Duplizieren</button>`);
+    acts.push(`<button class="btn btn-primary btn-sm" onclick="closeMessageDetail()">Schließen</button>`);
+    _m('msg-detail-actions').innerHTML = acts.join('');
+    if (m.occurrences && m.occurrences.length) loadOccurrence(m.occurrences[0].id);
+  } catch (e) {
+    body.innerHTML = `<div class="empty"><h3>Fehler</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function closeMessageDetail() {
+  _msgDetailId = null;
+  _m('msg-detail-modal').classList.remove('open');
+}
+
+async function loadOccurrence(oid) {
+  document.querySelectorAll('#msg-detail-body .msg-occ-row').forEach(r => r.classList.toggle('sel', r.id === 'msg-occ-' + oid));
+  const el = _m('msg-occ-detail');
+  if (!el) return;
+  el.innerHTML = '<div class="hint">Lade Quittungen …</div>';
+  try {
+    const r = await api('GET', `/admin/api/messages/occurrences/${oid}`);
+    const rows = (r.receipts || []).map(x => `
+      <div class="msg-occ-row" style="cursor:default">
+        <div>${esc(x.hostname)}</div><div style="color:var(--fg-5)">${esc(x.win_user || '—')}</div>
+        <div>${x.delivered_at ? 'zugestellt' : '—'}</div>
+        <div title="${esc(x.shown_at ? fmtDt(x.shown_at) : '')}">${x.shown_at ? 'gesehen' : '—'}</div>
+        <div title="${esc(x.acked_at ? fmtDt(x.acked_at) : '')}">${x.acked_at ? 'bestätigt' : ''}</div>
+      </div>`).join('');
+    const missing = r.missing || [];
+    el.innerHTML = `
+      ${rows ? `<div class="msg-occ">${rows}</div>` : '<div class="hint">Noch an kein Gerät zugestellt.</div>'}
+      ${missing.length ? `<div class="hint" style="margin-top:8px">Noch nicht zugestellt (${missing.length}): <span style="font-family:var(--mono)">${missing.map(esc).join(', ')}</span></div>` : ''}`;
+  } catch (e) { el.innerHTML = ''; }
+}
+
+async function setMessageStatus(id, status) {
+  try {
+    await api('POST', `/admin/api/messages/${id}/status`, {status});
+    toast(status === 'paused' ? 'Pausiert' : status === 'active' ? 'Fortgesetzt' : 'Zurückgezogen');
+    await loadMessages();
+    if (_msgDetailId === id) openMessageDetail(id);
+  } catch (e) {}
+}
+
+function confirmCancelMessage(id) {
+  msgConfirm('Mitteilung zurückziehen?',
+    'Die Mitteilung wird ab sofort nicht mehr zugestellt. Zurückgezogene Mitteilungen lassen sich nicht reaktivieren — für einen Neustart „Duplizieren" nutzen.',
+    'Zurückziehen', () => setMessageStatus(id, 'cancelled'));
+}
+
+async function duplicateMessage(id) {
+  try {
+    const r = await api('POST', `/admin/api/messages/${id}/duplicate`);
+    await loadMessages();
+    closeMessageDetail();
+    openMessageEditor(r.id, true);
+  } catch (e) {}
+}
+
+function msgConfirm(title, text, label, fn) {
+  _msgConfirmFn = fn;
+  _m('msg-confirm-title').textContent = title;
+  _m('msg-confirm-text').textContent = text;
+  _m('msg-confirm-go').textContent = label;
+  _m('msg-confirm-modal').classList.add('open');
+}
+function closeMsgConfirm() { _m('msg-confirm-modal').classList.remove('open'); _msgConfirmFn = null; }
+function runMsgConfirm() { const fn = _msgConfirmFn; closeMsgConfirm(); if (fn) fn(); }
+
+// Zielgruppen
+function _tgRuleText(r) {
+  if (r.type === 'profile') {
+    const p = (_msgProfiles || []).find(p => p.id === r.profile_id);
+    return `Profil ${p ? p.name : '#' + r.profile_id}`;
+  }
+  if (r.type === 'ring') return `Ring ${r.ring}`;
+  if (r.type === 'hostname') return `Hostname ${r.pattern}`;
+  if (r.type === 'tray_lt') return `Tray < ${r.version}`;
+  if (r.type === 'version_lt') return `${r.ident} < ${r.version}`;
+  if (r.type === 'not_installed') return `ohne ${r.ident}`;
+  if (r.type === 'outdated') return `${r.ident} veraltet`;
+  return `mit ${r.ident}`;
+}
+
+function _tgDescribe(g) {
+  if (g.kind === 'static') return `${(g.agent_ids || []).length} feste Geräte`;
+  return (g.rules || []).map(_tgRuleText).join(' und ');
+}
+
+function renderTargetGroups() {
+  const el = _m('tg-list');
+  if (!_tgList.length) {
+    el.innerHTML = `<div class="empty"><h3>Noch keine Zielgruppen</h3><p>Zielgruppen grenzen Mitteilungen ein — als feste Geräteliste oder dynamisch nach Softwarestand, z. B. „Postman veraltet".</p></div>`;
+    return;
+  }
+  const rows = _tgList.map(g => `
+    <div class="msg-row tg-row" onclick="openTargetGroupEditor(${g.id})">
+      <div style="min-width:0"><div class="msg-title">${esc(g.name)}</div><div class="msg-sub">${esc(_tgDescribe(g))}</div></div>
+      <div>${g.kind === 'static' ? 'Fest' : 'Dynamisch'}</div>
+      <div class="msg-progress">${g.member_count} Gerät${g.member_count === 1 ? '' : 'e'}</div>
+      <div class="msg-sub" style="margin:0">${esc(fmtDt(g.updated_at))}</div>
+    </div>`).join('');
+  el.innerHTML = `<div class="msg-table"><div class="msg-row tg-row msg-head"><div>Zielgruppe</div><div>Art</div><div>Mitglieder</div><div>Geändert</div></div>${rows}</div>`;
+}
+
+async function _msgEnsureRefs() {
+  if (!_msgAgents) {
+    try {
+      _msgAgents = (await api('GET', '/admin/api/agents'))
+        .filter(a => !a.banned)
+        .sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
+    } catch (e) { _msgAgents = []; }
+  }
+  if (!_msgProfiles) {
+    try { _msgProfiles = (await api('GET', '/admin/api/profiles')).profiles || []; } catch (e) { _msgProfiles = []; }
+  }
+}
+
+async function openTargetGroupEditor(id) {
+  await _msgEnsureRefs();
+  _tgEditId = id;
+  const g = id ? _tgList.find(x => x.id === id) : null;
+  _m('tg-modal-title').textContent = g ? 'Zielgruppe bearbeiten' : 'Neue Zielgruppe';
+  _m('tg-name').value = g ? g.name : '';
+  document.querySelector(`input[name="tg-kind"][value="${g ? g.kind : 'dynamic'}"]`).checked = true;
+  _m('tg-rules').innerHTML = '';
+  (g && g.kind === 'dynamic' && g.rules.length ? g.rules : [{type: 'installed', ident: ''}]).forEach(r => tgAddRule(r));
+  const sel = new Set(g && g.kind === 'static' ? g.agent_ids : []);
+  _m('tg-agent-filter').value = '';
+  _m('tg-agents').innerHTML = _msgAgents.map(a => `
+    <label data-host="${esc((a.hostname || '').toLowerCase())}"><input type="checkbox" value="${esc(a.agent_id)}" ${sel.has(a.agent_id) ? 'checked' : ''}> ${esc(a.hostname)}<span style="color:var(--fg-5);margin-left:auto">${esc(a.logged_in_user || '')}</span></label>`).join('')
+    || '<div class="hint">Keine Geräte registriert.</div>';
+  _m('tg-delete').style.display = g ? '' : 'none';
+  _m('tg-preview').innerHTML = '';
+  tgKindChanged();
+  _m('tg-modal').classList.add('open');
+  setTimeout(() => _m('tg-name').focus(), 50);
+}
+
+function closeTargetGroupEditor() { _m('tg-modal').classList.remove('open'); }
+
+function tgKindChanged() {
+  const kind = document.querySelector('input[name="tg-kind"]:checked').value;
+  _m('tg-dynamic').style.display = kind === 'dynamic' ? '' : 'none';
+  _m('tg-static').style.display = kind === 'static' ? '' : 'none';
+  _m('tg-preview').innerHTML = '';
+}
+
+function tgFilterAgents() {
+  const q = _m('tg-agent-filter').value.trim().toLowerCase();
+  _m('tg-agents').querySelectorAll('label').forEach(l => {
+    l.style.display = !q || (l.dataset.host || '').includes(q) ? '' : 'none';
+  });
+}
+
+function tgAddRule(r) {
+  r = r || {type: 'installed', ident: ''};
+  const row = document.createElement('div');
+  row.className = 'tg-rule';
+  row.innerHTML = `
+    <select class="input tg-rule-type" onchange="tgRuleTypeChanged(this)">${Object.entries(TG_RULES).map(([k, d]) =>
+      `<option value="${k}" ${k === r.type ? 'selected' : ''}>${esc(d.label)}</option>`).join('')}</select>
+    <div class="tg-rule-args"></div>
+    <button class="btn btn-ghost btn-sm" title="Regel entfernen" onclick="this.parentElement.remove()">&times;</button>`;
+  _m('tg-rules').appendChild(row);
+  _tgRenderArgs(row, r);
+}
+
+function tgRuleTypeChanged(sel) { _tgRenderArgs(sel.parentElement, {type: sel.value}); }
+
+function _tgRenderArgs(row, r) {
+  const t = r.type, d = TG_RULES[t] || {}, box = row.querySelector('.tg-rule-args');
+  const parts = [];
+  if (d.ident) parts.push(`<input class="input tg-ident" placeholder="winget-ID, choco-Name oder Paket" value="${esc(r.ident || '')}">`);
+  if (d.version) parts.push(`<input class="input tg-version" style="max-width:110px" placeholder="Version" value="${esc(r.version || '')}">`);
+  if (t === 'profile') parts.push(`<select class="input tg-profile">${(_msgProfiles || []).map(p =>
+    `<option value="${p.id}" ${p.id === r.profile_id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>`);
+  if (t === 'ring') parts.push(`<select class="input tg-ring">${[1, 2, 3].map(n =>
+    `<option value="${n}" ${n === r.ring ? 'selected' : ''}>Ring ${n}</option>`).join('')}</select>`);
+  if (t === 'hostname') parts.push(`<input class="input tg-pattern" placeholder="z. B. PC-* oder NB-0*" value="${esc(r.pattern || '')}">`);
+  box.innerHTML = parts.join('');
+}
+
+function _tgCollect() {
+  const kind = document.querySelector('input[name="tg-kind"]:checked').value;
+  const rules = [...document.querySelectorAll('#tg-rules .tg-rule')].map(row => {
+    const q = c => row.querySelector(c);
+    const r = {type: q('.tg-rule-type').value};
+    if (q('.tg-ident')) r.ident = q('.tg-ident').value.trim();
+    if (q('.tg-version')) r.version = q('.tg-version').value.trim();
+    if (q('.tg-profile')) r.profile_id = parseInt(q('.tg-profile').value, 10);
+    if (q('.tg-ring')) r.ring = parseInt(q('.tg-ring').value, 10);
+    if (q('.tg-pattern')) r.pattern = q('.tg-pattern').value.trim();
+    return r;
+  });
+  const agent_ids = [..._m('tg-agents').querySelectorAll('input:checked')].map(c => c.value);
+  return {name: _m('tg-name').value.trim(), kind, rules, agent_ids};
+}
+
+async function tgPreview() {
+  const el = _m('tg-preview');
+  const body = _tgCollect();
+  body.name = body.name || 'Vorschau';
+  try {
+    const r = await api('POST', '/admin/api/target-groups/preview', body);
+    el.innerHTML = `Trifft aktuell auf <strong>${r.count}</strong> Gerät${r.count === 1 ? '' : 'e'} zu.`
+      + (r.hostnames.length ? `<div class="hosts">${r.hostnames.map(esc).join(', ')}</div>` : '');
+  } catch (e) { el.innerHTML = ''; }
+}
+
+async function submitTargetGroup() {
+  const body = _tgCollect();
+  if (!body.name) { toast('Name fehlt', true); return; }
+  try {
+    if (_tgEditId) await api('PATCH', `/admin/api/target-groups/${_tgEditId}`, body);
+    else await api('POST', '/admin/api/target-groups', body);
+    toast('Zielgruppe gespeichert');
+    closeTargetGroupEditor();
+    loadMessages();
+  } catch (e) {}
+}
+
+function confirmDeleteTargetGroup() {
+  const id = _tgEditId;
+  msgConfirm('Zielgruppe löschen?',
+    'Die Zielgruppe wird entfernt. Solange aktive oder pausierte Mitteilungen sie nutzen, ist das nicht möglich.',
+    'Löschen', async () => {
+      try {
+        await api('DELETE', `/admin/api/target-groups/${id}`);
+        toast('Zielgruppe gelöscht');
+        closeTargetGroupEditor();
+        loadMessages();
+      } catch (e) {}
+    });
+}
 </script>
 </body>
 </html>
