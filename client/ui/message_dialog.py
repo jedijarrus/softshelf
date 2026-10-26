@@ -80,7 +80,7 @@ body { display: flex; flex-direction: column; border: 1px solid var(--border); }
   white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
 }
 .foot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding: 12px 18px 16px; }
-.hint { flex: 1; font-size: 11.5px; color: var(--fg-5); }
+.hint { flex: 1; font-size: 12px; color: var(--fg-4); }
 .btn {
   font: inherit; font-size: 13px; font-weight: 500; padding: 8px 14px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--bg); color: var(--fg); cursor: pointer;
@@ -151,8 +151,13 @@ document.addEventListener('keydown', e => {
 });
 
 if (AUTO_MS > 0) {
-  document.addEventListener('mouseenter', () => { paused = true; });
-  document.addEventListener('mouseleave', () => { paused = false; last = Date.now(); });
+  // Timer pausiert, solange Maus oder Tastaturfokus im Fenster sind
+  let hover = false, focus = false;
+  const sync = () => { const p = hover || focus; if (paused && !p) last = Date.now(); paused = p; };
+  document.addEventListener('mouseenter', () => { hover = true; sync(); });
+  document.addEventListener('mouseleave', () => { hover = false; sync(); });
+  document.addEventListener('focusin', e => { focus = e.target && e.target.matches(':focus-visible'); sync(); });
+  document.addEventListener('focusout', () => { focus = false; sync(); });
   const bar = document.querySelector('.timer i');
   setInterval(() => {
     if (closed || paused) return;
