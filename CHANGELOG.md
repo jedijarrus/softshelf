@@ -7,9 +7,38 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
-## [Unreleased]
+## [2.11.0] – 2026-10-26
+
+Rolle „Mitteilungen“, Excel-Export und Komfort im Mitteilungs-Editor. Nur
+Server, der Tray bleibt unverändert.
+
+### Added
+
+- **Rolle „Mitteilungen“** (`messages`): darf Mitteilungen und Zielgruppen
+  verwalten, Quittungen ansehen und exportieren — sonst nichts, auch kein
+  Lesen anderer Bereiche (403). Im Admin-UI sieht die Rolle nur die Seiten
+  Mitteilungen und Hilfe. Wählbar im Benutzer-Tab und bei Einladungen.
+- **Excel-Export** einer Mitteilung (Detail → „Excel-Export“): Blatt
+  *Übersicht* mit Kopfdaten und einer Zeile je Ausgabe, Blatt *Empfänger* mit
+  einer Zeile je Ausgabe × Gerät × Windows-Benutzer (Status, Zeitstempel,
+  Tray-Version). Zielgeräte ohne Rückmeldung erscheinen als „Nicht zugestellt“.
+  Neue Abhängigkeit `openpyxl`.
+- **Zielgeräte-Snapshot je Ausgabe** (`message_occurrences.target_ids`):
+  Zielgeräte einer Ausgabe = Gruppe zum Ausgabezeitpunkt ∪ Geräte mit
+  Rückmeldung. Dynamische Gruppen, die schrumpfen, verfälschen alte Ausgaben
+  dadurch nicht mehr. Ausgaben vor 2.11 nutzen weiter die aktuelle Gruppe.
+- `GET /admin/api/messages/refs`: schlanke Geräte- und Profilliste für den
+  Editor; ersetzt dort `/admin/api/agents` + `/admin/api/profiles`.
 
 ### Changed
+
+- **SSO-Rollen werden in Softshelf gepflegt:** Ein Entra-Login überschreibt
+  die Rolle nicht mehr mit `admin`. Entra entscheidet nur, wer sich anmelden
+  darf (Enterprise-App-Zuweisung, `GRAPH_REQUIRED_ROLE`). Bestehende Benutzer
+  behalten ihre Rolle, neue SSO-Benutzer starten als `viewer`.
+- Der letzte aktive Admin lässt sich nicht mehr herabstufen. Die Sperren für
+  Deaktivieren/Löschen zählen jetzt nur noch Admins (vorher alle aktiven
+  Benutzer).
 
 - **Zielgruppen-Editor:** Die feste Geräteliste lässt sich nach Hostname und
   Benutzer durchsuchen (Enter wählt den ersten Treffer, Esc leert die Suche).

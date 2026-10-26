@@ -283,7 +283,7 @@ admin_users
   id, username UNIQUE
   display_name, email, password_hash
   sso_provider, sso_subject
-  role        -- 'admin' | 'operator' | 'viewer'
+  role        -- 'admin' | 'operator' | 'viewer' | 'messages'
   is_active, created_at, last_login
 
 admin_sessions
@@ -312,10 +312,18 @@ JWT HS256, Claim `{agent_id, hostname, token_version}`. Revoke via
 | `admin` | alles | — |
 | `operator` | Dispatch (Install/Uninstall/Update-All/Push-Update/Bulk), Profile anwenden, Rollouts starten/weiterschalten/pausieren/abbrechen, Fehler bestätigen | Whitelist-Edit, Benutzer, Einstellungen, Builds, Paket-Flags (required/staged/hidden/auto_advance), Ring-Mutation, Wartungsfenster |
 | `viewer` | alle GETs + CSV-Export | jegliche state-changing Operations |
+| `messages` (v2.11) | Mitteilungen + Zielgruppen (`/admin/api/messages*`, `/admin/api/target-groups*`, alle Methoden), `whoami`, Hilfe, eigenes Passwort | alles andere, auch GET (403) |
 
 **Implementierung**: Zentraler Check in `_require_admin` (routes/admin.py):
 Path-Prefix-Match gegen `_ADMIN_ONLY_PATHS` + Exception-Suffix-Liste für
-operator-erlaubte Dispatch-Aktionen.
+operator-erlaubte Dispatch-Aktionen. Die Rolle `messages` wird vorher per
+Whitelist (`_messages_role_allowed`) geprüft, noch vor dem GET-Freibrief.
+
+**SSO-Rollen (v2.11):** Entra entscheidet nur, wer sich anmelden darf
+(Enterprise-App-Zuweisung, `GRAPH_REQUIRED_ROLE`). Die Rolle wird in Softshelf
+gepflegt; neue SSO-User starten als `viewer`, ein Login überschreibt die Rolle
+nicht. Der letzte aktive Admin lässt sich weder herabstufen noch deaktivieren
+oder löschen.
 
 ### Rate-Limiting (v1.7.2 getrennte Buckets)
 

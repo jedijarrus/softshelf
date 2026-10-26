@@ -9,6 +9,8 @@ Mitteilungen:
 - POST   /admin/api/messages/{id}/status         aktiv | pausiert | zurueckgezogen
 - POST   /admin/api/messages/{id}/duplicate      Kopie (pausiert) anlegen
 - GET    /admin/api/messages/occurrences/{oid}   Quittungen + fehlende Geraete
+- GET    /admin/api/messages/refs                Geraete + Profile fuer Editor (v2.11)
+- GET    /admin/api/messages/{id}/export.xlsx    Excel-Export (v2.11)
 
 Zielgruppen:
 - GET/POST          /admin/api/target-groups
@@ -17,14 +19,17 @@ Zielgruppen:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import timedelta
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 import database
+import message_export
 import messages
 from routes.admin import _require_admin
 from winget_catalog import is_outdated
@@ -139,9 +144,14 @@ def _present(m: dict) -> dict:
 
 
 async def _target_ids(target_group_id: int | None) -> set[str]:
-    if target_group_id is None:
-        return {a["agent_id"] for a in await database.get_target_agents()}
-    return await messages.group_members(target_group_id)
+    return await messages.target_ids(target_group_id)
+
+
+def _receipt_agents(receipts: list[dict]) -> dict[int, set[str]]:
+    out: dict[int, set[str]] = {}
+    for r in receipts:
+        out.setdefault(r["occurrence_id"], set()).add(r["agent_id"])
+    return out
 
 
 async def _old_tray_count(ids: set[str]) -> int:
@@ -156,6 +166,16 @@ async def _old_tray_count(ids: set[str]) -> int:
 @router.get("/admin/api/messages", dependencies=[Depends(_require_admin)])
 async def list_messages():
     return [_present(m) for m in await database.list_messages()]
+
+
+@router.get("/admin/api/messages/refs", dependencies=[Depends(_require_admin)])
+async def message_refs():
+    """Schlanke Geraete- und Profilliste fuer Zielgruppen-Editor und Empfaenger.
+    Eigener Endpoint, damit die Rolle 'messages' nicht die volle Agent-Liste braucht."""
+    agents = [{k: a.get(k) for k in ("agent_id", "hostname", "logged_in_user", "client_version", "banned")}
+              for a in await database.get_agents()]
+    profiles = [{"id": p["id"], "name": p["name"]} for p in await database.list_profiles()]
+    return {"agents": agents, "profiles": profiles}
 
 
 @router.post("/admin/api/messages", dependencies=[Depends(_require_admin)])
@@ -179,9 +199,17 @@ async def get_message(message_id: int):
     occs = await database.list_occurrences(message_id)
     out = _present({**m, "occurrence_count": len(occs),
                     "last_fire_at": occs[0]["fire_at"] if occs else None})
-    out["occurrences"] = [{**o, "fire_at_local": messages.utc_to_local_str(o["fire_at"]),
-                           "expires_at_local": messages.utc_to_local_str(o["expires_at"])}
-                          for o in occs]
+    seen = _receipt_agents(await database.list_message_receipts(message_id))
+    out["occurrences"] = []
+    for o in occs:
+        targets = await messages.occurrence_targets(
+            {**o, "target_group_id": m.get("target_group_id")}, seen.get(o["id"], ()))
+        o = {k: v for k, v in o.items() if k != "target_ids"}
+        out["occurrences"].append({
+            **o, "target_count": len(targets),
+            "fire_at_local": messages.utc_to_local_str(o["fire_at"]),
+            "expires_at_local": messages.utc_to_local_str(o["expires_at"]),
+        })
     ids = await _target_ids(m.get("target_group_id"))
     out["target_count"] = len(ids)
     out["old_tray_count"] = await _old_tray_count(ids)
@@ -253,10 +281,87 @@ async def occurrence_receipts(occurrence_id: int):
         for k in ("delivered_at", "shown_at", "acked_at"):
             r[k + "_local"] = messages.utc_to_local_str(r.get(k))
     seen = {r["agent_id"] for r in receipts}
-    agents = {a["agent_id"]: a for a in await database.get_target_agents()}
-    missing = sorted(agents[i]["hostname"] for i in await _target_ids(occ.get("target_group_id"))
+    agents = {a["agent_id"]: a for a in await database.get_agents()}
+    missing = sorted(agents[i]["hostname"] for i in await messages.occurrence_targets(occ)
                      if i not in seen and i in agents)
     return {"receipts": receipts, "missing": missing}
+
+
+@router.get("/admin/api/messages/{message_id}/export.xlsx", dependencies=[Depends(_require_admin)])
+async def export_message(message_id: int, request: Request):
+    user = await _require_admin(request)
+    m = await database.get_message(message_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Mitteilung nicht gefunden")
+    occs = sorted(await database.list_occurrences(message_id, limit=100000), key=lambda o: o["fire_at"])
+    receipts = await database.list_message_receipts(message_id)
+    agents = {a["agent_id"]: a for a in await database.get_agents()}
+    critical = m["severity"] == "kritisch"
+    by_occ: dict[int, list[dict]] = {}
+    for r in receipts:
+        by_occ.setdefault(r["occurrence_id"], []).append(r)
+
+    dt = messages.utc_to_local_dt
+    occ_rows, rows = [], []
+    for o in occs:
+        recs = by_occ.get(o["id"], [])
+        targets = await messages.occurrence_targets(
+            {**o, "target_group_id": m.get("target_group_id")}, (r["agent_id"] for r in recs))
+        fire = dt(o["fire_at"])
+        occ_rows.append({
+            "fire_at": fire, "expires_at": dt(o["expires_at"]), "targets": len(targets),
+            "delivered": len({r["agent_id"] for r in recs if r.get("delivered_at")}),
+            "shown": len({r["agent_id"] for r in recs if r.get("shown_at") or r.get("acked_at")}),
+            "acked": len({r["agent_id"] for r in recs if r.get("acked_at")}),
+        })
+        for r in recs:
+            a = agents.get(r["agent_id"], {})
+            rows.append({
+                "fire_at": fire, "hostname": a.get("hostname") or r["agent_id"], "user": r["win_user"] or "",
+                "status": message_export.receipt_status(r, critical),
+                "delivered_at": dt(r.get("delivered_at")), "shown_at": dt(r.get("shown_at")),
+                "acked_at": dt(r.get("acked_at")), "tray": a.get("client_version") or "",
+            })
+        for aid in targets - {r["agent_id"] for r in recs}:
+            a = agents.get(aid, {})
+            rows.append({
+                "fire_at": fire, "hostname": a.get("hostname") or aid, "user": "",
+                "status": "Nicht zugestellt", "delivered_at": None, "shown_at": None,
+                "acked_at": None, "tray": a.get("client_version") or "",
+            })
+    rows.sort(key=lambda x: (x["fire_at"], x["hostname"].lower(), x["user"].lower()))
+
+    p = _present({**m, "occurrence_count": len(occs), "last_fire_at": occs[-1]["fire_at"] if occs else None})
+    group = await database.get_target_group(m["target_group_id"]) if m.get("target_group_id") else None
+    link = m.get("link_url") or ""
+    if link and m.get("link_label"):
+        link = f"{m['link_label']}: {link}"
+    meta = [
+        ("Titel", m["title"]),
+        ("Kopfzeile", m["header"]),
+        ("Text", m["body"] or ""),
+        ("Stufe", message_export.SEVERITY_LABEL.get(m["severity"], m["severity"])),
+        ("Link", link),
+        ("Zielgruppe", (group or {}).get("name") or "Alle Geräte"),
+        ("Zeitplan", p["schedule_text"]),
+        ("Anzeigen ab", dt(m["valid_from"])),
+        ("Gültig bis", dt(m.get("valid_until")) or "unbegrenzt"),
+        ("Anzeigedauer", f"{m['show_hours']} Std. je Ausgabe"),
+        ("Status", message_export.STATE_LABEL.get(p["state"], p["state"])),
+        ("Angelegt von", m.get("created_by") or ""),
+        ("Angelegt am", dt(m.get("created_at"))),
+        ("Exportiert am", dt(messages.to_db(messages.now_utc()))),
+    ]
+    data = await asyncio.to_thread(message_export.build_workbook, meta, occ_rows, rows, critical)
+    await database.log_audit_event(
+        "message_exported", actor=_actor(user), details={"message_id": message_id},
+    )
+    fname = message_export.filename(message_id, m["title"], messages.now_utc().astimezone(messages.TZ))
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=\"{fname}\"; filename*=UTF-8''{quote(fname)}"},
+    )
 
 
 # ── Zielgruppen ───────────────────────────────────────────────────────────────

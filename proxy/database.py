@@ -712,6 +712,11 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_msg_receipts_agent "
             "ON message_receipts(agent_id, win_user)"
         )
+        # v2.11: Zielgeraete-Snapshot je Ausgabe (JSON-Liste der agent_ids)
+        async with db.execute("PRAGMA table_info(message_occurrences)") as cur:
+            occ_cols = {row[1] for row in await cur.fetchall()}
+        if "target_ids" not in occ_cols:
+            await db.execute("ALTER TABLE message_occurrences ADD COLUMN target_ids TEXT")
         await db.commit()
 
         # Migration: custom-package-Felder + winget-Felder
@@ -2581,6 +2586,10 @@ async def get_admin_user_by_sso(provider: str, subject: str) -> dict | None:
             return dict(row) if row else None
 
 
+# Gueltige Admin-UI-Rollen (messages seit v2.11: nur Mitteilungen + Zielgruppen)
+ADMIN_ROLES = ("admin", "operator", "viewer", "messages")
+
+
 async def create_admin_user(
     username: str,
     display_name: str | None,
@@ -2591,7 +2600,7 @@ async def create_admin_user(
     is_active: bool = True,
     role: str = "admin",
 ) -> int:
-    if role not in ("admin", "operator", "viewer"):
+    if role not in ADMIN_ROLES:
         raise ValueError(f"Invalid role: {role!r}")
     async with _db() as db:
         cur = await db.execute(
@@ -2627,7 +2636,7 @@ async def update_admin_user(
         fields.append("is_active = ?")
         values.append(1 if is_active else 0)
     if role is not None:
-        if role not in ("admin", "operator", "viewer"):
+        if role not in ADMIN_ROLES:
             raise ValueError(f"Invalid role: {role!r}")
         fields.append("role = ?")
         values.append(role)
@@ -2661,6 +2670,16 @@ async def count_active_admins() -> int:
     async with _db() as db:
         async with db.execute(
             "SELECT COUNT(*) FROM admin_users WHERE is_active = 1"
+        ) as cur:
+            return (await cur.fetchone())[0]
+
+
+async def count_active_admin_role() -> int:
+    """Aktive User mit Rolle admin (Schutz gegen Aussperren)."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM admin_users WHERE is_active = 1 "
+            "AND COALESCE(role, 'admin') = 'admin'"
         ) as cur:
             return (await cur.fetchone())[0]
 
@@ -2729,7 +2748,7 @@ async def create_invitation(
     created_by: int,
     expires_at: str,
 ) -> int:
-    if role not in ("admin", "operator", "viewer"):
+    if role not in ADMIN_ROLES:
         raise ValueError(f"Invalid role: {role!r}")
     async with _db() as db:
         cur = await db.execute(
@@ -5757,13 +5776,15 @@ async def get_last_occurrence(message_id: int) -> dict | None:
             return dict(row) if row else None
 
 
-async def create_occurrence(message_id: int, fire_at: str, expires_at: str) -> int | None:
-    """Idempotent ueber UNIQUE(message_id, fire_at). None = gab es schon."""
+async def create_occurrence(message_id: int, fire_at: str, expires_at: str,
+                            target_ids: str | None = None) -> int | None:
+    """Idempotent ueber UNIQUE(message_id, fire_at). None = gab es schon.
+    target_ids: JSON-Snapshot der Zielgeraete zum Ausgabezeitpunkt."""
     async with _db() as db:
         cur = await db.execute(
-            "INSERT OR IGNORE INTO message_occurrences (message_id, fire_at, expires_at) "
-            "VALUES (?, ?, ?)",
-            (message_id, fire_at, expires_at),
+            "INSERT OR IGNORE INTO message_occurrences (message_id, fire_at, expires_at, target_ids) "
+            "VALUES (?, ?, ?, ?)",
+            (message_id, fire_at, expires_at, target_ids),
         )
         await db.commit()
         return cur.lastrowid if cur.rowcount else None
@@ -5784,7 +5805,7 @@ async def list_occurrences(message_id: int, limit: int = 20) -> list[dict]:
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT o.id, o.fire_at, o.expires_at, "
+            "SELECT o.id, o.fire_at, o.expires_at, o.target_ids, "
             "(SELECT COUNT(*) FROM message_receipts r WHERE r.occurrence_id = o.id) AS delivered, "
             "(SELECT COUNT(*) FROM message_receipts r WHERE r.occurrence_id = o.id "
             "   AND r.shown_at IS NOT NULL) AS shown, "
@@ -5810,6 +5831,19 @@ async def list_receipts(occurrence_id: int) -> list[dict]:
             return [dict(r) for r in await cur.fetchall()]
 
 
+async def list_message_receipts(message_id: int) -> list[dict]:
+    """Alle Quittungen ueber alle Ausgaben einer Mitteilung (Export, Zaehlung)."""
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT r.occurrence_id, r.agent_id, r.win_user, r.delivered_at, r.shown_at, r.acked_at "
+            "FROM message_receipts r JOIN message_occurrences o ON o.id = r.occurrence_id "
+            "WHERE o.message_id = ?",
+            (message_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
 async def get_live_occurrences() -> list[dict]:
     """Ausgaben im Anzeigefenster, deren Mitteilung aktiv ist — inkl. Inhalt."""
     async with _db() as db:
@@ -5829,7 +5863,7 @@ async def get_occurrence(occurrence_id: int) -> dict | None:
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT o.id AS occurrence_id, o.message_id, o.fire_at, o.expires_at, "
+            "SELECT o.id AS occurrence_id, o.message_id, o.fire_at, o.expires_at, o.target_ids, "
             "m.target_group_id, m.severity, m.status "
             "FROM message_occurrences o JOIN messages m ON m.id = o.message_id "
             "WHERE o.id = ?",

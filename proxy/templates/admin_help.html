@@ -766,6 +766,14 @@
 <p>Dynamische Gruppen werden bei jeder Zustellung neu ausgewertet (max. 60&nbsp;s Cache). Beispiel: Zielgruppe „Software veraltet: Postman.Postman" + Mitteilung „Bitte Postman im Kiosk aktualisieren" — wer aktualisiert hat, fällt automatisch raus. <code>Vorschau</code> im Gruppen-Editor zeigt, auf welche Geräte die Regeln gerade zutreffen.</p>
 <p>Im Mitteilungs-Editor zeigt der Bereich <b>Empfänger</b> rechts, an welche Geräte (mit Benutzer) die Mitteilung mit der gewählten Zielgruppe geht. Geräte mit einem Tray vor 2.10.0 sind markiert — dort erscheint nichts.</p>
 
+<h3>Rolle „Mitteilungen“</h3>
+<p>Für Personen ohne IT-Admin-Rechte (z.&nbsp;B. Office, Kommunikation): Die Rolle darf Mitteilungen und Zielgruppen anlegen, bearbeiten, pausieren, zurückziehen, Quittungen ansehen und exportieren. Alles andere — Pakete, Clients, Workflows, Audit, Einstellungen, Benutzer — ist gesperrt, auch lesend. Im Admin-UI sieht die Rolle nur <b>Mitteilungen</b> und <b>Hilfe</b>.</p>
+<p>Einrichten unter <b>Benutzer</b>: Rolle „Mitteilungen“ wählen. Bei Entra-SSO meldet sich die Person einmal an (startet als viewer), danach die Rolle umstellen. Voraussetzung: Die Person ist in Entra der Softshelf-Enterprise-App zugewiesen (bzw. hat die App-Rolle aus <code>GRAPH_REQUIRED_ROLE</code>).</p>
+
+<h3>Excel-Export</h3>
+<p>Im Detail einer Mitteilung lädt <b>Excel-Export</b> eine .xlsx mit zwei Blättern: <b>Übersicht</b> (Kopfdaten, je Ausgabe Zielgeräte / zugestellt / gesehen / bestätigt / ohne Rückmeldung) und <b>Empfänger</b> (je Ausgabe, Gerät und Windows-Benutzer: Status, Zeitstempel, Tray-Version). Zielgeräte ohne Rückmeldung stehen als „Nicht zugestellt“ drin — die Tray-Version zeigt oft den Grund (vor 2.10.0 keine Mitteilungen).</p>
+<p>Zielgeräte einer Ausgabe = Mitglieder der Zielgruppe zum Ausgabezeitpunkt plus alle Geräte mit Rückmeldung. Ausgaben vor 2.11 hatten noch keinen Snapshot und rechnen mit der aktuellen Gruppe.</p>
+
 <h3>Quittungen</h3>
 <p>Pro Gerät und Windows-Benutzer: <b>zugestellt</b> (Tray hat die Mitteilung abgeholt), <b>gesehen</b> (angezeigt), <b>bestätigt</b> (nur Kritisch). Die Detailansicht listet je Ausgabe die Quittungen und die Geräte, die die Mitteilung noch nicht bekommen haben.</p>
 
@@ -1102,7 +1110,7 @@
 <ol class="doc-steps">
   <li>Tab <b>Benutzer</b> (Sidebar-Gruppe „Verwaltung", nur admin-Rolle).</li>
   <li>Abschnitt <b>Einladungen</b> → <code>+ Einladung</code>.</li>
-  <li>Im Modal: <b>Rolle</b> (admin/operator/viewer), <b>Hinweis</b> (optional, dem Eingeladenen angezeigt — z.B. „Für Marketing-Team-Onboarding"), <b>Gültigkeit</b> (1 / 7 / 14 / 30 Tage).</li>
+  <li>Im Modal: <b>Rolle</b> (admin/operator/viewer/Mitteilungen), <b>Hinweis</b> (optional, dem Eingeladenen angezeigt — z.B. „Für Marketing-Team-Onboarding"), <b>Gültigkeit</b> (1 / 7 / 14 / 30 Tage).</li>
   <li><code>Erstellen</code> → Modal mit Link <code>https://&lt;dein-portal&gt;/invite/&lt;token&gt;</code>.</li>
   <li>Link kopieren und per sicherem Kanal (Signal, Teams-DM, etc.) an den Empfänger schicken.</li>
 </ol>
@@ -1258,7 +1266,7 @@
   <li>API-Permissions: <code>openid</code>, <code>email</code>, <code>profile</code>, <code>User.Read</code>.</li>
   <li>Client-Secret erzeugen.</li>
   <li>In den Softshelf-Settings unter SSO eintragen: Tenant-ID, Client-ID, Client-Secret, erlaubte Email-Domains.</li>
-  <li>Login-Seite zeigt jetzt einen „Mit Microsoft anmelden"-Button. Bei erstem Login: der eingeloggte Entra-User wird als operator-Account angelegt (Admin muss anschließend die Rolle hochsetzen).</li>
+  <li>Login-Seite zeigt jetzt einen „Mit Microsoft anmelden"-Button. Bei erstem Login wird der Entra-User als <b>viewer</b> angelegt (nur lesen). Die Rolle stellt ein Admin unter <b>Benutzer</b> ein — ein späterer Entra-Login überschreibt sie nicht. Entra entscheidet nur, wer sich anmelden darf.</li>
 </ol>
 </section>
 

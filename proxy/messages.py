@@ -63,6 +63,12 @@ def utc_to_local_str(s: str | None) -> str | None:
     return dt.astimezone(TZ).strftime("%Y-%m-%dT%H:%M") if dt else None
 
 
+def utc_to_local_dt(s: str | None) -> datetime | None:
+    """Naive Ortszeit (Europe/Berlin), z. B. fuer Excel-Datumszellen."""
+    dt = from_db(s)
+    return dt.astimezone(TZ).replace(tzinfo=None) if dt else None
+
+
 # ── Zeitplan ──────────────────────────────────────────────────────────────────
 
 def validate_schedule(sched: dict) -> dict:
@@ -182,7 +188,8 @@ async def tick():
                 expires = vu
             if expires <= now:
                 continue
-            occ = await database.create_occurrence(m["id"], to_db(due), to_db(expires))
+            snapshot = json.dumps(sorted(await target_ids(m.get("target_group_id"))))
+            occ = await database.create_occurrence(m["id"], to_db(due), to_db(expires), snapshot)
             if occ:
                 logger.info("Mitteilung %d: Ausgabe %d (%s bis %s)",
                             m["id"], occ, to_db(due), to_db(expires))
@@ -290,6 +297,28 @@ async def _targets_agent(target_group_id: int | None, agent_id: str) -> bool:
     if target_group_id is None:
         return True
     return agent_id in await group_members(target_group_id)
+
+
+async def target_ids(target_group_id: int | None) -> set[str]:
+    """Aktuelle Zielgeraete: alle nicht gesperrten oder die Gruppenmitglieder."""
+    if target_group_id is None:
+        return {a["agent_id"] for a in await database.get_target_agents()}
+    return await group_members(target_group_id)
+
+
+async def occurrence_targets(occ: dict, receipt_agent_ids=()) -> set[str]:
+    """Zielgeraete einer Ausgabe: Snapshot vom Ausgabezeitpunkt plus alle Geraete
+    mit Rueckmeldung (spaeter dazugekommene Gruppenmitglieder bekommen die
+    Ausgabe auch). Ausgaben vor v2.11 haben keinen Snapshot -> aktuelle Gruppe."""
+    raw = occ.get("target_ids")
+    if raw:
+        try:
+            ids = set(json.loads(raw))
+        except (ValueError, TypeError):
+            ids = await target_ids(occ.get("target_group_id"))
+    else:
+        ids = await target_ids(occ.get("target_group_id"))
+    return ids | set(receipt_agent_ids)
 
 
 # ── Zustellung ────────────────────────────────────────────────────────────────
