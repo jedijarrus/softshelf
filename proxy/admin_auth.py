@@ -257,10 +257,13 @@ async def ensure_bootstrap_admin():
 
 async def sso_login_or_provision(
     oid: str, email: str, name: str, email_verified: bool = False,
-    auto_create: bool | None = None, role: str = "admin",
+    auto_create: bool | None = None, new_user_role: str = "viewer",
 ) -> dict | None:
     """
     Findet oder erzeugt einen lokalen admin_user für eine SSO-Identität.
+
+    Die Rolle wird seit v2.11 in Softshelf gepflegt (Benutzer-Tab): bestehende
+    User behalten ihre Rolle, neue starten mit new_user_role (viewer).
 
     1. Match auf (sso_provider='entra', sso_subject=oid)
     2. Sonst Match auf email NUR wenn email_verified=true und der bestehende
@@ -277,10 +280,6 @@ async def sso_login_or_provision(
     if user:
         if not user.get("is_active"):
             return None
-        # Rolle aus Azure erzwingen (Azure = Source-of-Truth fuer SSO-User)
-        if role and user.get("role") != role:
-            await database.update_admin_user(user["id"], role=role)
-            user = await database.get_admin_user_by_id(user["id"])
         await database.touch_admin_login(user["id"])
         return user
 
@@ -300,9 +299,9 @@ async def sso_login_or_provision(
             # Verknüpfen
             async with database._db() as db:
                 await db.execute(
-                    "UPDATE admin_users SET sso_provider='entra', sso_subject=?, role=? "
+                    "UPDATE admin_users SET sso_provider='entra', sso_subject=? "
                     "WHERE id = ?",
-                    (oid, role, u["id"]),
+                    (oid, u["id"]),
                 )
                 await db.commit()
             await database.touch_admin_login(u["id"])
@@ -311,8 +310,8 @@ async def sso_login_or_provision(
     # 3. Auto-Create. auto_create=None => Runtime-Setting lesen (Legacy).
     # Der MSAL/ENV-Flow ruft mit auto_create=True: die Zugriffskontrolle laeuft
     # ueber die Entra Enterprise-App ("Assignment required") — ein gueltiges
-    # Token bedeutet, der Nutzer ist zugewiesen. Neue User werden als operator
-    # angelegt (niedrigste Rolle), ein Admin hebt die Rolle bei Bedarf an.
+    # Token bedeutet, der Nutzer ist zugewiesen. Neue User starten als viewer
+    # (nur lesen), ein Admin stellt die Rolle im Benutzer-Tab ein.
     if auto_create:
         # Username aus E-Mail-Local-Part oder OID
         base_username = (email.split("@")[0] if email else oid)[:50]
@@ -330,7 +329,7 @@ async def sso_login_or_provision(
             sso_provider="entra",
             sso_subject=oid,
             is_active=True,
-            role=role,
+            role=new_user_role,
         )
         await database.touch_admin_login(user_id)
         return await database.get_admin_user_by_id(user_id)

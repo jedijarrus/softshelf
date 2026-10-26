@@ -1020,6 +1020,9 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .role-badge.role-admin    { color: var(--red); background: var(--red-bg); border-color: var(--red-bd); }
 .role-badge.role-operator { color: var(--blue); background: var(--blue-bg); border-color: var(--blue-bd); }
 .role-badge.role-viewer   { color: var(--fg-4); }
+.role-badge.role-messages { color: var(--violet); background: var(--violet-bg); border-color: var(--violet-bd); }
+body.is-messages-role .sidebar-group-label,
+body.is-messages-role .hdr-search-btn { display: none; }
 
 /* Viewer-Mode: state-changing Buttons optisch deaktivieren.
    Hinweis: das ist nur Cosmetic. Server (`_require_admin`) ist Source of
@@ -7135,6 +7138,7 @@ body.help-active [data-help]:not(.tab)::after {
           <option value="admin">Admin — alles erlaubt (Whitelist, Benutzer, Einstellungen, Builds, Dispatch)</option>
           <option value="operator">Operator — darf Installationen auslösen, Fehler bestätigen, Ringe setzen; KEIN Whitelist-/Benutzer-Edit</option>
           <option value="viewer">Viewer — nur Lesezugriff, keine Aktionen</option>
+          <option value="messages">Mitteilungen — nur Mitteilungen und Zielgruppen, sieht sonst nichts</option>
         </select>
         <div class="hint">Rolle bestimmt was der Benutzer im Admin-UI darf. Lässt sich jederzeit ändern.</div>
       </div>
@@ -7333,6 +7337,7 @@ body.help-active [data-help]:not(.tab)::after {
           <option value="admin">Admin — alles erlaubt</option>
           <option value="operator">Operator — Dispatch + Fehler bestaetigen</option>
           <option value="viewer" selected>Viewer — nur Lesezugriff</option>
+          <option value="messages">Mitteilungen — nur Mitteilungen und Zielgruppen</option>
         </select>
       </div>
       <div class="pw-field">
@@ -7987,7 +7992,8 @@ async function healthPing() {
 }
 setInterval(healthPing, 30000);
 healthPing();
-loadWhoami();
+// Rolle muss feststehen bevor Tabs Daten laden (Rolle 'messages' darf nur Mitteilungen)
+const _whoamiReady = loadWhoami();
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
 function switchTab(name, btn) {
@@ -9689,6 +9695,7 @@ function toggleTheme() {
 }
 
 function openQjump() {
+  if (_isMessagesRole()) return;
   const modal = document.getElementById('qjump-modal');
   modal.classList.add('open');
   const input = document.getElementById('qjump-input');
@@ -15077,6 +15084,8 @@ async function api(method, path, body, options) {
 
 // ── User-Menu ────────────────────────────────────────────────────────────────
 let _currentUser = null;
+const ROLE_LABEL = {admin: 'admin', operator: 'operator', viewer: 'viewer', messages: 'Mitteilungen'};
+function _isMessagesRole() { return !!_currentUser && _currentUser.role === 'messages'; }
 
 async function loadWhoami() {
   try {
@@ -15092,7 +15101,7 @@ async function loadWhoami() {
       ? u.email
       : (u.sso_provider ? `via ${u.sso_provider}` : `@${u.username}`));
     document.getElementById('user-info-detail').innerHTML =
-      `${esc(detail)} · <span class="role-badge role-${esc(role)}" style="margin-left:4px">${esc(role)}</span>`;
+      `${esc(detail)} · <span class="role-badge role-${esc(role)}" style="margin-left:4px">${esc(ROLE_LABEL[role] || role)}</span>`;
     // Read-only / operator users: hide admin-only UI bits (Settings-Tab, Users-Tab)
     if (role !== 'admin') {
       document.querySelectorAll('.tab[data-tab="settings"],.tab[data-tab="users"]').forEach(t => t.style.display = 'none');
@@ -15103,6 +15112,13 @@ async function loadWhoami() {
     }
     if (role === 'operator') {
       document.body.classList.add('is-operator');
+    }
+    // Rolle Mitteilungen: nur Mitteilungen + Hilfe, keine Schnellsuche
+    if (role === 'messages') {
+      document.body.classList.add('is-messages-role');
+      document.querySelectorAll('.sidebar .tab[data-tab]').forEach(t => {
+        if (!['messages', 'help'].includes(t.dataset.tab)) t.style.display = 'none';
+      });
     }
   } catch (e) {
     // 401 wird in api() schon abgefangen → redirect
@@ -15339,7 +15355,7 @@ function renderUsers() {
       const statusCls = u.is_active ? 'status-online' : 'status-offline';
       const statusText = u.is_active ? 'Aktiv' : 'Deaktiviert';
       const role = u.role || 'admin';
-      const roleBadge = `<span class="role-badge role-${esc(role)}">${esc(role)}</span>`;
+      const roleBadge = `<span class="role-badge role-${esc(role)}">${esc(ROLE_LABEL[role] || role)}</span>`;
       const auth = u.sso_provider
         ? `<span class="cell-mono">SSO · ${esc(u.sso_provider)}</span>`
         : (u.has_password ? '<span class="cell-mono">Lokal</span>' : '<span class="cell-mono" style="color:var(--red)">⚠ kein Passwort</span>');
@@ -15506,7 +15522,7 @@ function renderInvitations() {
     <tbody>
     ${_invitations.map(inv => {
       const role = inv.role || 'viewer';
-      const roleBadge = `<span class="role-badge role-${esc(role)}">${esc(role)}</span>`;
+      const roleBadge = `<span class="role-badge role-${esc(role)}">${esc(ROLE_LABEL[role] || role)}</span>`;
       const creator = inv.created_by_display_name || inv.created_by_username || '—';
       const accepted = inv.accepted_at
         ? `${fmtDt(inv.accepted_at)}<br><span style="color:var(--fg-4);font-size:11px">${esc(inv.accepted_display_name || inv.accepted_username || '')}</span>`
@@ -16310,7 +16326,7 @@ async function triggerBuild() {
   }
 }
 
-init();
+_whoamiReady.then(() => { if (!_isMessagesRole()) init(); });
 
 // Action-Log State — MUSS vor dem Tab-Restore-IIFE deklariert sein, sonst
 // laeuft loadActionLog beim ersten Aufruf in einen TDZ-ReferenceError und
@@ -16354,9 +16370,14 @@ function _alTriggerCompact(trig, workflowRunId) {
 
 // Tab aus URL-Hash wiederherstellen. Default ist home — wenn Hash fehlt
 // oder home ist, Home-Daten laden und nichts zu switchen.
-(function _restoreTabFromHash() {
-  const validTabs = ['home', 'packages', 'distribution', 'profiles', 'rollouts', 'workflows', 'agents', 'errors', 'compliance', 'scheduled', 'audit', 'actions', 'users', 'settings', 'help'];
+(async function _restoreTabFromHash() {
+  await _whoamiReady;
+  const validTabs = ['home', 'packages', 'distribution', 'profiles', 'rollouts', 'workflows', 'messages', 'agents', 'errors', 'compliance', 'scheduled', 'audit', 'actions', 'users', 'settings', 'help'];
   const raw = (location.hash || '').replace(/^#/, '');
+  if (_isMessagesRole()) {
+    switchTab(raw === 'help' ? 'help' : 'messages');
+    return;
+  }
   // Agent-Detail direkt oeffnen: #agents/<agentId>
   if (raw.startsWith('agents/')) {
     const agentId = raw.substring(7);
@@ -16379,8 +16400,13 @@ function _alTriggerCompact(trig, workflowRunId) {
 
 // Back/Forward-Navigation: auch auf den richtigen Tab reagieren.
 window.addEventListener('hashchange', () => {
-  const validTabs = ['home', 'packages', 'distribution', 'profiles', 'rollouts', 'workflows', 'agents', 'errors', 'compliance', 'scheduled', 'audit', 'actions', 'users', 'settings', 'help'];
+  const validTabs = ['home', 'packages', 'distribution', 'profiles', 'rollouts', 'workflows', 'messages', 'agents', 'errors', 'compliance', 'scheduled', 'audit', 'actions', 'users', 'settings', 'help'];
   const raw = (location.hash || '').replace(/^#/, '') || 'packages';
+  if (_isMessagesRole() && !['messages', 'help'].includes(raw)) {
+    if (currentTab !== 'messages') switchTab('messages');
+    else history.replaceState(null, '', '#messages');
+    return;
+  }
   // Agent-Detail: #agents/<agentId>
   if (raw.startsWith('agents/')) {
     const agentId = raw.substring(7);
@@ -17683,7 +17709,7 @@ async function openMessageDetail(id) {
     const occ = (m.occurrences || []).map(o => `
       <div class="msg-occ-row" id="msg-occ-${o.id}" onclick="loadOccurrence(${o.id})">
         <div>${esc(fmtDt(o.fire_at))}</div><div style="color:var(--fg-5)">bis ${esc(fmtDt(o.expires_at))}</div>
-        <div>${o.delivered} zugest.</div><div>${o.shown} gesehen</div><div>${m.severity === 'kritisch' ? o.acked + ' best.' : ''}</div>
+        <div title="zugestellt / Zielgeräte dieser Ausgabe">${o.delivered} / ${o.target_count} zugest.</div><div>${o.shown} gesehen</div><div>${m.severity === 'kritisch' ? o.acked + ' best.' : ''}</div>
       </div>`).join('');
     body.innerHTML = `
       ${warn}
@@ -17711,6 +17737,7 @@ async function openMessageDetail(id) {
       acts.push(`<button class="btn btn-ghost btn-sm" onclick="openMessageEditor(${m.id})">Bearbeiten</button>`);
     }
     acts.push(`<button class="btn btn-ghost btn-sm" onclick="duplicateMessage(${m.id})">Duplizieren</button>`);
+    acts.push(`<button class="btn btn-ghost btn-sm" onclick="exportMessage(${m.id}, this)">Excel-Export</button>`);
     acts.push(`<button class="btn btn-primary btn-sm" onclick="closeMessageDetail()">Schließen</button>`);
     _m('msg-detail-actions').innerHTML = acts.join('');
     if (m.occurrences && m.occurrences.length) loadOccurrence(m.occurrences[0].id);
@@ -17722,6 +17749,35 @@ async function openMessageDetail(id) {
 function closeMessageDetail() {
   _msgDetailId = null;
   _m('msg-detail-modal').classList.remove('open');
+}
+
+// Excel-Export: Datei per fetch holen (Fehler als Toast statt JSON-Seite)
+async function exportMessage(id, btn) {
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Export'; }
+  try {
+    const r = await fetch(`/admin/api/messages/${id}/export.xlsx`, {headers: {'X-Requested-With': 'XMLHttpRequest'}});
+    if (!r.ok) {
+      let msg = 'Export fehlgeschlagen';
+      try { msg = (await r.json()).detail || msg; } catch (_) {}
+      toast(msg, true);
+      return;
+    }
+    const cd = r.headers.get('Content-Disposition') || '';
+    const fm = cd.match(/filename\*=UTF-8''([^;]+)/);
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fm ? decodeURIComponent(fm[1]) : `Mitteilung_${id}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  } catch (e) {
+    toast('Export fehlgeschlagen', true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
 }
 
 async function loadOccurrence(oid) {
@@ -17818,14 +17874,13 @@ function renderTargetGroups() {
 async function _msgEnsureRefs() {
   if (!_msgAgents) {
     try {
-      const all = await api('GET', '/admin/api/agents');
+      const refs = await api('GET', '/admin/api/messages/refs');
+      const all = refs.agents || [];
       _msgAgentNames = new Map(all.map(a => [a.agent_id, a]));
       _msgAgents = all.filter(a => !a.banned)
         .sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
-    } catch (e) { _msgAgents = []; }
-  }
-  if (!_msgProfiles) {
-    try { _msgProfiles = (await api('GET', '/admin/api/profiles')).profiles || []; } catch (e) { _msgProfiles = []; }
+      _msgProfiles = refs.profiles || [];
+    } catch (e) { _msgAgents = []; _msgProfiles = []; }
   }
 }
 

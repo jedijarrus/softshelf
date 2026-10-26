@@ -190,6 +190,21 @@ _ADMIN_ONLY_PATHS = (
     "/admin/api/agents/",
 )
 
+# Rolle 'messages' (v2.11): nur Mitteilungen + Zielgruppen, sonst nichts —
+# auch kein Lesen. Wird vor dem pauschalen GET-Freibrief geprueft.
+_MESSAGES_ROLE_PREFIXES = ("/admin/api/messages", "/admin/api/target-groups")
+_MESSAGES_ROLE_GET = ("/admin/api/whoami", "/admin/api/help")
+_MESSAGES_ROLE_POST = ("/admin/api/users/me/change-password",)
+
+
+def _messages_role_allowed(method: str, path: str) -> bool:
+    if any(path == p or path.startswith(p + "/") for p in _MESSAGES_ROLE_PREFIXES):
+        return True
+    if method in ("GET", "HEAD") and path in _MESSAGES_ROLE_GET:
+        return True
+    return method == "POST" and path in _MESSAGES_ROLE_POST
+
+
 # Exception-Suffixes: wenn POST/PATCH/DELETE auf admin-only path liegt aber
 # mit diesem Suffix endet, bleibt es operator-zugaenglich (Dispatch-Aktionen).
 _ADMIN_ONLY_EXCEPTIONS = (
@@ -220,6 +235,7 @@ async def _require_admin(request: Request) -> dict:
       operator — dispatch (install/uninstall/push/bulk), ack errors, ring setzen;
                  KEIN whitelist-edit, KEINE users/settings/build
       viewer   — nur GETs, keine state-changing operations
+      messages — nur Mitteilungen + Zielgruppen (lesen + schreiben), sonst nichts
 
     RBAC wird hier zentral gecheckt anhand method + path.
     """
@@ -264,6 +280,14 @@ async def _require_admin(request: Request) -> dict:
         raise HTTPException(
             status_code=403,
             detail="Token-Verwaltung nur per Browser-Session.",
+        )
+
+    if role == "messages":
+        if _messages_role_allowed(method, path):
+            return user
+        raise HTTPException(
+            status_code=403,
+            detail="Die Rolle Mitteilungen hat nur Zugriff auf Mitteilungen und Zielgruppen.",
         )
 
     # GETs ueberall frei fuer alle Rollen
@@ -486,8 +510,9 @@ async def azure_verify(request: Request, body: AzureVerifyBody):
         return JSONResponse({"ok": False, "error": "Token ungueltig"}, status_code=401)
 
     # Rollen-Gate: wenn GRAPH_REQUIRED_ROLE gesetzt ist, darf sich nur anmelden
-    # wer diese App-Rolle im roles-Claim hat. Treffer => Kiosk-Admin (siehe
-    # sso_login_or_provision role-Default). Leer => kein Gate.
+    # wer diese App-Rolle im roles-Claim hat. Leer => kein Gate. Die Softshelf-
+    # Rolle (admin/operator/viewer/messages) pflegt der Admin im Benutzer-Tab
+    # (seit v2.11); neue SSO-User starten als viewer.
     from config import get_settings
     required = (get_settings().graph_required_role or "").strip()
     if required:
@@ -580,7 +605,8 @@ async def invite_page(token: str, request: Request):
     role = inv["role"]
     inviter = inv.get("created_by_display_name") or inv.get("created_by_username") or "Admin"
     hint = inv.get("email_hint") or ""
-    role_label = {"admin": "Admin", "operator": "Operator", "viewer": "Viewer"}.get(role, role)
+    role_label = {"admin": "Admin", "operator": "Operator", "viewer": "Viewer",
+                  "messages": "Mitteilungen"}.get(role, role)
 
     zettel_rows = (
         f'<div class="zettel-row"><span class="k">Schickt dich</span>'
@@ -884,7 +910,11 @@ async def delete_api_token(
 
 # ── Admin User Management ─────────────────────────────────────────────────────
 
-_VALID_ROLES = {"admin", "operator", "viewer"}
+_VALID_ROLES = set(database.ADMIN_ROLES)
+
+
+def _is_active_admin(u: dict) -> bool:
+    return bool(u.get("is_active")) and (u.get("role") or "admin") == "admin"
 
 
 class UserCreateRequest(BaseModel):
@@ -971,11 +1001,12 @@ async def update_user(user_id: int, body: UserUpdateRequest):
     if not user:
         raise HTTPException(status_code=404, detail="User nicht gefunden")
 
-    # Safeguard: nicht den letzten aktiven Admin deaktivieren
-    if body.is_active is False and user.get("is_active"):
-        active = await database.count_active_admins()
-        if active <= 1:
+    # Safeguard: den letzten aktiven Admin weder deaktivieren noch herabstufen
+    if _is_active_admin(user) and await database.count_active_admin_role() <= 1:
+        if body.is_active is False:
             raise HTTPException(status_code=400, detail="Letzter aktiver Admin kann nicht deaktiviert werden")
+        if body.role and body.role != "admin":
+            raise HTTPException(status_code=400, detail="Letzter aktiver Admin kann nicht herabgestuft werden")
 
     await database.update_admin_user(
         user_id,
@@ -999,10 +1030,8 @@ async def delete_user(user_id: int, current: dict = Depends(_require_admin)):
         raise HTTPException(status_code=404, detail="User nicht gefunden")
     if current["user_id"] == user_id:
         raise HTTPException(status_code=400, detail="Du kannst dich nicht selbst löschen")
-    if user.get("is_active"):
-        active = await database.count_active_admins()
-        if active <= 1:
-            raise HTTPException(status_code=400, detail="Letzter aktiver Admin kann nicht gelöscht werden")
+    if _is_active_admin(user) and await database.count_active_admin_role() <= 1:
+        raise HTTPException(status_code=400, detail="Letzter aktiver Admin kann nicht gelöscht werden")
     await database.delete_user_sessions(user_id)
     await database.delete_admin_user(user_id)
     return {"ok": True}
