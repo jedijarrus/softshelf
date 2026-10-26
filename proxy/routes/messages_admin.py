@@ -282,7 +282,9 @@ async def list_target_groups():
     for g in await database.list_target_groups():
         g["agent_ids"] = json.loads(g.get("agent_ids") or "[]")
         g["rules"] = json.loads(g.get("rules") or "[]")
-        g["member_count"] = len(await messages.group_members(g["id"]))
+        members = await messages.group_members(g["id"])
+        g["member_ids"] = sorted(members)  # Empfaengerliste im Mitteilungs-Editor
+        g["member_count"] = len(members)
         out.append(g)
     return out
 
@@ -292,7 +294,8 @@ async def preview_target_group(body: TargetGroupBody):
     kind, agent_ids, rules = await _validated_group(body)
     ids = await messages.evaluate(kind, json.loads(agent_ids), json.loads(rules))
     agents = {a["agent_id"]: a["hostname"] for a in await database.get_target_agents()}
-    return {"count": len(ids), "hostnames": sorted(agents[i] for i in ids if i in agents)}
+    return {"count": len(ids), "hostnames": sorted(agents[i] for i in ids if i in agents),
+            "agent_ids": sorted(i for i in ids if i in agents)}
 
 
 @router.post("/admin/api/target-groups", dependencies=[Depends(_require_admin)])

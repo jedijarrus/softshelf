@@ -7,6 +7,20 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Zielgruppen-Editor:** Die feste Geräteliste lässt sich nach Hostname und
+  Benutzer durchsuchen (Enter wählt den ersten Treffer, Esc leert die Suche).
+  Ausgewählte Geräte stehen oben als Chips, gesperrte oder gelöschte Geräte
+  sind dort markiert und entfernbar.
+- **Mitteilungs-Editor:** Neuer Bereich *Empfänger* zeigt, an welche Geräte die
+  Mitteilung mit der gewählten Zielgruppe geht, inkl. Benutzer und Hinweis auf
+  Geräte mit Tray vor 2.10.0.
+- **Clients:** Filter *Online* (letzter Kontakt RMM unter 5 Minuten), kombinierbar
+  mit den Versions-Filtern.
+
 ## [2.10.0] – 2026-10-26
 
 Mitteilungen an die Benutzer (Server + Tray 2.10.0).
