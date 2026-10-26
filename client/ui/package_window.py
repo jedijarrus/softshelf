@@ -786,6 +786,9 @@ html, body {{
 .msg-link:hover {{ background: var(--bg-soft); }}
 .msg-ack {{ background: var(--fg); border-color: var(--fg); color: #fff; font-weight: 600; }}
 .msg-acked {{ font-size: 11px; color: var(--green); font-weight: 600; }}
+.msg-sev {{ font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 999px; margin-right: 6px; }}
+.msg-sev.sev-wichtig {{ color: #92400e; background: #fffbeb; border: 1px solid #fde68a; }}
+.msg-sev.sev-kritisch {{ color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; }}
 
 /* ─── Workflow Cards (Tab Aktionen) ─── */
 .wf-card {{
@@ -1660,7 +1663,7 @@ function renderMessages() {{
     return `
       <div class="msg-item sev-${{sev}}${{_msgIsNew(m) ? ' new' : ''}}">
         <div class="msg-item-head">
-          <span class="msg-kicker">${{escHtml(m.header || '')}}</span>
+          <span class="msg-kicker">${{sev !== 'info' ? `<span class="msg-sev sev-${{sev}}">${{sev === 'kritisch' ? 'Kritisch' : 'Wichtig'}}</span>` : ''}}${{escHtml(m.header || '')}}</span>
           <span class="msg-when">${{escHtml(_fmtWhen(m.fire_at))}}</span>
         </div>
         <div class="msg-item-title">${{escHtml(m.title || '')}}</div>
