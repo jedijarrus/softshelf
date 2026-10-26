@@ -292,13 +292,18 @@ class KioskTray:
     # ─── Mitteilungen (v2.10) ───
 
     def _handle_messages(self, messages: list):
-        """Neue Mitteilungen anzeigen. Info = Windows-Benachrichtigung,
-        Wichtig/Kritisch = eigenes Fenster (ui.message_dialog, eins nach
-        dem anderen). Kritisch kommt vom Server so lange wieder, bis es
-        bestaetigt ist — wird es ohne Bestaetigung geschlossen, darf es beim
-        naechsten Poll erneut erscheinen."""
+        """Neue Mitteilungen anzeigen — alle Stufen als eigenes Fenster
+        (ui.message_dialog, eins nach dem anderen). Info/Wichtig unten rechts,
+        Kritisch in der Mitte. Kritisch kommt vom Server so lange wieder, bis
+        es bestaetigt ist — wird es ohne Bestaetigung geschlossen, darf es
+        beim naechsten Poll erneut erscheinen. (Die Tray-Sprechblase fuer Info
+        war unzuverlaessig: Windows unterdrueckt sie bei Fokus/Nicht stoeren.)"""
         from ui.message_dialog import enqueue_message
 
+        # Kritisch zuerst, dann Wichtig, dann Info — sonst blockiert eine
+        # zuerst eingetroffene Info das kritische Fenster bis zu 10 s
+        rank = {"kritisch": 0, "wichtig": 1}
+        messages = sorted(messages, key=lambda m: rank.get(m.get("severity"), 2))
         for msg in messages:
             oid = msg.get("id")
             if not isinstance(oid, int):
@@ -309,27 +314,12 @@ class KioskTray:
                 self._shown_messages.add(oid)
             severity = msg.get("severity") or "info"
             logger.info("Mitteilung %s (%s): %s", oid, severity, msg.get("title"))
-            if severity == "info":
-                self._show_info_notification(msg)
-                self._receipt(oid, "shown")
-                continue
             enqueue_message(
                 msg, app_name=self._app_name,
                 on_shown=lambda o=oid: self._receipt(o, "shown"),
                 on_done=lambda result, o=oid: self._on_message_done(o, result),
             )
         self._notify_messages_changed()
-
-    def _show_info_notification(self, msg: dict):
-        title = (msg.get("title") or msg.get("header") or self._app_name)[:63]
-        body = (msg.get("body") or msg.get("header") or "").strip()
-        if len(body) > 250:
-            body = body[:247] + "..."
-        try:
-            if self._icon:
-                self._icon.notify(body or title, title)
-        except Exception:
-            logger.exception("Windows-Benachrichtigung fehlgeschlagen")
 
     def _on_message_done(self, oid: int, result: str):
         """result: acked | closed | timeout | closed_unacked"""

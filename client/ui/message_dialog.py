@@ -1,19 +1,28 @@
 """
 Mitteilungs-Fenster (v2.10) — pywebview.
 
-Zwei Darstellungen:
-- "wichtig":  rahmenloses Hinweisfenster unten rechts ueber der Taskleiste.
-              Schliesst per Klick oder nach 60 s (Timer pausiert bei Hover).
+Drei Stufen:
+- "info":     kompaktes Fenster unten rechts, schliesst nach 10 s.
+- "wichtig":  Fenster unten rechts mit Buttons, schliesst nach 60 s.
+              Bei beiden pausiert der Timer, solange Maus oder Tastaturfokus
+              im Fenster sind; sie nehmen der laufenden Arbeit den Fokus nicht weg.
 - "kritisch": Fenster in der Bildschirmmitte, immer im Vordergrund, ohne
               Schliessen-Kreuz — geht nur mit "Verstanden" weg.
 
-Mehrere Mitteilungen werden nacheinander gezeigt (Warteschlange). Inhalte
-kommen ueber die JS-Bridge (get_payload) und werden per textContent gesetzt —
-kein HTML aus Serverdaten im Template.
+Groesse: Das Fenster entsteht ausserhalb des sichtbaren Bereichs, misst nach
+dem Rendern seinen Inhalt (JS → fit) und wird dann per SetWindowPos auf die
+passende Groesse gebracht und platziert — in physischen Pixeln, also passend
+zur Windows-Skalierung. ctypes statt pywebview-resize/move: deren Invoke aus
+einem Fremd-Thread kann am GIL verklemmen (siehe diag.bring_to_front).
+
+Mehrere Mitteilungen werden nacheinander gezeigt; kritische ziehen vor.
+Inhalte kommen ueber die JS-Bridge (get_payload) und werden per textContent
+gesetzt — kein HTML aus Serverdaten im Template.
 """
 import collections
 import ctypes
 import logging
+import os
 import threading
 import webbrowser
 from ctypes import wintypes
@@ -22,7 +31,10 @@ import webview
 
 logger = logging.getLogger("softshelf.message")
 
-_AUTO_CLOSE_S = 60
+_AUTO_CLOSE_S = {"info": 10, "wichtig": 60, "kritisch": 0}
+_WIDTH = {"info": 360, "wichtig": 380, "kritisch": 480}  # CSS-Pixel
+_MARGIN = 16                                              # Abstand zum Bildschirmrand (CSS-Pixel)
+_OFFSCREEN = -32000
 
 _HTML = r"""<!DOCTYPE html>
 <html lang="de">
@@ -38,7 +50,6 @@ _HTML = r"""<!DOCTYPE html>
   --fg: #18181b;
   --fg-3: #52525b;
   --fg-4: #71717a;
-  --fg-5: #a1a1aa;
   --accent: #2563eb;
   --accent-bg: #eff6ff;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -55,7 +66,10 @@ html, body {
 }
 body { display: flex; flex-direction: column; border: 1px solid var(--border); }
 .bar { height: 3px; background: var(--accent); flex-shrink: 0; }
-.head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 0; }
+.card { flex: 1; display: flex; flex-direction: column; min-height: 0; opacity: 0; }
+body.ready .card { opacity: 1; animation: in 260ms var(--ease); }
+@keyframes in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 0; flex-shrink: 0; }
 .icon {
   width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
   background: var(--accent-bg); color: var(--accent);
@@ -63,7 +77,7 @@ body { display: flex; flex-direction: column; border: 1px solid var(--border); }
 }
 .icon svg { width: 18px; height: 18px; }
 .titles { flex: 1; min-width: 0; }
-.kicker { font-size: 11.5px; font-weight: 600; color: var(--fg-4); letter-spacing: .01em; }
+.kicker { font-size: 12px; font-weight: 600; color: var(--fg-4); }
 .title { font-size: 15px; font-weight: 600; line-height: 1.35; margin-top: 2px; overflow-wrap: anywhere; }
 .close {
   width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent;
@@ -75,11 +89,11 @@ body { display: flex; flex-direction: column; border: 1px solid var(--border); }
 .close svg { width: 16px; height: 16px; }
 .body {
   flex: 1; min-height: 0; overflow-y: auto;
-  padding: 10px 18px 4px 62px;
+  padding: 8px 18px 2px 62px;
   font-size: 13px; line-height: 1.55; color: var(--fg-3);
   white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
 }
-.foot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding: 12px 18px 16px; }
+.foot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding: 12px 18px 16px; flex-shrink: 0; }
 .hint { flex: 1; font-size: 12px; color: var(--fg-4); }
 .btn {
   font: inherit; font-size: 13px; font-weight: 500; padding: 8px 14px; border-radius: 8px;
@@ -91,13 +105,19 @@ body { display: flex; flex-direction: column; border: 1px solid var(--border); }
 .btn.primary:hover { background: #27272a; }
 .timer { height: 2px; background: var(--border); flex-shrink: 0; }
 .timer i { display: block; height: 100%; width: 100%; background: var(--accent); opacity: .55; transform-origin: left; }
-.card { flex: 1; display: flex; flex-direction: column; min-height: 0; animation: in 260ms var(--ease); }
-@keyframes in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.mode-info .head { padding: 14px 16px 0; }
+.mode-info .title { font-size: 14px; }
+.mode-info .body { padding: 6px 16px 14px 60px; font-size: 12.5px; }
+.mode-info .foot { padding: 0 16px 14px; }
 .mode-kritisch .head { padding: 22px 24px 0; }
 .mode-kritisch .title { font-size: 17px; }
 .mode-kritisch .body { padding: 12px 24px 4px 68px; font-size: 13.5px; }
 .mode-kritisch .foot { padding: 16px 24px 20px; }
-@media (prefers-reduced-motion: reduce) { .card { animation: none; } }
+/* Messen: alles auf natuerliche Hoehe, nichts gestreckt */
+html.measuring, html.measuring body { height: auto; }
+html.measuring .card, html.measuring .body { flex: none; }
+html.measuring .body { overflow: visible; }
+@media (prefers-reduced-motion: reduce) { body.ready .card { animation: none; } }
 </style>
 </head>
 <body class="__CLASSES__">
@@ -112,7 +132,7 @@ body { display: flex; flex-direction: column; border: 1px solid var(--border); }
     __CLOSE__
   </div>
   <div class="body" id="body"></div>
-  <div class="foot">
+  <div class="foot" id="foot">
     <div class="hint" id="hint"></div>
     <button class="btn" id="link" style="display:none" onclick="openLink()"></button>
     <button class="btn primary" id="ok" onclick="done()"></button>
@@ -123,7 +143,7 @@ __TIMER__
 'use strict';
 const MODE = '__MODE__';
 const AUTO_MS = __AUTO_MS__;
-let closed = false, left = AUTO_MS, last = Date.now(), paused = false;
+let closed = false, started = false, left = AUTO_MS, last = Date.now(), paused = false;
 
 function done() {
   if (closed) return;
@@ -132,17 +152,37 @@ function done() {
 }
 function openLink() { pywebview.api.open_link(); }
 
+// Natuerliche Hoehe des Inhalts in CSS-Pixeln: kurz ohne flex-Streckung
+// messen — sonst fuellt der Textbereich die vorlaeufige Fensterhoehe aus
+function neededHeight() {
+  const root = document.documentElement;
+  root.classList.add('measuring');
+  const h = document.body.getBoundingClientRect().height;
+  root.classList.remove('measuring');
+  return Math.ceil(h);
+}
+
 window.addEventListener('pywebviewready', async () => {
   const p = await pywebview.api.get_payload();
   document.getElementById('kicker').textContent = p.header || '';
   document.getElementById('title').textContent = p.title || '';
-  document.getElementById('body').textContent = p.body || '';
-  if (!p.body) document.getElementById('body').style.display = 'none';
+  const body = document.getElementById('body');
+  body.textContent = p.body || '';
+  if (!p.body) body.style.display = 'none';
   const link = document.getElementById('link');
   if (p.link_url) { link.textContent = p.link_label || 'Öffnen'; link.style.display = ''; }
-  document.getElementById('ok').textContent = MODE === 'kritisch' ? 'Verstanden' : 'Schließen';
+  const ok = document.getElementById('ok');
+  if (MODE === 'info') {
+    ok.style.display = 'none';
+    if (!p.link_url) document.getElementById('foot').style.display = 'none';
+  } else {
+    ok.textContent = MODE === 'kritisch' ? 'Verstanden' : 'Schließen';
+  }
   if (MODE === 'kritisch') document.getElementById('hint').textContent = 'Bitte bestätigen, um fortzufahren.';
-  document.getElementById('ok').focus();
+  try { await pywebview.api.fit(neededHeight()); } catch (e) {}
+  document.body.classList.add('ready');
+  if (MODE === 'kritisch') ok.focus();
+  started = true; last = Date.now();
   pywebview.api.shown();
 });
 
@@ -156,11 +196,11 @@ if (AUTO_MS > 0) {
   const sync = () => { const p = hover || focus; if (paused && !p) last = Date.now(); paused = p; };
   document.addEventListener('mouseenter', () => { hover = true; sync(); });
   document.addEventListener('mouseleave', () => { hover = false; sync(); });
-  document.addEventListener('focusin', e => { focus = e.target && e.target.matches(':focus-visible'); sync(); });
+  document.addEventListener('focusin', e => { focus = !!(e.target && e.target.matches(':focus-visible')); sync(); });
   document.addEventListener('focusout', () => { focus = false; sync(); });
   const bar = document.querySelector('.timer i');
   setInterval(() => {
-    if (closed || paused) return;
+    if (closed || paused || !started) return;
     const now = Date.now();
     left -= now - last; last = now;
     if (bar) bar.style.transform = 'scaleX(' + Math.max(0, left / AUTO_MS) + ')';
@@ -172,6 +212,9 @@ if (AUTO_MS > 0) {
 </html>"""
 
 _ICONS = {
+    "info": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+            'stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/>'
+            '<line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
     "wichtig": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
                'stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>'
                '<path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
@@ -185,59 +228,115 @@ _CLOSE_BTN = ('<button class="close" aria-label="Schließen" onclick="done()">'
 
 
 def _render(mode: str) -> str:
+    auto = _AUTO_CLOSE_S[mode] * 1000
     return (_HTML
             .replace("__CLASSES__", f"sev-{mode} mode-{mode}")
             .replace("__ICON__", _ICONS[mode])
-            .replace("__CLOSE__", _CLOSE_BTN if mode == "wichtig" else "")
-            .replace("__TIMER__", '<div class="timer"><i></i></div>' if mode == "wichtig" else "")
+            .replace("__CLOSE__", _CLOSE_BTN if mode != "kritisch" else "")
+            .replace("__TIMER__", '<div class="timer"><i></i></div>' if auto else "")
             .replace("__MODE__", mode)
-            .replace("__AUTO_MS__", str(_AUTO_CLOSE_S * 1000 if mode == "wichtig" else 0)))
+            .replace("__AUTO_MS__", str(auto)))
 
 
-def _estimate_height(msg: dict, mode: str) -> int:
-    """Fensterhoehe grob aus der Textlaenge — Rest scrollt im Body."""
-    per_line = 50 if mode == "wichtig" else 64
-    lines = 0
-    for para in (msg.get("body") or "").split("\n"):
-        lines += max(1, -(-len(para) // per_line))
-    if not (msg.get("body") or "").strip():
-        lines = 0
-    title_lines = max(1, -(-len(msg.get("title") or "") // (per_line - 8)))
-    base = 124 if mode == "wichtig" else 136
-    h = base + title_lines * 21 + lines * 21
-    return max(170, min(h, 420 if mode == "wichtig" else 540))
+# ── Fenster platzieren (physische Pixel, per ctypes) ─────────────────────────
+
+_user32 = ctypes.windll.user32
+_SWP_NOZORDER, _SWP_NOACTIVATE = 0x0004, 0x0010
 
 
-def _work_area() -> tuple[int, int, int, int] | None:
-    """Arbeitsbereich (ohne Taskleiste) in logischen Pixeln."""
+def _work_area() -> wintypes.RECT | None:
+    """Arbeitsbereich ohne Taskleiste. Der Prozess ist DPI-aware (pywebview
+    ruft SetProcessDPIAware) → physische Pixel."""
+    rect = wintypes.RECT()
     try:
-        rect = wintypes.RECT()
-        ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)  # SPI_GETWORKAREA
-        try:
-            scale = ctypes.windll.user32.GetDpiForSystem() / 96.0
-        except Exception:
-            scale = 1.0
-        scale = scale or 1.0
-        return (int(rect.left / scale), int(rect.top / scale),
-                int(rect.right / scale), int(rect.bottom / scale))
+        if _user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):  # SPI_GETWORKAREA
+            return rect
     except Exception:
-        return None
+        pass
+    return None
+
+
+def _find_hwnd(title: str) -> int | None:
+    """Sichtbares oder unsichtbares Top-Level-Fenster dieses Prozesses mit genau diesem Titel."""
+    pid = os.getpid()
+    found: list[int] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def cb(hwnd, _lparam):
+        wpid = wintypes.DWORD()
+        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
+        if wpid.value == pid:
+            # InternalGetWindowText schickt keine Nachricht ans Fenster
+            buf = ctypes.create_unicode_buffer(512)
+            _user32.InternalGetWindowText(hwnd, buf, 512)
+            if buf.value == title:
+                found.append(hwnd)
+                return False
+        return True
+
+    _user32.EnumWindows(cb, 0)
+    return found[0] if found else None
+
+
+def _scale(hwnd: int) -> float:
+    try:
+        dpi = _user32.GetDpiForWindow(hwnd) or _user32.GetDpiForSystem()
+    except Exception:
+        dpi = 96
+    return (dpi or 96) / 96.0
+
+
+def _place(hwnd: int, mode: str, css_height: int):
+    s = _scale(hwnd)
+    wa = _work_area()
+    w = round(_WIDTH[mode] * s)
+    h = round(max(120, css_height) * s)
+    if wa is not None:
+        h = min(h, int((wa.bottom - wa.top) * 0.85))
+        m = round(_MARGIN * s)
+        if mode == "kritisch":
+            x = wa.left + (wa.right - wa.left - w) // 2
+            y = wa.top + (wa.bottom - wa.top - h) // 2
+        else:
+            x, y = wa.right - w - m, wa.bottom - h - m
+    else:
+        x = y = 100
+    _user32.SetWindowPos(hwnd, 0, int(x), int(y), int(w), int(h), _SWP_NOZORDER | _SWP_NOACTIVATE)
 
 
 class MessageApi:
     """JS-Bridge eines Mitteilungsfensters."""
 
-    def __init__(self, msg: dict, mode: str, on_shown, on_close):
+    def __init__(self, msg: dict, mode: str, title: str, on_shown, on_close):
         self._msg = msg
         self._mode = mode
+        self._title = title
         self._on_shown = on_shown
         self._on_close = on_close
         self._shown = False
+        self.placed = False
         self.handled = False
 
     def get_payload(self) -> dict:
         m = self._msg
         return {k: str(m.get(k) or "") for k in ("header", "title", "body", "link_url", "link_label")}
+
+    def fit(self, css_height):
+        """Vom Fenster nach dem Rendern: Groesse + Position setzen."""
+        try:
+            hwnd = _find_hwnd(self._title)
+            if hwnd:
+                _place(hwnd, self._mode, int(css_height))
+                self.placed = True
+        except Exception:
+            logger.exception("Mitteilungsfenster: Platzieren fehlgeschlagen")
+
+    def ensure_visible(self):
+        """Sicherheitsnetz: ruft das Fenster fit() nicht auf (JS-Fehler),
+        nach ein paar Sekunden mit Standardhoehe sichtbar machen."""
+        if not self.placed and not self.handled:
+            logger.warning("Mitteilungsfenster: kein fit() — Standardgroesse")
+            self.fit(260 if self._mode == "kritisch" else 200)
 
     def shown(self):
         if not self._shown:
@@ -265,6 +364,7 @@ class MessageApi:
 _queue: collections.deque = collections.deque()
 _lock = threading.Lock()
 _window: "webview.Window | None" = None
+_counter = 0
 
 
 def enqueue_message(msg: dict, app_name: str = "Softshelf", on_shown=None, on_done=None):
@@ -282,31 +382,28 @@ def enqueue_message(msg: dict, app_name: str = "Softshelf", on_shown=None, on_do
 
 
 def _show_next():
-    global _window
+    global _window, _counter
     with _lock:
         if _window is not None or not _queue:
             return
         msg, app_name, on_shown, on_done = _queue.popleft()
-        mode = "kritisch" if msg.get("severity") == "kritisch" else "wichtig"
-        width = 380 if mode == "wichtig" else 480
-        height = _estimate_height(msg, mode)
-        x = y = None
-        if mode == "wichtig":
-            wa = _work_area()
-            if wa:
-                x, y = wa[2] - width - 16, wa[3] - height - 16
+        sev = msg.get("severity")
+        mode = sev if sev in ("info", "wichtig", "kritisch") else "info"
+        _counter += 1
+        # Eindeutiger Titel: daran findet fit() das Fenster per EnumWindows
+        title = f"{app_name} — {msg.get('header') or 'Mitteilung'} ({_counter})"
 
         def on_close(result: str):
             _finish(result, on_done)
 
-        api = MessageApi(msg, mode, on_shown, on_close)
-        title = f"{app_name} — {msg.get('header') or 'Mitteilung'}"
+        api = MessageApi(msg, mode, title, on_shown, on_close)
         try:
+            # Entsteht ausserhalb des Bildschirms; fit() holt es an die richtige Stelle
             _window = webview.create_window(
                 title, html=_render(mode), js_api=api,
-                width=width, height=height, x=x, y=y,
-                resizable=False, frameless=True, easy_drag=(mode == "wichtig"),
-                on_top=True, focus=True, text_select=True,
+                width=_WIDTH[mode], height=240, x=_OFFSCREEN, y=_OFFSCREEN,
+                resizable=False, frameless=True, easy_drag=(mode != "kritisch"),
+                on_top=True, focus=(mode == "kritisch"), text_select=True,
             )
         except Exception:
             _window = None
@@ -315,6 +412,7 @@ def _show_next():
                 on_done("closed_unacked" if mode == "kritisch" else "closed")
             return
         _window.events.closed += lambda: _on_window_closed(api, mode, on_done)
+    threading.Timer(6.0, api.ensure_visible).start()
 
 
 def _finish(result: str, on_done):

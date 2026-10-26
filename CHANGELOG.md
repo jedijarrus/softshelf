@@ -14,8 +14,9 @@ Mitteilungen an die Benutzer (Server + Tray 2.10.0).
 ### Added
 
 - **Mitteilungen** (Admin → Verwaltung → Mitteilungen): Hinweise an die
-  Benutzer in drei Stufen — *Info* (Windows-Benachrichtigung), *Wichtig*
-  (Hinweisfenster unten rechts, schließt nach 60 s oder per Klick) und
+  Benutzer in drei Stufen — *Info* (kompaktes Fenster unten rechts, schließt
+  nach 10 s), *Wichtig* (Hinweisfenster unten rechts, schließt nach 60 s oder
+  per Klick) und
   *Kritisch* (Fenster in der Bildschirmmitte, muss mit „Verstanden"
   bestätigt werden und erscheint bis dahin nach jeder Anmeldung erneut).
   Kopfzeile, Titel, Text und optionaler https-Link frei wählbar; Editor mit

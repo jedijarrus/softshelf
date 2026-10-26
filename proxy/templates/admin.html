@@ -7515,7 +7515,7 @@ body.help-active [data-help]:not(.tab)::after {
           <div class="field"><label>Text <span class="msg-count-hint" id="msg-body-count"></span></label><textarea class="input" id="msg-body" rows="5" maxlength="2000" oninput="msgPreview()"></textarea></div>
           <div class="field"><label>Stufe</label>
             <select class="input" id="msg-severity" onchange="msgPreview()">
-              <option value="info">Info — Benachrichtigung</option>
+              <option value="info">Info — kurzer Hinweis unten rechts</option>
               <option value="wichtig">Wichtig — Hinweisfenster</option>
               <option value="kritisch">Kritisch — muss bestätigt werden</option>
             </select></div>
@@ -17504,7 +17504,7 @@ function msgPreview() {
   btns.push(`<span class="mp-btn primary">${sev === 'kritisch' ? 'Verstanden' : 'Schließen'}</span>`);
   _m('mp-actions').innerHTML = btns.join('');
   const notes = {
-    info: 'Windows-Benachrichtigung am Bildschirmrand; zusätzlich im Kiosk unter „Mitteilungen".',
+    info: 'Kompaktes Fenster unten rechts, schließt nach 10 Sekunden. Zusätzlich im Kiosk unter „Mitteilungen".',
     wichtig: 'Hinweisfenster unten rechts — schließt per Klick oder nach 60 Sekunden. Erscheint pro Benutzer einmal.',
     kritisch: 'Fenster in der Bildschirmmitte, bleibt im Vordergrund bis „Verstanden" — auch nach Neustart.',
   };
