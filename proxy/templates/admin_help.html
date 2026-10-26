@@ -760,10 +760,11 @@
 <h3>Zielgruppen</h3>
 <p>Ohne Auswahl geht eine Mitteilung an <b>alle Geräte</b>. Unter <b>Mitteilungen → Zielgruppen</b> lassen sich wiederverwendbare Gruppen anlegen:</p>
 <ul>
-  <li><b>Feste Geräteliste</b> — Auswahl einzelner Geräte.</li>
+  <li><b>Feste Geräteliste</b> — Auswahl einzelner Geräte. Die Suche findet Hostname und angemeldeten Benutzer (mehrere Wörter = alle müssen passen), <kbd>Enter</kbd> wählt den ersten Treffer. Ausgewählte Geräte stehen oben als Chips und lassen sich dort mit × entfernen.</li>
   <li><b>Dynamisch</b> — alle Regeln müssen zutreffen: Software installiert / nicht installiert / veraltet / Version kleiner als (winget-ID, choco-Name oder Paketname), Tray-Version kleiner als, Profil, Rollout-Ring, Hostname-Muster (<code>PC-*</code>).</li>
 </ul>
 <p>Dynamische Gruppen werden bei jeder Zustellung neu ausgewertet (max. 60&nbsp;s Cache). Beispiel: Zielgruppe „Software veraltet: Postman.Postman" + Mitteilung „Bitte Postman im Kiosk aktualisieren" — wer aktualisiert hat, fällt automatisch raus. <code>Vorschau</code> im Gruppen-Editor zeigt, auf welche Geräte die Regeln gerade zutreffen.</p>
+<p>Im Mitteilungs-Editor zeigt der Bereich <b>Empfänger</b> rechts, an welche Geräte (mit Benutzer) die Mitteilung mit der gewählten Zielgruppe geht. Geräte mit einem Tray vor 2.10.0 sind markiert — dort erscheint nichts.</p>
 
 <h3>Quittungen</h3>
 <p>Pro Gerät und Windows-Benutzer: <b>zugestellt</b> (Tray hat die Mitteilung abgeholt), <b>gesehen</b> (angezeigt), <b>bestätigt</b> (nur Kritisch). Die Detailansicht listet je Ausgabe die Quittungen und die Geräte, die die Mitteilung noch nicht bekommen haben.</p>
@@ -988,6 +989,7 @@
   <li><b>Letzter Kontakt RMM</b>: Was Tactical sieht (eigene last_seen-Quelle, kann abweichen).</li>
   <li><b>Agent-ID</b> (klickbar-to-copy).</li>
   <li><b>Filter</b>: Hostname, Benutzer oder Agent-ID — alle drei werden durchsucht.</li>
+  <li><b>Online</b>: zeigt nur Geräte, deren letzter Kontakt zum RMM weniger als 5 Minuten her ist. Kombinierbar mit den Versions-Filtern.</li>
   <li><b>CSV-Export</b>: Aktualisieren-Button → CSV-Export-Button.</li>
 </ul>
 

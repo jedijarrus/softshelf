@@ -4939,6 +4939,12 @@ html[data-theme="dark"] .cm-s-softshelf-light .cm-bracket   { color: #d1d5db; }
 }
 .agent-ver-banner.warn { border-color: var(--amber-bd); }
 .agent-ver-filters { display: flex; gap: 6px; margin: 0 0 10px; }
+.agent-filter-sep { width: 1px; background: var(--border); margin: 4px; }
+.agent-online-filter { display: inline-flex; align-items: center; gap: 6px; }
+.agent-online-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+.agent-online-count { font-family: var(--mono); font-size: 11px; color: var(--fg-4); }
+.agent-online-filter.active { background: var(--green-bg); color: var(--green); border-color: var(--green-bd); }
+.agent-online-filter.active .agent-online-count { color: var(--green); }
 .agent-ver-filters .agent-ver-filter.active {
   background: var(--fg);
   color: var(--bg);
@@ -5750,10 +5756,46 @@ body.help-active [data-help]:not(.tab)::after {
 .msg-warn { border: 1px solid var(--amber-bd); background: var(--amber-bg); color: var(--fg-2); border-radius: var(--r); padding: 8px 12px; font-size: 12px; margin-bottom: 14px; }
 .tg-rule { display: grid; grid-template-columns: 210px 1fr auto; gap: 8px; margin-bottom: 8px; align-items: center; }
 .tg-rule .tg-rule-args { display: flex; gap: 6px; }
-.tg-agents { max-height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: var(--r); padding: 6px 10px; }
-.tg-agents label { display: flex; gap: 8px; align-items: center; font-size: 12.5px; padding: 3px 0; font-weight: 400; }
-.tg-preview { font-size: 12px; color: var(--fg-4); margin-top: 12px; }
-.tg-preview .hosts { font-family: var(--mono); font-size: 11px; color: var(--fg-5); margin-top: 4px; max-height: 90px; overflow: auto; }
+/* Feste Geraeteliste: Auswahl oben als Chips, darunter durchsuchbare Liste */
+.tg-sel-head { display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; font-weight: 600; color: var(--fg-2); margin-bottom: 6px; }
+.tg-count { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--blue); background: var(--blue-bg); border: 1px solid var(--blue-bd); border-radius: 999px; padding: 0 7px; margin-left: 6px; }
+.tg-link { background: none; border: none; padding: 2px 0; font-size: 12px; color: var(--fg-4); cursor: pointer; }
+.tg-link:hover { color: var(--fg); text-decoration: underline; }
+.tg-sel { display: flex; flex-wrap: wrap; gap: 6px; min-height: 42px; max-height: 136px; overflow: auto; padding: 8px; border: 1px solid var(--blue-bd); background: var(--blue-bg); border-radius: var(--r); margin-bottom: 14px; }
+.tg-chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 3px 0 9px; border: 1px solid var(--blue-bd); background: var(--bg); border-radius: 999px; font-size: 12px; color: var(--fg-2); max-width: 100%; }
+.tg-chip .h { font-family: var(--mono); font-size: 11.5px; font-weight: 600; }
+.tg-chip .u { color: var(--fg-5); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
+.tg-chip.gone { border-style: dashed; }
+.tg-chip.gone .h { color: var(--fg-5); }
+.tg-chip button { width: 18px; height: 18px; border: none; border-radius: 50%; background: none; color: var(--fg-4); cursor: pointer; font-size: 14px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+.tg-chip button:hover { background: var(--bg-hover); color: var(--fg); }
+.tg-empty { font-size: 12px; color: var(--fg-5); align-self: center; padding: 2px; }
+.tg-search-row { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
+.tg-search-row .tg-hits { white-space: nowrap; font-size: 11.5px; color: var(--fg-5); }
+.tg-agents { height: 260px; overflow: auto; border: 1px solid var(--border); border-radius: var(--r); }
+.tg-agents label { display: grid; grid-template-columns: 16px minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: center; font-size: 12.5px; padding: 6px 10px; font-weight: 400; border-bottom: 1px solid var(--border); cursor: pointer; }
+.tg-agents label:last-child { border-bottom: none; }
+.tg-agents label:hover { background: var(--bg-hover); }
+.tg-agents label.on { background: var(--blue-bg); }
+.tg-agents label.on .h { font-weight: 600; }
+.tg-agents .h { font-family: var(--mono); font-size: 12px; color: var(--fg-2); }
+.tg-agents .u { color: var(--fg-5); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tg-agents .tg-empty { display: block; padding: 14px 10px; }
+.tg-preview { margin-top: 14px; }
+/* Empfaengerliste (Mitteilungs-Editor + Zielgruppen-Vorschau) */
+.rcpt-head { font-size: 12.5px; color: var(--fg-3); margin-bottom: 4px; }
+.rcpt-head strong { color: var(--fg); font-size: 13px; }
+.rcpt-note { font-size: 11.5px; color: var(--fg-5); margin-bottom: 6px; line-height: 1.45; }
+.rcpt-note.warn { color: var(--amber); }
+.rcpt-list { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: var(--r); }
+.rcpt-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 5px 10px; border-bottom: 1px solid var(--border); font-size: 12px; align-items: center; }
+.rcpt-row:last-child { border-bottom: none; }
+.rcpt-row .h { font-family: var(--mono); font-size: 11.5px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rcpt-row .u { color: var(--fg-5); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 130px; }
+.rcpt-row.old .h { color: var(--fg-5); }
+.rcpt-tag { font-family: var(--mono); font-size: 10.5px; color: var(--amber); background: var(--amber-bg); border: 1px solid var(--amber-bd); border-radius: 999px; padding: 0 6px; margin-left: 4px; }
+.rcpt-search { margin-bottom: 6px; }
+.rcpt-search .input { height: 28px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -7524,7 +7566,7 @@ body.help-active [data-help]:not(.tab)::after {
               <input class="input" id="msg-link-url" style="flex:2" placeholder="https://…" maxlength="500" oninput="msgPreview()">
               <input class="input" id="msg-link-label" style="flex:1" placeholder="Beschriftung" maxlength="40" oninput="msgPreview()">
             </div></div>
-          <div class="field"><label>Zielgruppe</label><select class="input" id="msg-target"></select></div>
+          <div class="field"><label>Zielgruppe</label><select class="input" id="msg-target" onchange="msgTargetChanged()"></select></div>
           <div class="field"><label>Zeitplan</label>
             <div class="msg-inline">
               <select class="input" id="msg-mode" style="max-width:170px" onchange="_msgModeChanged()">
@@ -7556,6 +7598,8 @@ body.help-active [data-help]:not(.tab)::after {
             <div class="mp-actions" id="mp-actions"></div>
           </div>
           <div class="msg-preview-note" id="msg-preview-note"></div>
+          <div class="msg-preview-label" style="margin-top:20px">Empfänger</div>
+          <div id="msg-rcpt"></div>
         </div>
       </div>
     </div>
@@ -7575,7 +7619,7 @@ body.help-active [data-help]:not(.tab)::after {
       <div class="field" style="margin-bottom:12px"><label>Art</label>
         <div class="msg-days">
           <label><input type="radio" name="tg-kind" value="dynamic" onchange="tgKindChanged()"> Dynamisch nach Regeln</label>
-          <label><input type="radio" name="tg-kind" value="static" onchange="tgKindChanged()"> Feste Geräteliste</label>
+          <label><input type="radio" name="tg-kind" value="static" onchange="tgKindChanged(true)"> Feste Geräteliste</label>
         </div></div>
       <div id="tg-dynamic">
         <div class="hint" style="margin-bottom:8px">Alle Regeln müssen zutreffen. Die Gruppe wird bei jeder Zustellung neu ausgewertet.</div>
@@ -7583,7 +7627,15 @@ body.help-active [data-help]:not(.tab)::after {
         <button class="btn btn-ghost btn-sm" onclick="tgAddRule()">+ Regel</button>
       </div>
       <div id="tg-static">
-        <input class="input" id="tg-agent-filter" placeholder="Geräte filtern …" oninput="tgFilterAgents()" style="margin-bottom:8px">
+        <div class="tg-sel-head">
+          <span>Ausgewählt<span class="tg-count" id="tg-sel-count">0</span></span>
+          <button type="button" class="tg-link" id="tg-sel-clear" onclick="tgClearSelection()">Alle entfernen</button>
+        </div>
+        <div class="tg-sel" id="tg-sel"></div>
+        <div class="tg-search-row">
+          <div class="input-search"><input class="input" id="tg-agent-filter" placeholder="Gerät oder Benutzer suchen …" autocomplete="off" oninput="tgFilterAgents()" onkeydown="tgFilterKey(event)"></div>
+          <span class="tg-hits" id="tg-hits"></span>
+        </div>
         <div class="tg-agents" id="tg-agents"></div>
       </div>
       <div class="tg-preview" id="tg-preview"></div>
@@ -12318,6 +12370,7 @@ function nowStamp() {
 
 // Filter-State fuer Client-Version (Agent-Mgmt v2.4)
 let _agentVersionFilter = 'all';   // 'all' | 'outdated' | 'unknown'
+let _agentOnlineOnly = false;      // nur Agents mit RMM-Kontakt < 5 min (wie agentStatus)
 let _agentVersionDist = null;       // {total, current, outdated, unknown, current_version}
 const _selectedAgentIds = new Set();
 
@@ -12327,6 +12380,11 @@ async function loadAgentsVersionDist() {
   } catch (e) {
     _agentVersionDist = null;
   }
+}
+
+function toggleAgentOnlineFilter() {
+  _agentOnlineOnly = !_agentOnlineOnly;
+  renderAgents();
 }
 
 function setAgentVersionFilter(mode, btn) {
@@ -12473,6 +12531,9 @@ function renderAgents() {
   } else if (_agentVersionFilter === 'unknown') {
     agents = agents.filter(a => !a.client_version);
   }
+  const rmmOnline = a => agentStatus(a.rmm_last_seen).cls === 'status-online';
+  const onlineCount = cachedAgents.filter(rmmOnline).length;
+  if (_agentOnlineOnly) agents = agents.filter(rmmOnline);
 
   let bannerHtml = '';
   if (dist && dist.total) {
@@ -12484,16 +12545,19 @@ function renderAgents() {
       + (cv ? ' · Soll-Version: <code>' + esc(cv) + '</code>' : ' <span style="color:var(--fg-4)">· Kein aktueller Build</span>')
       + '</div>'
       + (dist.outdated > 0 ? '<button class="btn btn-primary btn-sm" onclick="bulkUpdateAllOutdated()">' + dist.outdated + ' veraltete updaten</button>' : '')
-      + '</div>'
-      + '<div class="agent-ver-filters">'
-      + '<button class="btn btn-ghost btn-sm agent-ver-filter ' + (_agentVersionFilter==='all'?'active':'') + '" onclick="setAgentVersionFilter(\'all\', this)">Alle</button>'
-      + '<button class="btn btn-ghost btn-sm agent-ver-filter ' + (_agentVersionFilter==='outdated'?'active':'') + '" onclick="setAgentVersionFilter(\'outdated\', this)">Veraltet</button>'
-      + '<button class="btn btn-ghost btn-sm agent-ver-filter ' + (_agentVersionFilter==='unknown'?'active':'') + '" onclick="setAgentVersionFilter(\'unknown\', this)">Unbekannt</button>'
       + '</div>';
   }
+  bannerHtml += '<div class="agent-ver-filters">'
+    + '<button class="btn btn-ghost btn-sm agent-ver-filter ' + (_agentVersionFilter==='all'?'active':'') + '" onclick="setAgentVersionFilter(\'all\', this)">Alle</button>'
+    + '<button class="btn btn-ghost btn-sm agent-ver-filter ' + (_agentVersionFilter==='outdated'?'active':'') + '" onclick="setAgentVersionFilter(\'outdated\', this)">Veraltet</button>'
+    + '<button class="btn btn-ghost btn-sm agent-ver-filter ' + (_agentVersionFilter==='unknown'?'active':'') + '" onclick="setAgentVersionFilter(\'unknown\', this)">Unbekannt</button>'
+    + '<span class="agent-filter-sep"></span>'
+    + '<button class="btn btn-ghost btn-sm agent-online-filter ' + (_agentOnlineOnly?'active':'') + '" onclick="toggleAgentOnlineFilter()" title="Letzter Kontakt RMM unter 5 Minuten">'
+    + '<span class="agent-online-dot"></span>Online <span class="agent-online-count">' + onlineCount + '</span></button>'
+    + '</div>';
 
   if (!agents.length) {
-    el.innerHTML = bannerHtml + (filter
+    el.innerHTML = bannerHtml + ((filter || _agentVersionFilter !== 'all' || _agentOnlineOnly)
       ? '<div class="empty"><h3>Keine Treffer</h3><p>Filter zurücksetzen</p></div>'
       : '<div class="empty"><h3>Keine Agents registriert</h3><p>Clients registrieren sich beim Deployment</p></div>');
     return;
@@ -17332,6 +17396,9 @@ let _tgEditId = null;
 let _msgAgents = null;
 let _msgProfiles = null;
 let _msgConfirmFn = null;
+let _msgAgentNames = new Map();   // alle Agents inkl. gesperrter, fuer Chips
+let _tgSel = new Set();           // Auswahl der festen Geraeteliste
+const MSG_MIN_TRAY = '2.10.0';
 const MSG_SEV_LABEL = {info: 'Info', wichtig: 'Wichtig', kritisch: 'Kritisch'};
 const MSG_STATE_LABEL = {aktiv: 'Aktiv', geplant: 'Geplant', beendet: 'Beendet', pausiert: 'Pausiert', zurueckgezogen: 'Zurückgezogen'};
 const MSG_DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
@@ -17416,12 +17483,13 @@ function renderMessages() {
 }
 
 // Editor
-function openMessageEditor(id, activateAfterSave) {
+async function openMessageEditor(id, activateAfterSave) {
   const fromDetail = _m('msg-detail-modal').classList.contains('open');
   if (!fromDetail) _msgDetailId = null;
   _m('msg-detail-modal').classList.remove('open');
   _msgEditId = id;
   _msgActivateAfterSave = !!activateAfterSave;
+  await _msgEnsureRefs();  // Geraeteliste fuer die Empfaengeranzeige
   const m = id ? _msgList.find(x => x.id === id) : null;
   const s = (m && m.schedule) || {mode: 'once'};
   _m('msg-modal-title').textContent = m ? 'Mitteilung bearbeiten' : 'Neue Mitteilung';
@@ -17435,6 +17503,7 @@ function openMessageEditor(id, activateAfterSave) {
   _m('msg-target').innerHTML = '<option value="">Alle Geräte</option>' + _tgList.map(g =>
     `<option value="${g.id}">${esc(g.name)} (${g.member_count} Gerät${g.member_count === 1 ? '' : 'e'})</option>`).join('');
   _m('msg-target').value = m && m.target_group_id ? String(m.target_group_id) : '';
+  msgTargetChanged();
   _m('msg-mode').value = s.mode || 'once';
   _m('msg-time').value = s.time || '09:00';
   _m('msg-weekdays-only').checked = !!s.weekdays_only;
@@ -17459,6 +17528,62 @@ function openMessageEditor(id, activateAfterSave) {
 function closeMessageEditor() {
   _m('msg-modal').classList.remove('open');
   if (_msgDetailId) openMessageDetail(_msgDetailId);
+}
+
+// Empfaenger: an welche Geraete die Mitteilung mit der gewaehlten Zielgruppe geht
+function msgTargetChanged() {
+  const v = _m('msg-target').value, el = _m('msg-rcpt');
+  if (!v) {
+    _rcptRender(el, (_msgAgents || []).map(a => a.agent_id), 'Alle registrierten Geräte, auch später hinzukommende.');
+    return;
+  }
+  const g = _tgList.find(x => String(x.id) === v);
+  if (!g) { el.innerHTML = ''; return; }
+  _rcptRender(el, g.member_ids || [], g.kind === 'dynamic'
+    ? 'Stand jetzt. Die Regeln werden bei jeder Ausgabe neu ausgewertet.' : '');
+}
+
+function _msgVerLt(a, b) {
+  const pa = String(a).split(/[^0-9]+/).filter(Boolean).map(Number);
+  const pb = String(b).split(/[^0-9]+/).filter(Boolean).map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x !== y) return x < y;
+  }
+  return false;
+}
+
+// Tray vor 2.10.0 kennt keine Mitteilungen (wie _old_tray_count im Backend)
+function _msgOldTray(a) { return !a.client_version || _msgVerLt(a.client_version, MSG_MIN_TRAY); }
+
+// Suchtext aus Hostname + Benutzer; alle Woerter der Eingabe muessen vorkommen
+function _msgSearchKey(a) { return ((a.hostname || '') + ' ' + (a.logged_in_user || '')).toLowerCase(); }
+function _msgMatch(key, q) { return q.split(/\s+/).filter(Boolean).every(t => key.includes(t)); }
+
+function _rcptRender(el, ids, note) {
+  const byId = new Map((_msgAgents || []).map(a => [a.agent_id, a]));
+  const list = [...ids].map(i => byId.get(i)).filter(Boolean)
+    .sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
+  const n = list.length, old = list.filter(_msgOldTray).length;
+  let html = `<div class="rcpt-head"><strong>${n}</strong> Gerät${n === 1 ? '' : 'e'}</div>`;
+  if (note) html += `<div class="rcpt-note">${esc(note)}</div>`;
+  if (old) html += `<div class="rcpt-note warn">${old} davon mit Tray vor ${MSG_MIN_TRAY}, dort erscheint die Mitteilung nicht.</div>`;
+  if (!n) { el.innerHTML = html + '<div class="rcpt-note">Trifft derzeit auf kein Gerät zu.</div>'; return; }
+  if (n > 8) html += `<div class="input-search rcpt-search"><input class="input" placeholder="Gerät oder Benutzer suchen …" autocomplete="off" oninput="_rcptFilter(this)"></div>`;
+  html += `<div class="rcpt-list">${list.map(a => {
+    const o = _msgOldTray(a);
+    return `<div class="rcpt-row${o ? ' old' : ''}" data-q="${esc(_msgSearchKey(a))}">
+      <div class="h">${esc(a.hostname)}${o ? `<span class="rcpt-tag" title="Tray-Version">${esc(a.client_version || 'kein Tray')}</span>` : ''}</div>
+      <div class="u">${esc(a.logged_in_user || '')}</div></div>`;
+  }).join('')}</div>`;
+  el.innerHTML = html;
+}
+
+function _rcptFilter(inp) {
+  const q = inp.value.trim().toLowerCase();
+  inp.parentElement.nextElementSibling.querySelectorAll('.rcpt-row').forEach(r => {
+    r.style.display = _msgMatch(r.dataset.q || '', q) ? '' : 'none';
+  });
 }
 
 function _msgModeChanged() {
@@ -17693,8 +17818,9 @@ function renderTargetGroups() {
 async function _msgEnsureRefs() {
   if (!_msgAgents) {
     try {
-      _msgAgents = (await api('GET', '/admin/api/agents'))
-        .filter(a => !a.banned)
+      const all = await api('GET', '/admin/api/agents');
+      _msgAgentNames = new Map(all.map(a => [a.agent_id, a]));
+      _msgAgents = all.filter(a => !a.banned)
         .sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
     } catch (e) { _msgAgents = []; }
   }
@@ -17712,11 +17838,9 @@ async function openTargetGroupEditor(id) {
   document.querySelector(`input[name="tg-kind"][value="${g ? g.kind : 'dynamic'}"]`).checked = true;
   _m('tg-rules').innerHTML = '';
   (g && g.kind === 'dynamic' && g.rules.length ? g.rules : [{type: 'installed', ident: ''}]).forEach(r => tgAddRule(r));
-  const sel = new Set(g && g.kind === 'static' ? g.agent_ids : []);
+  _tgSel = new Set(g && g.kind === 'static' ? g.agent_ids : []);
   _m('tg-agent-filter').value = '';
-  _m('tg-agents').innerHTML = _msgAgents.map(a => `
-    <label data-host="${esc((a.hostname || '').toLowerCase())}"><input type="checkbox" value="${esc(a.agent_id)}" ${sel.has(a.agent_id) ? 'checked' : ''}> ${esc(a.hostname)}<span style="color:var(--fg-5);margin-left:auto">${esc(a.logged_in_user || '')}</span></label>`).join('')
-    || '<div class="hint">Keine Geräte registriert.</div>';
+  _tgRenderAgents();
   _m('tg-delete').style.display = g ? '' : 'none';
   _m('tg-preview').innerHTML = '';
   tgKindChanged();
@@ -17726,18 +17850,85 @@ async function openTargetGroupEditor(id) {
 
 function closeTargetGroupEditor() { _m('tg-modal').classList.remove('open'); }
 
-function tgKindChanged() {
+function tgKindChanged(byUser) {
   const kind = document.querySelector('input[name="tg-kind"]:checked').value;
   _m('tg-dynamic').style.display = kind === 'dynamic' ? '' : 'none';
   _m('tg-static').style.display = kind === 'static' ? '' : 'none';
   _m('tg-preview').innerHTML = '';
+  if (byUser && kind === 'static') _m('tg-agent-filter').focus();
 }
+
+// Liste beim Oeffnen: Ausgewaehlte zuerst, Rest alphabetisch. Beim Anhaken bleibt
+// die Reihenfolge stabil, damit keine Zeile unter dem Mauszeiger wegspringt.
+function _tgRenderAgents() {
+  const on = a => _tgSel.has(a.agent_id);
+  const list = [...(_msgAgents || [])].sort((a, b) =>
+    (on(b) - on(a)) || (a.hostname || '').localeCompare(b.hostname || ''));
+  _m('tg-agents').innerHTML = list.length
+    ? '<div class="tg-empty" id="tg-nohit" style="display:none"></div>' + list.map(a => `
+      <label class="${on(a) ? 'on' : ''}" data-q="${esc(_msgSearchKey(a))}">
+        <input type="checkbox" value="${esc(a.agent_id)}" ${on(a) ? 'checked' : ''} onchange="tgToggleAgent(this.value, this.checked)">
+        <span class="h">${esc(a.hostname)}</span><span class="u">${esc(a.logged_in_user || '')}</span>
+      </label>`).join('')
+    : '<div class="tg-empty">Keine Geräte registriert.</div>';
+  tgFilterAgents();
+  _tgRenderSel();
+}
+
+function _tgRenderSel() {
+  const sel = [..._tgSel].map(id => {
+    const a = _msgAgentNames.get(id);
+    return a ? {...a, gone: !!a.banned} : {agent_id: id, hostname: 'Unbekanntes Gerät', gone: true};
+  }).sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
+  _m('tg-sel-count').textContent = sel.length;
+  _m('tg-sel-clear').style.visibility = sel.length ? '' : 'hidden';
+  _m('tg-sel').innerHTML = sel.map(a => `
+    <span class="tg-chip${a.gone ? ' gone' : ''}"${a.gone ? ' title="Gerät gesperrt oder nicht mehr registriert, bekommt keine Mitteilungen"' : ''}>
+      <span class="h">${esc(a.hostname)}</span>${a.logged_in_user ? `<span class="u">${esc(a.logged_in_user)}</span>` : ''}
+      <button type="button" aria-label="${esc(a.hostname)} entfernen" title="Entfernen" onclick="tgToggleAgent(${jsStr(a.agent_id)}, false)">&times;</button>
+    </span>`).join('')
+    || '<span class="tg-empty">Noch keine Geräte ausgewählt. Unten suchen und anhaken.</span>';
+}
+
+function tgToggleAgent(id, on) {
+  if (on) _tgSel.add(id); else _tgSel.delete(id);
+  const cb = [..._m('tg-agents').querySelectorAll('input[type=checkbox]')].find(c => c.value === id);
+  if (cb) { cb.checked = on; cb.closest('label').classList.toggle('on', on); }
+  _tgRenderSel();
+}
+
+function tgClearSelection() { [..._tgSel].forEach(id => tgToggleAgent(id, false)); }
 
 function tgFilterAgents() {
   const q = _m('tg-agent-filter').value.trim().toLowerCase();
-  _m('tg-agents').querySelectorAll('label').forEach(l => {
-    l.style.display = !q || (l.dataset.host || '').includes(q) ? '' : 'none';
+  const rows = [..._m('tg-agents').querySelectorAll('label')];
+  let hits = 0;
+  rows.forEach(l => {
+    const hit = _msgMatch(l.dataset.q || '', q);
+    l.style.display = hit ? '' : 'none';
+    if (hit) hits++;
   });
+  const nohit = _m('tg-nohit');
+  if (nohit) {
+    nohit.style.display = !q || hits > 0 ? 'none' : '';
+    nohit.textContent = `Kein Gerät gefunden für „${q}“.`;
+  }
+  _m('tg-hits').textContent = q ? `${hits} von ${rows.length} · Enter wählt den ersten` : `${rows.length} Geräte`;
+}
+
+// Enter: ersten noch nicht ausgewaehlten Treffer anhaken; Esc: Suche leeren
+function tgFilterKey(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const row = [..._m('tg-agents').querySelectorAll('label')]
+      .find(l => l.style.display !== 'none' && !l.querySelector('input').checked);
+    if (row) { tgToggleAgent(row.querySelector('input').value, true); e.target.select(); }
+  } else if (e.key === 'Escape' && e.target.value) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.target.value = '';
+    tgFilterAgents();
+  }
 }
 
 function tgAddRule(r) {
@@ -17780,8 +17971,7 @@ function _tgCollect() {
     if (q('.tg-pattern')) r.pattern = q('.tg-pattern').value.trim();
     return r;
   });
-  const agent_ids = [..._m('tg-agents').querySelectorAll('input:checked')].map(c => c.value);
-  return {name: _m('tg-name').value.trim(), kind, rules, agent_ids};
+  return {name: _m('tg-name').value.trim(), kind, rules, agent_ids: [..._tgSel]};
 }
 
 async function tgPreview() {
@@ -17790,8 +17980,7 @@ async function tgPreview() {
   body.name = body.name || 'Vorschau';
   try {
     const r = await api('POST', '/admin/api/target-groups/preview', body);
-    el.innerHTML = `Trifft aktuell auf <strong>${r.count}</strong> Gerät${r.count === 1 ? '' : 'e'} zu.`
-      + (r.hostnames.length ? `<div class="hosts">${r.hostnames.map(esc).join(', ')}</div>` : '');
+    _rcptRender(el, r.agent_ids || [], body.kind === 'dynamic' ? 'Stand jetzt.' : '');
   } catch (e) { el.innerHTML = ''; }
 }
 
