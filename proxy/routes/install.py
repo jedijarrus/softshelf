@@ -826,6 +826,13 @@ def _is_msstore_id(winget_id: str) -> bool:
     return bool(_MSSTORE_ID_RE.fullmatch(winget_id or ""))
 
 
+def _winget_run_as_user(winget_id: str, pkg: dict | None) -> bool:
+    """User-Kontext fuer msstore-IDs und Pakete mit winget_scope 'user'.
+    Per-user-Installer (z. B. Postman/Squirrel) landen unter SYSTEM sonst im
+    SYSTEM-Profil und haengen dort an Verknuepfungen bzw. unsichtbaren Dialogen."""
+    return _is_msstore_id(winget_id) or (pkg or {}).get("winget_scope") == "user"
+
+
 def _build_winget_command(
     action: str,
     winget_id: str,
@@ -1715,7 +1722,7 @@ async def dispatch_winget_adhoc_uninstall(
     _spawn_bg(_deliver_command_bg(
         agent_id, hostname, winget_id, display_name,
         cmd, "uninstall", "winget", log_id=log_id,
-        run_as_user=_is_msstore_id(winget_id),
+        run_as_user=_winget_run_as_user(winget_id, pkg),
     ))
     return log_id
 
@@ -1745,7 +1752,7 @@ async def dispatch_winget_adhoc_upgrade(
     _spawn_bg(_deliver_command_bg(
         agent_id, hostname, winget_id, display_name,
         cmd, "upgrade", "winget", log_id=log_id,
-        run_as_user=_is_msstore_id(winget_id),
+        run_as_user=_winget_run_as_user(winget_id, pkg),
     ))
     return log_id
 
@@ -2055,7 +2062,7 @@ async def dispatch_downgrade_for_agent(
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
             cmd, "downgrade", "winget", log_id=log_id,
-            run_as_user=_is_msstore_id(package_name),
+            run_as_user=_winget_run_as_user(package_name, pkg),
         ))
     else:  # choco
         if not _is_safe_package_name(package_name):
@@ -2215,7 +2222,7 @@ async def dispatch_install_for_agent(
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
             cmd, action, "winget", log_id=log_id,
-            run_as_user=_is_msstore_id(package_name),
+            run_as_user=_winget_run_as_user(package_name, pkg),
         ))
 
     elif ptype == "plugin":
@@ -2379,7 +2386,6 @@ async def dispatch_uninstall_for_agent(
             display_name=pkg.get("display_name") or "",
             uninstall_override=(pkg.get("uninstall_cmd") or "").strip(),
         )
-        scope = pkg.get("winget_scope") or "auto"
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
         log_id = await _register_or_reuse_log(
@@ -2390,7 +2396,7 @@ async def dispatch_uninstall_for_agent(
         _spawn_bg(_deliver_command_bg(
             agent_id, hostname, package_name, pkg["display_name"],
             cmd, "uninstall", "winget", log_id=log_id,
-            run_as_user=_is_msstore_id(package_name),
+            run_as_user=_winget_run_as_user(package_name, pkg),
         ))
 
     elif ptype == "plugin":

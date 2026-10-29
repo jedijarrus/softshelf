@@ -7,6 +7,18 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **winget Scope „user“ läuft jetzt wirklich im User-Kontext.** Bisher ließ
+  Scope `user` nur `--scope machine` weg, installiert wurde trotzdem als
+  SYSTEM. Per-user-Installer wie Postman (Squirrel) landeten dadurch im
+  SYSTEM-Profil und hingen an einem unsichtbaren Fehlerdialog beim Anlegen
+  der Verknüpfungen, die Aktion stand bis zum Watchdog auf „Läuft“.
+  Install, Upgrade, Downgrade und Uninstall (auch Ad-hoc aus dem
+  Agent-Detail) nutzen jetzt `run_as_user`, wie in der Hilfe beschrieben.
+
 ## [2.11.0] – 2026-10-26
 
 Rolle „Mitteilungen“, Excel-Export und Komfort im Mitteilungs-Editor. Nur
