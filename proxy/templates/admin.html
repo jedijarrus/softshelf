@@ -15454,6 +15454,7 @@ async function saveUser() {
         display_name: body.display_name,
         email: body.email,
         is_active: body.is_active,
+        role: body.role,
       };
       if (body.password) patch.password = body.password;
       await api('PATCH', `/admin/api/users/${_editingUserId}`, patch);
