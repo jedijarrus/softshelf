@@ -16577,12 +16577,15 @@ async function alRetry(logId) {
 function alAbortRunning(logId, name) {
   showConfirm(
     'Laufende Aktion beenden',
-    '„' + name + '" wird als beendet markiert, der Installer-Platz des Rechners wird frei und Wartendes startet. ' +
-    'Nur verwenden, wenn auf dem Rechner sicher nichts mehr läuft, z. B. nach einem Neustart mitten in der Installation.',
+    '„' + name + '" wird auf dem Rechner gestoppt (Skript, winget und Installer), der Eintrag als beendet markiert und Wartendes startet. ' +
+    'Läuft gerade wirklich eine Installation, wird sie dabei abgebrochen.',
     async () => {
       try {
-        await api('POST', '/admin/api/action-log/' + logId + '/abort-running');
-        toast('Aktion beendet');
+        toast('Beende auf dem Rechner …');
+        const r = await api('POST', '/admin/api/action-log/' + logId + '/abort-running');
+        if (r && r.killed && r.killed.length) toast('Beendet. Auf dem Rechner gestoppt: ' + r.killed.join(', '));
+        else if (r && r.reachable) toast('Beendet. Auf dem Rechner lief dazu nichts mehr.');
+        else toast('Beendet. Rechner nicht erreichbar, dort läuft womöglich noch etwas.', true);
       } catch (e) { /* api() hat bereits getoastet */ }
       if (typeof loadActionLog === 'function') loadActionLog();
       if (_currentAgent) loadAgentQueue(_currentAgent.agent_id);

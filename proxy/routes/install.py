@@ -833,6 +833,92 @@ def _winget_run_as_user(winget_id: str, pkg: dict | None) -> bool:
     return _is_msstore_id(winget_id) or (pkg or {}).get("winget_scope") == "user"
 
 
+# Zeitlimit fuer winget auf dem Client. Haengt winget laenger (typisch: Installer
+# wartet unsichtbar unter SYSTEM auf ein offenes Programm des Benutzers), beendet
+# der Client winget samt Unterprozessen, meldet woran es hing und gibt damit den
+# systemweiten winget-Installations-Lock wieder frei. Pakete mit groesserem
+# install_timeout bekommen den. Muss unter action_running_timeout_min (60) liegen.
+_WINGET_TIMEOUT_DEFAULT_S = 45 * 60
+_WINGET_TIMEOUT_EXIT = 9031
+
+
+def _winget_timeout_s(pkg: dict | None) -> int:
+    return max(int((pkg or {}).get("install_timeout") or 0), _WINGET_TIMEOUT_DEFAULT_S)
+
+
+def client_script_tag(job_id: str) -> str:
+    """Dateiname des Skripts auf dem Client. Leitet sich aus der job_id ab,
+    damit 'Beenden' im Admin-UI die Prozesse dieses Auftrags wiederfindet."""
+    return f"sf_{job_id[:16]}.ps1"
+
+
+_PS_RUN_WINGET = r"""
+function _sfProcTree($all, $id) {
+    $all | Where-Object { $_.ParentProcessId -eq $id } | ForEach-Object { _sfProcTree $all $_.ProcessId; $_ }
+}
+function _sfWingetLines($file, $sent) {
+    if (-not (Test-Path $file)) { return $sent }
+    $lines = @(Get-Content -Path $file -Encoding UTF8 -ErrorAction SilentlyContinue)
+    if ($lines.Count -le $sent) { return $sent }
+    $bars = "[$([char]0x2588)$([char]0x2591)$([char]0x2592)$([char]0x2593)]"
+    $new = @($lines[$sent..($lines.Count - 1)] | Where-Object { $_ -and $_ -notmatch '^[\s\-\\|/]*$' -and $_ -notmatch $bars })
+    if ($new.Count -gt 0) { _sfProgress ($new -join "`n") | Out-Null }
+    return $lines.Count
+}
+function _sfRunWinget($runner, $exe, $outFile, $timeoutS, $appName) {
+    $p = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+        ('"' + $runner + '"'), ('"' + $exe + '"'), ('"' + $outFile + '"'))
+    $null = $p.Handle  # ohne das ist ExitCode unter PS 5.1 nach dem Ende leer
+    $deadline = (Get-Date).AddSeconds($timeoutS)
+    $sent = 0
+    while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 5
+        $sent = _sfWingetLines $outFile $sent
+    }
+    if (-not $p.HasExited) {
+        $all = @(Get-CimInstance Win32_Process)
+        $tree = @(_sfProcTree $all $p.Id)
+        $hang = @($tree | Where-Object { $_.Name -notmatch '^(powershell|conhost|winget)\.exe$' } |
+            ForEach-Object { $_.Name } | Select-Object -Unique) -join ', '
+        $appRun = ''
+        if ($appName) {
+            foreach ($k in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                             'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')) {
+                $e = Get-ItemProperty $k -ErrorAction SilentlyContinue |
+                    Where-Object { $_.DisplayName -and $_.DisplayName.StartsWith($appName) -and $_.InstallLocation } |
+                    Select-Object -First 1
+                if ($e) {
+                    $loc = $e.InstallLocation.TrimEnd('\') + '\'
+                    $ids = @($tree | ForEach-Object { $_.ProcessId })
+                    $appRun = @($all | Where-Object {
+                        $_.ExecutablePath -and $_.ExecutablePath.StartsWith($loc, [StringComparison]::OrdinalIgnoreCase) -and $ids -notcontains $_.ProcessId
+                    } | ForEach-Object { $_.Name } | Select-Object -Unique) -join ', '
+                    break
+                }
+            }
+        }
+        foreach ($k in $tree) { Stop-Process -Id $k.ProcessId -Force -ErrorAction SilentlyContinue }
+        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+        $null = _sfWingetLines $outFile $sent
+        $dur = if ($timeoutS -ge 120) { [string][int]($timeoutS / 60) + ' min' } else { [string]$timeoutS + ' s' }
+        $msg = 'SOFTSHELF_WINGET_TIMEOUT: winget hat nach ' + $dur + ' nicht geantwortet und wurde beendet.'
+        if ($hang) { $msg += ' Hing in: ' + $hang + '.' }
+        if ($appRun) { $msg += ' Beim Benutzer laeuft noch: ' + $appRun + '.' }
+        _sfProgress $msg
+        Remove-Item -Path $runner, $outFile -Force -ErrorAction SilentlyContinue
+        $global:LASTEXITCODE = 9031
+        return
+    }
+    $p.WaitForExit()
+    $null = _sfWingetLines $outFile $sent
+    $code = $p.ExitCode
+    Remove-Item -Path $runner, $outFile -Force -ErrorAction SilentlyContinue
+    $global:LASTEXITCODE = $code
+}
+"""
+
+
 def _build_winget_command(
     action: str,
     winget_id: str,
@@ -843,9 +929,13 @@ def _build_winget_command(
     display_name: str = "",
     uninstall_override: str = "",
     force: bool = False,
+    timeout_s: int = _WINGET_TIMEOUT_DEFAULT_S,
 ) -> str:
     """
     Baut den PowerShell-Wrapper für winget install/upgrade/uninstall.
+
+    winget laeuft in einem eigenen PowerShell-Prozess mit Zeitlimit (timeout_s,
+    siehe _sfRunWinget). Die Ausgabe kommt dabei laufend als Progress.
     Akzeptierte action-Werte: 'install', 'upgrade', 'uninstall'.
 
     `include_scope_machine=True` (Default) haengt `--scope machine` an —
@@ -1094,9 +1184,11 @@ if ($restCount -gt 0) {{
 }}
 """
 
+    safe_app = (display_name or "").replace("'", "''")[:120]
     return f"""$ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 {_PS_FIND_WINGET}
+{_PS_RUN_WINGET}
 $wingetExe = Find-WingetExe
 if (-not $wingetExe) {{
     _sfProgress "winget ist nicht installiert (App Installer fehlt)"
@@ -1105,8 +1197,13 @@ if (-not $wingetExe) {{
 if ($wingetExe) {{
     {process_check_block}
     _sfProgress "Starte winget {winget_args.split()[0]}..."
-    $out = (& $wingetExe {winget_args} 2>&1) -join "`n"
-    _sfProgress $out
+    $sfwRunner = Join-Path $env:TEMP ('sfw_' + [guid]::NewGuid().ToString('N') + '.ps1')
+    Set-Content -Path $sfwRunner -Encoding UTF8 -Value @'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+& $args[0] {winget_args} 2>&1 | Out-File -FilePath $args[1] -Encoding utf8 -Width 4096
+exit $LASTEXITCODE
+'@
+    _sfRunWinget $sfwRunner $wingetExe ($sfwRunner + '.out') {int(timeout_s)} '{safe_app}'
     {uninstall_fallback_block}
     {uninstall_override_block}
     {final_uninstall_check}
@@ -1483,6 +1580,7 @@ def _with_output_lines(output: str | None, headline: str) -> str:
 
 
 _EXIT_REASON = {
+    9031: "Installation hing und wurde nach Zeitlimit abgebrochen. Bitte offene Programme schließen und erneut versuchen.",
     1602: "Installation wurde abgebrochen.",
     1603: "Schwerer Fehler im Installer.",
     1605: "Das Programm ist nicht installiert.",
@@ -1710,6 +1808,7 @@ async def dispatch_winget_adhoc_uninstall(
     inner_cmd = _build_winget_command(
         "uninstall", winget_id, display_name=display_name,
         uninstall_override=((pkg or {}).get("uninstall_cmd") or "").strip(),
+        timeout_s=_winget_timeout_s(pkg),
     )
     job_id = _generate_job_id()
     cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -1740,6 +1839,7 @@ async def dispatch_winget_adhoc_upgrade(
     display_name = pkg["display_name"] if pkg else winget_id
     inner_cmd = _build_winget_command(
         "upgrade", winget_id, None, include_scope_machine=False,
+        display_name=display_name, timeout_s=_winget_timeout_s(pkg),
     )
     job_id = _generate_job_id()
     cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -2208,6 +2308,8 @@ async def dispatch_install_for_agent(
             extra_args=extra,
             process_check=pkg.get("process_check") or "",
             force=force,
+            display_name=pkg.get("display_name") or "",
+            timeout_s=_winget_timeout_s(pkg),
         )
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -2385,6 +2487,7 @@ async def dispatch_uninstall_for_agent(
             extra_args=pkg.get("install_args") or "",
             display_name=pkg.get("display_name") or "",
             uninstall_override=(pkg.get("uninstall_cmd") or "").strip(),
+            timeout_s=_winget_timeout_s(pkg),
         )
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -2711,6 +2814,8 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                     entry["action"], winget_id, ver, include_scope_machine=False,
                     extra_args=(retry_pkg or {}).get("install_args") or "",
                     process_check=(retry_pkg or {}).get("process_check") or "",
+                    display_name=entry.get("display_name") or "",
+                    timeout_s=_winget_timeout_s(retry_pkg),
                 )
             retry_job = _generate_job_id()
             retry_cmd = await _build_script_and_bootstrap(inner_cmd, retry_job)
@@ -2912,11 +3017,10 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str, skip_final
         f.write(script_content)
 
     # Bootstrap-Command (~250 Bytes) — wird inline via Tactical gesendet
-    nonce = _secrets.token_hex(4)
     script_url_safe = _ps_quote(script_url)
     bootstrap = (
         f"Set-ExecutionPolicy Bypass -Scope Process -Force\n"
-        f"$f = Join-Path $env:TEMP 'sf_{nonce}.ps1'\n"
+        f"$f = Join-Path $env:TEMP '{client_script_tag(job_id)}'\n"
         f"try {{\n"
         f"    $wc = New-Object Net.WebClient\n"
         f"    $wc.Proxy = [Net.GlobalProxySelection]::GetEmptyWebProxy()\n"
