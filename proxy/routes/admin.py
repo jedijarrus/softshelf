@@ -3401,6 +3401,33 @@ async def cancel_queued_action_endpoint(log_id: int):
     return {"ok": True}
 
 
+@router.post("/admin/api/action-log/{log_id}/abort-running")
+async def abort_running_action_endpoint(log_id: int, user: dict = Depends(_require_admin)):
+    """Beendet einen laufenden Eintrag von Hand (status error) und gibt den
+    Installer-Slot sofort frei — statt auf den Watchdog (action_running_timeout_min)
+    zu warten. Gedacht fuer den Fall, dass sicher kein Callback mehr kommt, z.B.
+    Rechner mitten in der Installation neu gestartet. Ein spaeter doch
+    eintreffender Callback wird ignoriert (receive_callback nimmt nur
+    pending/running an). Workflow-Steps nicht einzeln: dafuer den Workflow abbrechen."""
+    entry = await database.get_action_log_detail(log_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Eintrag nicht gefunden")
+    if entry.get("workflow_run_id"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Teil von Workflow-Run #{entry['workflow_run_id']} — bitte den Workflow abbrechen.",
+        )
+    who = (user or {}).get("username") or "admin"
+    ok = await database.abort_running_action(
+        log_id, f"Von Hand beendet ({who}): keine Rückmeldung des Agents mehr erwartet.")
+    if not ok:
+        raise HTTPException(status_code=409, detail="Nur laufende Einträge können beendet werden.")
+    logger.info("action-log %s von Hand beendet durch %s", log_id, who)
+    import action_queue
+    await action_queue.tick()
+    return {"ok": True}
+
+
 @router.delete("/admin/api/action-log/{log_id}", dependencies=[Depends(_require_admin)])
 async def delete_action_log_entry(log_id: int):
     """Einzelnen Action-Log-Eintrag loeschen — nur abgeschlossene. Ein offener

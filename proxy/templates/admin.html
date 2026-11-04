@@ -16491,6 +16491,8 @@ function renderActionLog(entries) {
       retryBtn = `<button class="al-retry" onclick="event.stopPropagation();alRetry(${e.id})" title="Nochmal versuchen">&#8635;</button>`;
     } else if (e.status === 'queued') {
       retryBtn = `<button class="al-retry" onclick="event.stopPropagation();alCancelQueued(${e.id})" title="Aus Warteschlange entfernen">&times;</button>`;
+    } else if ((e.status === 'running' || e.status === 'pending') && !e.workflow_run_id) {
+      retryBtn = `<button class="al-retry" onclick="event.stopPropagation();alAbortRunning(${e.id}, ${jsStr(e.display_name || '')})" title="Laufende Aktion beenden">&#9632;</button>`;
     }
     const rowCls = ['al-row'];
     if (e.status === 'error')  rowCls.push('al-error');
@@ -16552,6 +16554,7 @@ async function alShowDetail(logId) {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
       </button>
       ${entry.status === 'error' ? `<button class="btn btn-sm" style="background:var(--red);color:#fff" onclick="alRetry(${entry.id});closeActionDetailModal()">Nochmal versuchen</button>` : ''}
+      ${(entry.status === 'running' || entry.status === 'pending') && !entry.workflow_run_id ? `<button class="btn btn-sm" onclick="closeActionDetailModal();alAbortRunning(${entry.id}, ${jsStr(entry.display_name || '')})">Beenden</button>` : ''}
     </div>
   `;
   document.getElementById('action-detail-modal').classList.add('open');
@@ -16569,6 +16572,23 @@ async function alRetry(logId) {
       loadActionLog();
     }
   } catch (e) { /* api() hat bereits getoastet */ }
+}
+
+function alAbortRunning(logId, name) {
+  showConfirm(
+    'Laufende Aktion beenden',
+    '„' + name + '" wird als beendet markiert, der Installer-Platz des Rechners wird frei und Wartendes startet. ' +
+    'Nur verwenden, wenn auf dem Rechner sicher nichts mehr läuft, z. B. nach einem Neustart mitten in der Installation.',
+    async () => {
+      try {
+        await api('POST', '/admin/api/action-log/' + logId + '/abort-running');
+        toast('Aktion beendet');
+      } catch (e) { /* api() hat bereits getoastet */ }
+      if (typeof loadActionLog === 'function') loadActionLog();
+      if (_currentAgent) loadAgentQueue(_currentAgent.agent_id);
+    },
+    'Beenden'
+  );
 }
 
 async function alCancelQueued(logId) {
@@ -17280,6 +17300,9 @@ function renderAgentQueue(items) {
     if (q.lane && q.lane !== 'installer') meta.push(q.lane === 'light' ? 'Erweiterungen' : q.lane === 'client' ? 'Client' : q.lane);
     if (q.attempts > 0) meta.push(q.attempts + '. Versuch');
     let btns = '';
+    if (running && !q.workflow_run_id) {
+      btns += '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="alAbortRunning(' + q.id + ', ' + jsStr(name) + ')" title="Nur wenn auf dem Rechner sicher nichts mehr läuft">Beenden</button>';
+    }
     if (!running) {
       if (q.position > 1) {
         btns += '<button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="prioritizeQueued(' + q.id + ')" title="An die Spitze der Warteschlange">Vorziehen</button>';

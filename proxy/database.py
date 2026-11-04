@@ -4514,6 +4514,21 @@ async def list_queued_actions() -> list[dict]:
             return [dict(r) for r in await cur.fetchall()]
 
 
+async def abort_running_action(log_id: int, note: str) -> bool:
+    """Laufenden (pending/running) Eintrag von Hand beenden: status 'error',
+    completed_at gesetzt, Installer-Slot damit frei. Gleiche Wirkung wie der
+    Watchdog, nur sofort. True wenn ein Eintrag getroffen wurde."""
+    async with _db() as db:
+        cur = await db.execute(
+            "UPDATE action_log SET status = 'error', error_summary = ?, "
+            "completed_at = datetime('now') "
+            "WHERE id = ? AND status IN ('pending', 'running') AND completed_at IS NULL",
+            (note, log_id),
+        )
+        await db.commit()
+        return (cur.rowcount or 0) > 0
+
+
 async def cancel_queued_action(log_id: int) -> bool:
     """status=queued → cancelled. Returns True wenn ein Eintrag betroffen."""
     async with _db() as db:
