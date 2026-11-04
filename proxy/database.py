@@ -534,6 +534,9 @@ async def init_db():
             ("request", "TEXT"),
             ("queue_reason", "TEXT"),
             ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+            # 1 = von Hand beendet, Rechner war offline: Prozesse vor dem
+            # naechsten Auftrag an diesen Rechner noch stoppen
+            ("kill_pending", "INTEGER NOT NULL DEFAULT 0"),
         ):
             if col not in al_cols_now:
                 await db.execute(f"ALTER TABLE action_log ADD COLUMN {col} {ddl}")
@@ -4514,19 +4517,41 @@ async def list_queued_actions() -> list[dict]:
             return [dict(r) for r in await cur.fetchall()]
 
 
-async def abort_running_action(log_id: int, note: str) -> bool:
+async def abort_running_action(log_id: int, note: str, kill_pending: bool = False) -> bool:
     """Laufenden (pending/running) Eintrag von Hand beenden: status 'error',
-    completed_at gesetzt, Installer-Slot damit frei. Gleiche Wirkung wie der
-    Watchdog, nur sofort. True wenn ein Eintrag getroffen wurde."""
+    completed_at gesetzt, Installer-Slot damit frei. kill_pending=True: der
+    Rechner war nicht erreichbar, das Stoppen der Prozesse wird vor dem
+    naechsten Auftrag nachgeholt. True wenn ein Eintrag getroffen wurde."""
     async with _db() as db:
         cur = await db.execute(
             "UPDATE action_log SET status = 'error', error_summary = ?, "
-            "completed_at = datetime('now') "
+            "completed_at = datetime('now'), kill_pending = ? "
             "WHERE id = ? AND status IN ('pending', 'running') AND completed_at IS NULL",
-            (note, log_id),
+            (note, 1 if kill_pending else 0, log_id),
         )
         await db.commit()
         return (cur.rowcount or 0) > 0
+
+
+async def list_pending_kills(agent_id: str) -> list[dict]:
+    async with _db() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, hostname, job_id, pkg_type, package_name FROM action_log "
+            "WHERE agent_id = ? AND kill_pending = 1 ORDER BY id",
+            (agent_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def clear_pending_kill(log_id: int, note: str) -> None:
+    async with _db() as db:
+        await db.execute(
+            "UPDATE action_log SET kill_pending = 0, "
+            "error_summary = COALESCE(error_summary, '') || ' ' || ? WHERE id = ?",
+            (note, log_id),
+        )
+        await db.commit()
 
 
 async def cancel_queued_action(log_id: int) -> bool:

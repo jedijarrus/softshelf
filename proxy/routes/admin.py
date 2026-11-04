@@ -3422,68 +3422,28 @@ async def abort_running_action_endpoint(log_id: int, user: dict = Depends(_requi
     who = (user or {}).get("username") or "admin"
     # Erst auf dem Rechner stoppen, dann den Slot freigeben — sonst startet der
     # naechste Wartende, waehrend der alte winget noch den Installations-Lock haelt.
-    killed, reachable = await _kill_job_on_agent(entry)
+    from routes.install import kill_job_on_agent
+    killed, reachable = await kill_job_on_agent(
+        entry.get("agent_id") or "", entry.get("hostname") or "", entry.get("job_id") or "",
+        entry.get("pkg_type") or "", entry.get("package_name") or "")
     if killed:
         where = "Auf dem Rechner beendet: " + ", ".join(killed) + "."
     elif reachable:
         where = "Auf dem Rechner lief dazu nichts mehr."
     else:
-        where = "Rechner nicht erreichbar, dort läuft womöglich noch etwas."
-    ok = await database.abort_running_action(log_id, f"Von Hand beendet ({who}). {where}")
+        where = "Rechner nicht erreichbar, wird vor dem nächsten Auftrag dort beendet."
+    ok = await database.abort_running_action(
+        log_id, f"Von Hand beendet ({who}). {where}", kill_pending=not reachable)
     if not ok:
-        raise HTTPException(status_code=409, detail="Nur laufende Einträge können beendet werden.")
+        # Waehrend des Stoppens (bis 60 s) regulaer fertig geworden
+        now = await database.get_action_log_detail(log_id) or {}
+        return {"ok": True, "already_done": True, "status": now.get("status"),
+                "killed": killed, "reachable": reachable}
     logger.info("action-log %s von Hand beendet durch %s (%s)", log_id, who, where)
     import action_queue
     await action_queue.tick()
     return {"ok": True, "killed": killed, "reachable": reachable}
 
-
-_PS_KILL_JOB = r"""
-$tag = '__TAG__'
-$pkg = '__PKG__'
-$all = @(Get-CimInstance Win32_Process)
-function Kids($id) { $all | Where-Object { $_.ParentProcessId -eq $id } | ForEach-Object { Kids $_.ProcessId; $_ } }
-# Nur Prozesse, die das Skript per -File ausfuehren (so startet es das Bootstrap),
-# und nie dieser Befehl selbst: dessen Befehlszeile enthaelt die Kennung ebenfalls.
-$rxTag = '-File\s+"?[^"]*' + [regex]::Escape($tag)
-$roots = @($all | Where-Object { $_.ProcessId -ne $PID -and $_.Name -match '^powershell' -and $_.CommandLine -match $rxTag })
-if ($roots.Count -eq 0 -and $pkg) {
-    $rx = "--id\s+'?" + [regex]::Escape($pkg) + "'?(\s|$)"
-    $roots = @($all | Where-Object { $_.Name -eq 'winget.exe' -and $_.CommandLine -match $rx })
-}
-$t = @(); foreach ($r in $roots) { $t += Kids $r.ProcessId; $t += $r }
-$names = @(); foreach ($p in $t) { try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; $names += $p.Name } catch {} }
-'SFKILLED:' + (($names | Select-Object -Unique) -join ',')
-"""
-
-
-async def _kill_job_on_agent(entry: dict) -> tuple[list[str], bool]:
-    """Stoppt per RMM die Prozesse eines Auftrags auf dem Rechner: das Skript
-    (Dateiname aus der job_id) samt Unterprozessen. Fuer aeltere Auftraege ohne
-    Kennung im Dateinamen: winget-Prozesse mit derselben Paket-ID.
-    -> (beendete Prozessnamen, Rechner erreichbar)"""
-    import json as _json
-    from routes.install import client_script_tag
-    job = entry.get("job_id") or ""
-    if not job or not entry.get("agent_id"):
-        return [], False
-    pkg = entry.get("package_name") if entry.get("pkg_type") == "winget" else ""
-    if pkg and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._\-]{0,127}", pkg):
-        pkg = ""
-    ps = _PS_KILL_JOB.replace("__TAG__", client_script_tag(job)).replace("__PKG__", pkg or "")
-    try:
-        raw = await asyncio.wait_for(get_rmm_client().run_command(entry["agent_id"], ps, timeout=45), 60)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Beenden auf %s nicht moeglich: %s", entry.get("hostname"), e)
-        return [], False
-    try:
-        text = _json.loads(raw) if isinstance(raw, str) and raw.startswith('"') else (raw or "")
-    except ValueError:
-        text = raw or ""
-    line = next((ln for ln in str(text).splitlines() if ln.startswith("SFKILLED:")), None)
-    if line is None:
-        return [], False
-    return [n for n in line[len("SFKILLED:"):].strip().split(",") if n], True
 
 
 @router.delete("/admin/api/action-log/{log_id}", dependencies=[Depends(_require_admin)])

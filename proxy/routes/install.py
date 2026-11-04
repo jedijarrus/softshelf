@@ -90,6 +90,13 @@ async def _deliver_command_bg(
     except Exception as e:
         logger.warning("pre-flight check failed, proceeding anyway: %s", e)
 
+    # Von Hand beendete Auftraege, deren Rechner damals offline war, erst auf
+    # dem Rechner stoppen — sonst haengt der neue Auftrag am alten winget-Lock.
+    try:
+        await run_pending_kills(agent_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Nachholen von Beenden auf %s: %s", hostname, e)
+
     # Bootstrap senden — fire-and-forget
     try:
         await get_rmm_client().run_command(
@@ -837,19 +844,99 @@ def _winget_run_as_user(winget_id: str, pkg: dict | None) -> bool:
 # wartet unsichtbar unter SYSTEM auf ein offenes Programm des Benutzers), beendet
 # der Client winget samt Unterprozessen, meldet woran es hing und gibt damit den
 # systemweiten winget-Installations-Lock wieder frei. Pakete mit groesserem
-# install_timeout bekommen den. Muss unter action_running_timeout_min (60) liegen.
+# install_timeout bekommen den, gedeckelt unter dem Server-Watchdog.
 _WINGET_TIMEOUT_DEFAULT_S = 45 * 60
 _WINGET_TIMEOUT_EXIT = 9031
 
 
-def _winget_timeout_s(pkg: dict | None) -> int:
-    return max(int((pkg or {}).get("install_timeout") or 0), _WINGET_TIMEOUT_DEFAULT_S)
+async def _winget_timeout_s(pkg: dict | None) -> int:
+    """Mind. 45 min bzw. das install_timeout des Pakets, aber immer 5 min unter
+    action_running_timeout_min: der Client soll zuerst abbrechen, damit sein
+    Ergebnis noch ankommt und der Watchdog den Slot nicht vorher freigibt."""
+    from config import runtime_int
+    watchdog_min = (await runtime_int("action_running_timeout_min")) or 60
+    limit = max(int((pkg or {}).get("install_timeout") or 0), _WINGET_TIMEOUT_DEFAULT_S)
+    return max(5 * 60, min(limit, (watchdog_min - 5) * 60))
 
 
 def client_script_tag(job_id: str) -> str:
     """Dateiname des Skripts auf dem Client. Leitet sich aus der job_id ab,
     damit 'Beenden' im Admin-UI die Prozesse dieses Auftrags wiederfindet."""
     return f"sf_{job_id[:16]}.ps1"
+
+
+_PS_KILL_JOB = r"""
+$tag = '__TAG__'
+$pkg = '__PKG__'
+$all = @(Get-CimInstance Win32_Process)
+function Kids($id) { $all | Where-Object { $_.ParentProcessId -eq $id } | ForEach-Object { Kids $_.ProcessId; $_ } }
+function HasAncestor($p, $rx) {
+    $cur = $p
+    for ($i = 0; $i -lt 5 -and $cur; $i++) {
+        if ($cur.CommandLine -and $cur.CommandLine -match $rx) { return $true }
+        $ppid = $cur.ParentProcessId
+        $cur = $all | Where-Object { $_.ProcessId -eq $ppid } | Select-Object -First 1
+    }
+    return $false
+}
+# Nur Prozesse, die das Skript per -File ausfuehren (so startet es das Bootstrap),
+# und nie dieser Befehl selbst: dessen Befehlszeile enthaelt die Kennung ebenfalls.
+$rxTag = '-File\s+"?[^"]*' + [regex]::Escape($tag)
+$roots = @($all | Where-Object { $_.ProcessId -ne $PID -and $_.Name -match '^powershell' -and $_.CommandLine -match $rxTag })
+if ($roots.Count -eq 0 -and $pkg) {
+    # Altauftraege von vor der Kennung im Dateinamen (Skript sf_<8 Hex>.ps1): nur
+    # deren winget mit derselben Paket-ID — nie neuere Auftraege, nie ein von Hand
+    # gestarteter winget.
+    $rx = "--id\s+'?" + [regex]::Escape($pkg) + "'?(\s|$)"
+    $rxOld = '-File\s+"?[^"]*sf_[0-9a-f]{8}\.ps1'
+    $roots = @($all | Where-Object { $_.Name -eq 'winget.exe' -and $_.CommandLine -match $rx -and (HasAncestor $_ $rxOld) })
+}
+$t = @(); foreach ($r in $roots) { $t += Kids $r.ProcessId; $t += $r }
+$names = @(); foreach ($p in $t) { try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; $names += $p.Name } catch {} }
+'SFKILLED:' + (($names | Select-Object -Unique) -join ',')
+"""
+
+
+async def kill_job_on_agent(agent_id: str, hostname: str, job_id: str,
+                            pkg_type: str, package_name: str) -> tuple[list[str], bool]:
+    """Stoppt per RMM die Prozesse eines Auftrags auf dem Rechner: das Skript
+    (Dateiname aus der job_id) samt Unterprozessen, fuer Altauftraege deren
+    winget mit derselben Paket-ID. -> (beendete Prozessnamen, Rechner erreichbar)"""
+    import json as _json
+    if not job_id or not agent_id or not re.fullmatch(r"[a-f0-9]{16,64}", job_id):
+        return [], False
+    pkg = package_name if pkg_type == "winget" else ""
+    if pkg and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._\-]{0,127}", pkg):
+        pkg = ""
+    ps = _PS_KILL_JOB.replace("__TAG__", client_script_tag(job_id)).replace("__PKG__", pkg or "")
+    try:
+        raw = await asyncio.wait_for(get_rmm_client().run_command(agent_id, ps, timeout=45), 60)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Beenden auf %s nicht moeglich: %s", hostname, e)
+        return [], False
+    try:
+        text = _json.loads(raw) if isinstance(raw, str) and raw.startswith('"') else (raw or "")
+    except ValueError:
+        text = raw or ""
+    line = next((ln for ln in str(text).splitlines() if ln.startswith("SFKILLED:")), None)
+    if line is None:
+        return [], False
+    return [n for n in line[len("SFKILLED:"):].strip().split(",") if n], True
+
+
+async def run_pending_kills(agent_id: str) -> None:
+    """Holt 'auf dem Rechner beenden' fuer von Hand beendete Auftraege nach, bei
+    denen der Rechner damals nicht erreichbar war — vor dem naechsten Auftrag,
+    damit der nicht in einen noch laufenden alten winget/MSI-Lock laeuft."""
+    for r in await database.list_pending_kills(agent_id):
+        killed, reachable = await kill_job_on_agent(
+            agent_id, r["hostname"], r["job_id"], r["pkg_type"], r["package_name"])
+        if not reachable:
+            return
+        note = ("Nachtraeglich auf dem Rechner beendet: " + ", ".join(killed) + ".") if killed \
+            else "Beim naechsten Kontakt lief dazu nichts mehr."
+        await database.clear_pending_kill(r["id"], note)
+        logger.info("Beenden nachgeholt: action-log %s auf %s (%s)", r["id"], r["hostname"], note)
 
 
 _PS_RUN_WINGET = r"""
@@ -900,11 +987,23 @@ function _sfRunWinget($runner, $exe, $outFile, $timeoutS, $appName) {
         }
         foreach ($k in $tree) { Stop-Process -Id $k.ProcessId -Force -ErrorAction SilentlyContinue }
         Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+        # Eine MSI-Transaktion im Windows-Installer-Dienst haengt nicht im Prozessbaum.
+        # Bis zu 2 min warten, bis sie zurueckgerollt ist und den globalen MSI-Lock
+        # freigibt, sonst laeuft der naechste Auftrag direkt hinein.
+        $msiBusy = $false
+        for ($i = 0; $i -lt 24; $i++) {
+            $m = $null
+            try { $msiBusy = [System.Threading.Mutex]::TryOpenExisting('Global\_MSIExecute', [ref]$m) } catch { $msiBusy = $false }
+            if ($m) { $m.Dispose() }
+            if (-not $msiBusy) { break }
+            Start-Sleep -Seconds 5
+        }
         $null = _sfWingetLines $outFile $sent
         $dur = if ($timeoutS -ge 120) { [string][int]($timeoutS / 60) + ' min' } else { [string]$timeoutS + ' s' }
         $msg = 'SOFTSHELF_WINGET_TIMEOUT: winget hat nach ' + $dur + ' nicht geantwortet und wurde beendet.'
         if ($hang) { $msg += ' Hing in: ' + $hang + '.' }
         if ($appRun) { $msg += ' Beim Benutzer laeuft noch: ' + $appRun + '.' }
+        if ($msiBusy) { $msg += ' Windows Installer war danach noch beschaeftigt.' }
         _sfProgress $msg
         Remove-Item -Path $runner, $outFile -Force -ErrorAction SilentlyContinue
         $global:LASTEXITCODE = 9031
@@ -1808,7 +1907,7 @@ async def dispatch_winget_adhoc_uninstall(
     inner_cmd = _build_winget_command(
         "uninstall", winget_id, display_name=display_name,
         uninstall_override=((pkg or {}).get("uninstall_cmd") or "").strip(),
-        timeout_s=_winget_timeout_s(pkg),
+        timeout_s=await _winget_timeout_s(pkg),
     )
     job_id = _generate_job_id()
     cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -1839,7 +1938,7 @@ async def dispatch_winget_adhoc_upgrade(
     display_name = pkg["display_name"] if pkg else winget_id
     inner_cmd = _build_winget_command(
         "upgrade", winget_id, None, include_scope_machine=False,
-        display_name=display_name, timeout_s=_winget_timeout_s(pkg),
+        display_name=display_name, timeout_s=await _winget_timeout_s(pkg),
     )
     job_id = _generate_job_id()
     cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -2066,6 +2165,7 @@ def _build_winget_downgrade_command(
     extra_args: str = "",
     display_name: str = "",
     uninstall_override: str = "",
+    timeout_s: int = _WINGET_TIMEOUT_DEFAULT_S,
 ) -> str:
     """Downgrade auf eine gepinnte (aeltere) winget-Version.
 
@@ -2082,12 +2182,15 @@ def _build_winget_downgrade_command(
         extra_args="",
         display_name=display_name,
         uninstall_override=uninstall_override,
+        timeout_s=timeout_s,
     )
     install_part = _build_winget_command(
         "install", winget_id, version=version,
         include_scope_machine=include_scope_machine,
         extra_args=extra_args,
         force=True,
+        display_name=display_name,
+        timeout_s=timeout_s,
     )
     safe_ver = version.replace("'", "''")[:50]
     return (
@@ -2147,6 +2250,7 @@ async def dispatch_downgrade_for_agent(
             extra_args=pkg.get("install_args") or "",
             display_name=pkg.get("display_name") or "",
             uninstall_override=(pkg.get("uninstall_cmd") or "").strip(),
+            timeout_s=await _winget_timeout_s(pkg),
         )
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -2309,7 +2413,7 @@ async def dispatch_install_for_agent(
             process_check=pkg.get("process_check") or "",
             force=force,
             display_name=pkg.get("display_name") or "",
-            timeout_s=_winget_timeout_s(pkg),
+            timeout_s=await _winget_timeout_s(pkg),
         )
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -2487,7 +2591,7 @@ async def dispatch_uninstall_for_agent(
             extra_args=pkg.get("install_args") or "",
             display_name=pkg.get("display_name") or "",
             uninstall_override=(pkg.get("uninstall_cmd") or "").strip(),
-            timeout_s=_winget_timeout_s(pkg),
+            timeout_s=await _winget_timeout_s(pkg),
         )
         job_id = _generate_job_id()
         cmd = await _build_script_and_bootstrap(inner_cmd, job_id)
@@ -2808,6 +2912,7 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                     extra_args=(retry_pkg or {}).get("install_args") or "",
                     display_name=(retry_pkg or {}).get("display_name") or "",
                     uninstall_override=((retry_pkg or {}).get("uninstall_cmd") or "").strip(),
+                    timeout_s=await _winget_timeout_s(retry_pkg),
                 )
             else:
                 inner_cmd = _build_winget_command(
@@ -2815,7 +2920,7 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                     extra_args=(retry_pkg or {}).get("install_args") or "",
                     process_check=(retry_pkg or {}).get("process_check") or "",
                     display_name=entry.get("display_name") or "",
-                    timeout_s=_winget_timeout_s(retry_pkg),
+                    timeout_s=await _winget_timeout_s(retry_pkg),
                 )
             retry_job = _generate_job_id()
             retry_cmd = await _build_script_and_bootstrap(inner_cmd, retry_job)

@@ -16583,9 +16583,10 @@ function alAbortRunning(logId, name) {
       try {
         toast('Beende auf dem Rechner …');
         const r = await api('POST', '/admin/api/action-log/' + logId + '/abort-running');
-        if (r && r.killed && r.killed.length) toast('Beendet. Auf dem Rechner gestoppt: ' + r.killed.join(', '));
+        if (r && r.already_done) toast('Auftrag war inzwischen abgeschlossen (' + (r.status || '?') + ').' + (r.killed && r.killed.length ? ' Gestoppt: ' + r.killed.join(', ') : ''));
+        else if (r && r.killed && r.killed.length) toast('Beendet. Auf dem Rechner gestoppt: ' + r.killed.join(', '));
         else if (r && r.reachable) toast('Beendet. Auf dem Rechner lief dazu nichts mehr.');
-        else toast('Beendet. Rechner nicht erreichbar, dort läuft womöglich noch etwas.', true);
+        else toast('Beendet. Rechner nicht erreichbar, wird vor dem nächsten Auftrag dort gestoppt.', true);
       } catch (e) { /* api() hat bereits getoastet */ }
       if (typeof loadActionLog === 'function') loadActionLog();
       if (_currentAgent) loadAgentQueue(_currentAgent.agent_id);
