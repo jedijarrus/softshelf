@@ -892,7 +892,13 @@ if ($roots.Count -eq 0 -and $pkg) {
     $roots = @($all | Where-Object { $_.Name -eq 'winget.exe' -and $_.CommandLine -match $rx -and (HasAncestor $_ $rxOld) })
 }
 $t = @(); foreach ($r in $roots) { $t += Kids $r.ProcessId; $t += $r }
+# Skript- und Runner-Dateien merken: gestoppt raeumen sie sich nicht mehr selbst weg
+$files = @($t | ForEach-Object { if ($_.CommandLine -match '-File\s+"?([^"]+?\\sfw?_[0-9a-f]+\.ps1)') { $Matches[1] } } | Select-Object -Unique)
 $names = @(); foreach ($p in $t) { try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; $names += $p.Name } catch {} }
+if ($files.Count) {
+    Start-Sleep -Seconds 1
+    foreach ($f in $files) { Remove-Item -LiteralPath $f, ($f + '.out') -Force -ErrorAction SilentlyContinue }
+}
 'SFKILLED:' + (($names | Select-Object -Unique) -join ',')
 """
 
@@ -952,6 +958,25 @@ function _sfWingetLines($file, $sent) {
     if ($new.Count -gt 0) { _sfProgress ($new -join "`n") | Out-Null }
     return $lines.Count
 }
+function _sfAppRunning($all, $appName, $skipIds) {
+    # Laufende Programme aus dem Installationsordner der App, nur in Benutzer-
+    # sitzungen (Session 0 = Dienste, die schliesst der Installer selbst).
+    if (-not $appName) { return '' }
+    foreach ($k in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                     'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')) {
+        $e = Get-ItemProperty $k -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -and $_.DisplayName.StartsWith($appName) -and $_.InstallLocation } |
+            Select-Object -First 1
+        if ($e) {
+            $loc = $e.InstallLocation.TrimEnd('\') + '\'
+            return (@($all | Where-Object {
+                $_.SessionId -ne 0 -and $_.ExecutablePath -and $skipIds -notcontains $_.ProcessId -and
+                $_.ExecutablePath.StartsWith($loc, [StringComparison]::OrdinalIgnoreCase)
+            } | ForEach-Object { $_.Name } | Select-Object -Unique) -join ', ')
+        }
+    }
+    return ''
+}
 function _sfRunWinget($runner, $exe, $outFile, $timeoutS, $appName) {
     $p = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
@@ -968,23 +993,7 @@ function _sfRunWinget($runner, $exe, $outFile, $timeoutS, $appName) {
         $tree = @(_sfProcTree $all $p.Id)
         $hang = @($tree | Where-Object { $_.Name -notmatch '^(powershell|conhost|winget)\.exe$' } |
             ForEach-Object { $_.Name } | Select-Object -Unique) -join ', '
-        $appRun = ''
-        if ($appName) {
-            foreach ($k in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-                             'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')) {
-                $e = Get-ItemProperty $k -ErrorAction SilentlyContinue |
-                    Where-Object { $_.DisplayName -and $_.DisplayName.StartsWith($appName) -and $_.InstallLocation } |
-                    Select-Object -First 1
-                if ($e) {
-                    $loc = $e.InstallLocation.TrimEnd('\') + '\'
-                    $ids = @($tree | ForEach-Object { $_.ProcessId })
-                    $appRun = @($all | Where-Object {
-                        $_.ExecutablePath -and $_.ExecutablePath.StartsWith($loc, [StringComparison]::OrdinalIgnoreCase) -and $ids -notcontains $_.ProcessId
-                    } | ForEach-Object { $_.Name } | Select-Object -Unique) -join ', '
-                    break
-                }
-            }
-        }
+        $appRun = _sfAppRunning $all $appName @($tree | ForEach-Object { $_.ProcessId })
         foreach ($k in $tree) { Stop-Process -Id $k.ProcessId -Force -ErrorAction SilentlyContinue }
         Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
         # Eine MSI-Transaktion im Windows-Installer-Dienst haengt nicht im Prozessbaum.
@@ -1013,6 +1022,12 @@ function _sfRunWinget($runner, $exe, $outFile, $timeoutS, $appName) {
     $null = _sfWingetLines $outFile $sent
     $code = $p.ExitCode
     Remove-Item -Path $runner, $outFile -Force -ErrorAction SilentlyContinue
+    # Abgebrochen / Programm oder Datei in Benutzung: meist ist die App offen
+    # (z. B. VS Code: Inno-Setup bricht bei gesperrten Dateien still ab).
+    if (@(-1978334964, -1978334975, -1978334973, -1978334959) -contains $code) {
+        $appRun = _sfAppRunning @(Get-CimInstance Win32_Process) $appName @()
+        if ($appRun) { _sfProgress ('Beim Benutzer laeuft noch: ' + $appRun + '.') }
+    }
     $global:LASTEXITCODE = $code
 }
 """
@@ -1679,6 +1694,9 @@ def _with_output_lines(output: str | None, headline: str) -> str:
 
 
 _EXIT_REASON = {
+    9020: "Das Programm ist noch geöffnet — bitte schließen und erneut versuchen.",
+    9030: "Die zugehörige Anwendung für dieses Plugin ist nicht installiert.",
+    -1978334964: "Installation abgebrochen — meist ist das Programm noch geöffnet. Bitte schließen und erneut versuchen.",
     9031: "Installation hing und wurde nach Zeitlimit abgebrochen. Bitte offene Programme schließen und erneut versuchen.",
     1602: "Installation wurde abgebrochen.",
     1603: "Schwerer Fehler im Installer.",
@@ -3069,11 +3087,16 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str, skip_final
         "\n"
         "_sfProgress 'Command gestartet'\n"
         "try {\n"
+        # Dot-gesourcter Block: ein 'return' im inneren Skript (Prozess-Check,
+        # Plugin-Host fehlt) beendet nur diesen Block statt des ganzen Skripts,
+        # der finale Callback laeuft trotzdem. Variablen bleiben im Skript-Scope.
+        ". {\n"
     )
 
     # Script-Footer mit finalem Callback (exponential backoff)
     footer = (
         "\n"
+        "}\n"
         "} catch {\n"
         # WICHTIG: $_sfSuccess kann $true (Bool) oder 'skipped' (String) sein.
         # `$true -ne 'skipped'` coerce't 'skipped' zu Bool → $true -ne $true → $false,
@@ -3105,6 +3128,7 @@ async def _build_script_and_bootstrap(inner_script: str, job_id: str, skip_final
         # nicht ewig auf running bleibt.
         footer = (
             "\n"
+            "}\n"
             "} catch {\n"
             "    $_sfOutput.Add(\"FEHLER: $($_.Exception.Message)\")\n"
             "    $_sfBody = @{\n"
