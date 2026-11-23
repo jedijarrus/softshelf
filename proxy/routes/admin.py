@@ -3494,8 +3494,8 @@ async def prioritize_action_endpoint(log_id: int):
 @router.delete("/admin/api/action-log", dependencies=[Depends(_require_admin)])
 async def delete_action_log_bulk(status: str = Query(default="error")):
     """Bulk-Loesch: alle Eintraege mit gegebenem Status."""
-    if status not in ("error", "skipped", "success"):
-        raise HTTPException(status_code=400, detail="Nur error/skipped/success loeschbar")
+    if status not in ("error", "skipped", "success", "retried"):
+        raise HTTPException(status_code=400, detail="Nur error/skipped/success/retried loeschbar")
     async with database._db() as db:
         res = await db.execute("DELETE FROM action_log WHERE status = ?", (status,))
         await db.commit()

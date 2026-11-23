@@ -11,6 +11,21 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ### Fixed
 
+- **Deinstallation per-user installierter winget-Pakete.** Wurde ein Paket
+  nur im User-Kontext installiert (der Install-Retry bei „kein passender
+  Installer“), fand winget es als SYSTEM nicht wieder und die
+  Deinstallation endete mit -1978335212 („kein installiertes Paket gefunden“).
+  Jetzt wird sie dann einmal im Kontext des angemeldeten Users wiederholt —
+  wie schon der Install-Retry. Nicht, wenn schon der erste Versuch als User
+  lief (Scope „user“, msstore).
+- **Ein Versuch mit Retry ist kein Fehler mehr.** Folgt einem Fehlschlag ein
+  Retry (winget per-user bei Install/Upgrade/Downgrade/Uninstall, choco
+  `.install`), steht der erste Versuch jetzt als „Erneut versucht“ im
+  Protokoll statt als Fehler, sein Fehler-Banner wird entfernt und der
+  Kiosk-Verlauf blendet ihn aus. Als Fehler erscheint erst der Retry, wenn
+  auch er scheitert. Retries übernehmen `triggered_by` des Originals (Kiosk-
+  Verlauf: eigene Aktion statt „durch IT“).
+
 - **winget Scope „user“ läuft jetzt wirklich im User-Kontext.** Bisher ließ
   Scope `user` nur `--scope machine` weg, installiert wurde trotzdem als
   SYSTEM. Per-user-Installer wie Squirrel-Apps landeten dadurch im

@@ -1539,6 +1539,12 @@ _CHOCO_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,99}$")
 
 # winget ExitCode fuer "kein Installer fuer machine scope"
 _WINGET_NO_APPLICABLE_INSTALLER = -1978335216
+# winget ExitCode 0x8A150014 bei uninstall: "kein installiertes Paket gefunden"
+# (bei install/upgrade dagegen „bereits installiert", dort ein Erfolg)
+_WINGET_NO_INSTALLED_PACKAGE = -1978335212
+# action_log-Status eines Versuchs, dem ein Retry folgt: kein Fehler (noch
+# nicht), der Kiosk-Verlauf blendet ihn aus; das Ergebnis traegt der Retry
+_STATUS_RETRIED = "retried"
 
 
 _CHOCO_VERSION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-+]{0,49}$")
@@ -1739,6 +1745,7 @@ _HISTORY_STATUS = {
     "queued": "Wartet", "pending": "Wird gestartet", "running": "Läuft",
     "success": "Erfolgreich", "error": "Fehlgeschlagen",
     "skipped": "Übersprungen", "cancelled": "Abgebrochen",
+    "retried": "Erneut versucht",
 }
 
 
@@ -1782,6 +1789,8 @@ async def kiosk_history(token: dict = Depends(verify_machine_token)):
     mit welchem Ergebnis und — bei Fehlern — warum."""
     items = []
     for r in await database.list_agent_history(token["agent_id"]):
+        if r["status"] == _STATUS_RETRIED:
+            continue    # ein Versuch mit Retry: das Ergebnis zeigt der Retry
         items.append({
             "log_id": r["id"],
             "package_name": r["package_name"],
@@ -2897,6 +2906,7 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                 entry["agent_id"], entry["hostname"], retry_name,
                 entry["display_name"], "choco", "uninstall", job_id=retry_job,
                 workflow_run_id=entry.get("workflow_run_id"),
+                triggered_by=entry.get("triggered_by"),
             )
             _spawn_bg(_deliver_command_bg(
                 entry["agent_id"], entry["hostname"], retry_name,
@@ -2949,6 +2959,7 @@ async def receive_callback(job_id: str, body: CallbackPayload):
                 entry["display_name"], "winget", entry["action"],
                 job_id=retry_job, metadata=retry_meta,
                 workflow_run_id=entry.get("workflow_run_id"),
+                triggered_by=entry.get("triggered_by"),
             )
             try:
                 await get_rmm_client().run_command(
@@ -2961,6 +2972,73 @@ async def receive_callback(job_id: str, body: CallbackPayload):
             except Exception as e:
                 logger.warning("winget per-user retry failed: %s", e)
                 await database.complete_action_log(retry_lid, "error", error_summary=str(e)[:300])
+
+    # ── Winget per-user Uninstall Retry ────────────────────────────
+    # Per-user installierte Pakete (Install lief erst nach dem per-user-
+    # Retry durch) sieht winget unter SYSTEM nicht — die
+    # Deinstallation endet mit „kein installiertes Paket gefunden". Einmal im
+    # Kontext des angemeldeten Users wiederholen, wo winget dessen HKCU sieht.
+    # Nicht, wenn schon der erste Versuch im User-Kontext lief.
+    if (status == "error"
+        and pkg_type == "winget"
+        and body.exit_code == _WINGET_NO_INSTALLED_PACKAGE
+        and entry["action"] == "uninstall"):
+        import json as _json
+        meta = {}
+        try:
+            meta = _json.loads(entry.get("metadata") or "{}")
+        except Exception:
+            pass
+        winget_id = meta.get("winget_id", entry["package_name"])
+        retry_pkg = await database.get_package(winget_id)
+        if not meta.get("is_retry") and not _winget_run_as_user(winget_id, retry_pkg):
+            logger.info("winget per-user uninstall retry: %s auf %s", winget_id, entry["hostname"])
+            inner_cmd = _build_winget_command(
+                "uninstall", winget_id,
+                extra_args=(retry_pkg or {}).get("install_args") or "",
+                display_name=(retry_pkg or {}).get("display_name") or entry.get("display_name") or "",
+                uninstall_override=((retry_pkg or {}).get("uninstall_cmd") or "").strip(),
+                timeout_s=await _winget_timeout_s(retry_pkg),
+            )
+            retry_job = _generate_job_id()
+            retry_cmd = await _build_script_and_bootstrap(inner_cmd, retry_job)
+            retry_meta = _json.dumps({"winget_scope": "user", "winget_id": winget_id, "is_retry": True})
+            retry_lid = await database.create_action_log(
+                entry["agent_id"], entry["hostname"], entry["package_name"],
+                entry["display_name"], "winget", "uninstall",
+                job_id=retry_job, metadata=retry_meta,
+                workflow_run_id=entry.get("workflow_run_id"),
+                triggered_by=entry.get("triggered_by"),
+            )
+            try:
+                await get_rmm_client().run_command(
+                    entry["agent_id"], retry_cmd,
+                    shell="powershell", timeout=60, run_as_user=True,
+                )
+                await database.update_action_log_status(retry_lid, "running")
+                retry_scheduled = True
+                logger.info("winget per-user uninstall retry delivered: %s", winget_id)
+            except Exception as e:
+                logger.warning("winget per-user uninstall retry failed: %s", e)
+                await database.complete_action_log(retry_lid, "error", error_summary=str(e)[:300])
+
+    # Ein Versuch, dem ein Retry folgt, ist noch kein Fehler: als
+    # „erneut versucht" ablegen (der Kiosk-Verlauf blendet ihn aus, das
+    # Admin-Protokoll zeigt ihn neutral) und den Fehler-Banner wieder
+    # loeschen. Als Fehler erscheint erst der Retry, wenn auch er scheitert.
+    if retry_scheduled:
+        await database.complete_action_log(
+            entry["id"], _STATUS_RETRIED, exit_code=body.exit_code,
+            error_summary=error_summary, stdout=body.output or None,
+        )
+        try:
+            await database.upsert_action_result(
+                entry["agent_id"], entry["package_name"], None,
+                full_output=body.output or "(kein Output)", action=entry["action"],
+            )
+        except Exception as e:
+            logger.warning("upsert_action_result nach Retry: %s", e)
+        status = _STATUS_RETRIED
 
     # Script-File aufraumen
     script_path = _os.path.join(_SCRIPTS_DIR, f"{job_id}.ps1")

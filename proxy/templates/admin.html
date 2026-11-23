@@ -5568,6 +5568,7 @@ html[data-theme="dark"] .pkg-card.wf-card:hover {
 .al-badge.success  { background: var(--green-bg); color: var(--green); }
 .al-badge.error    { background: var(--red-bg); color: var(--red); }
 .al-badge.skipped  { background: var(--amber-bg); color: var(--amber); }
+.al-badge.retried  { background: var(--bg-hover); color: var(--fg-4); }
 
 .al-badge.running::before {
   content: ''; width: 6px; height: 6px; border-radius: 50%;
@@ -6476,6 +6477,7 @@ body.help-active [data-help]:not(.tab)::after {
         <option value="success">Erfolg</option>
         <option value="error">Fehler</option>
         <option value="skipped">Übersprungen</option>
+        <option value="retried">Erneut versucht</option>
         <option value="cancelled">Abgebrochen</option>
       </select>
       <select id="al-filter-type" class="input input-sm" onchange="loadActionLog(true)" style="width:140px">
@@ -16335,7 +16337,7 @@ _whoamiReady.then(() => { if (!_isMessagesRole()) init(); });
 var alPage = 0;
 const AL_PAGE_SIZE = 50;
 var _alFilterTimer = null;
-const _alStatusLabel = { queued: 'Wartet', pending: 'Ausstehend', running: 'Läuft', success: 'Erfolg', error: 'Fehler', skipped: 'Übersprungen', cancelled: 'Abgebrochen' };
+const _alStatusLabel = { queued: 'Wartet', pending: 'Ausstehend', running: 'Läuft', success: 'Erfolg', error: 'Fehler', skipped: 'Übersprungen', cancelled: 'Abgebrochen', retried: 'Erneut versucht' };
 const _alPkgTypeLabel = { winget: 'winget', choco: 'choco', custom: 'custom', plugin: 'plugin', client_update: 'update', script: 'script' };
 const _alPkgTypeClass = { client_update: 'custom' }; // visuell wie custom-Pille (violet dot)
 const _alActionLabel  = { install: 'install', uninstall: 'uninstall', upgrade: 'upgrade', reboot: 'reboot', run: 'run' };
