@@ -11,6 +11,17 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ### Fixed
 
+- **Deinstallation eines Programms, das schon weg ist, ist kein Fehler
+  mehr.** winget: Findet winget kein installiertes Paket und steht das
+  Programm in keiner Softwareliste (HKLM, HKCU, geladene Benutzer-Hives), ist
+  das Ziel erreicht — Erfolg mit dem Hinweis „nicht (mehr) installiert“, der
+  Installations-Eintrag wird gelöscht. Steht es noch irgendwo, bleibt es beim
+  Fehler und dem Retry im User-Kontext. Eigene Pakete: Fehlt die
+  Uninstaller-Datei am Anfang des Uninstall-Befehls (z. B. `unins000.exe`)
+  und findet die Erkennung die Software nicht, ist das ebenfalls Erfolg;
+  steht sie noch in der Registry, kommt eine klare Meldung statt cmd-Exit 1.
+  Vorher blieben solche Geister-Einträge im Kiosk stehen und jede
+  Deinstallation scheiterte erneut.
 - **Deinstallation per-user installierter winget-Pakete.** Wurde ein Paket
   nur im User-Kontext installiert (der Install-Retry bei „kein passender
   Installer“), fand winget es als SYSTEM nicht wieder und die

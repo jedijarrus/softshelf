@@ -557,6 +557,26 @@ def _build_uninstall_command(
     else:
         post_check = "_sfProgress 'Deinstallation abgeschlossen.'\n"
 
+    # Uninstaller-Datei fehlt (z. B. unins000.exe): ist die Software laut
+    # Registry auch weg, gibt es nichts zu tun → Erfolg. Steht sie noch drin,
+    # verstaendlicher Fehler statt cmd-Exit 1.
+    un_exe = _uninstaller_path(uninstall_cmd)
+    if un_exe:
+        if det:
+            missing = (
+                _ps_registry_check(det)
+                + "if($sfInstalled){_sfProgress \"FEHLER: Uninstaller fehlt ($sfUnExe), Software ist aber noch installiert\";cmd /c \"exit 2\"}\n"
+                + "else{_sfProgress \"Uninstaller fehlt ($sfUnExe) und Software ist nicht installiert, nichts zu tun.\";cmd /c \"exit 0\"}\n"
+            )
+        else:
+            missing = "_sfProgress \"FEHLER: Uninstaller fehlt ($sfUnExe)\";cmd /c \"exit 2\"\n"
+        pre_check = (
+            "$sfUnExe = [Environment]::ExpandEnvironmentVariables('" + un_exe.replace("'", "''") + "')\n"
+            "$sfRun = Test-Path -LiteralPath $sfUnExe\n"
+            "if(-not $sfRun){\n" + missing + "}\n"
+            "if($sfRun){\n"
+        )
+
     parts = [
         "$ErrorActionPreference = 'Continue'\n",
         pre_check,
@@ -582,8 +602,27 @@ def _build_uninstall_command(
         "}\n",
         event_log,
         post_check,
+        "}\n" if un_exe else "",
     ]
     return "".join(parts)
+
+
+_UNINSTALLER_RE = re.compile(r'^\s*(?:"([^"]+)"|(\S+))')
+
+
+def _uninstaller_path(uninstall_cmd: str) -> str:
+    """Pfad der Uninstaller-Datei am Anfang des Befehls, sonst ''.
+
+    Nur echte Pfade (mit Backslash, Endung exe/cmd/bat) — 'msiexec /x …' oder
+    reine Parameter laufen ohne Datei-Pruefung wie bisher.
+    """
+    m = _UNINSTALLER_RE.match(uninstall_cmd or "")
+    if not m:
+        return ""
+    path = m.group(1) or m.group(2)
+    if "\\" not in path or not re.search(r"(?i)\.(exe|cmd|bat)$", path):
+        return ""
+    return path
 
 
 # ── Winget Dispatch ───────────────────────────────────────────────────────────
@@ -1298,6 +1337,30 @@ if ($restCount -gt 0) {{
 }}
 """
 
+    # winget findet kein installiertes Paket (-1978335212): steht das Programm
+    # auch in keiner Softwareliste (HKLM, HKCU, geladene Benutzer-Hives), ist
+    # es nicht (mehr) da — Ziel der Deinstallation erreicht, Erfolg statt
+    # Fehler. Steht es noch irgendwo (z. B. per-user Install eines Benutzers),
+    # bleibt es beim Fehler und der Server versucht es im Benutzerkontext.
+    not_installed_block = ""
+    if action == "uninstall" and display_name:
+        safe_dn4 = display_name.replace("'", "''")[:120]
+        not_installed_block = f"""
+if ($sfWingetExit -eq {_WINGET_NO_INSTALLED_PACKAGE}) {{
+    $dnNi = '{safe_dn4}'
+    $sfLeft = @()
+    foreach ($k in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','Registry::HKEY_USERS\\*\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*')) {{
+        $sfLeft += @(Get-ItemProperty $k -ErrorAction SilentlyContinue | Where-Object {{ $_.DisplayName -and $_.DisplayName.StartsWith($dnNi) }})
+    }}
+    if ($sfLeft.Count -eq 0) {{
+        _sfProgress 'SOFTSHELF_NOT_INSTALLED: Programm ist auf diesem Rechner nicht (mehr) installiert, nichts zu tun.'
+        cmd /c "exit 0"
+    }} else {{
+        _sfProgress ('Noch in der Softwareliste: ' + (@($sfLeft | ForEach-Object {{ $_.DisplayName }} | Select-Object -Unique) -join ', '))
+    }}
+}}
+"""
+
     safe_app = (display_name or "").replace("'", "''")[:120]
     return f"""$ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -1318,9 +1381,11 @@ if ($wingetExe) {{
 exit $LASTEXITCODE
 '@
     _sfRunWinget $sfwRunner $wingetExe ($sfwRunner + '.out') {int(timeout_s)} '{safe_app}'
+    $sfWingetExit = $LASTEXITCODE
     {uninstall_fallback_block}
     {uninstall_override_block}
     {final_uninstall_check}
+    {not_installed_block}
 }}
 """
 
@@ -1337,6 +1402,7 @@ exit $LASTEXITCODE
 _WINGET_SUCCESS_HINTS: list[str] = [
     "no newer package versions are available",   # 1Password-Case: installiert, nichts zu tun
     "no installed package found matching input criteria for upgrade",  # gleicher Effekt
+    "softshelf_not_installed:",  # Uninstall: Programm war nicht (mehr) da
 ]
 
 # Patterns die als HARD ERROR gewertet werden (auch bei "Erfolgs"-ExitCode).
