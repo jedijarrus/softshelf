@@ -1024,20 +1024,53 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 body.is-messages-role .sidebar-group-label,
 body.is-messages-role .hdr-search-btn { display: none; }
 
-/* Viewer-Mode: state-changing Buttons optisch deaktivieren.
+/* Viewer-Mode: schreibende Aktionen optisch deaktivieren.
    Hinweis: das ist nur Cosmetic. Server (`_require_admin`) ist Source of
-   Truth und gibt 403 zurueck bei Viewer-Dispatch-Versuchen. */
-body.is-viewer .btn-primary,
+   Truth und gibt 403 zurueck bei Viewer-Dispatch-Versuchen.
+   Bewusst eine Liste der Aktions-Handler (Praefix ^=) statt Teilwoertern
+   (*=) und ohne .btn-primary: „toggle“ traf das Benutzer-Menue (Abmelden),
+   „ack“ den Tab Pakete (switchTab('packages')) und den CSV-Export, und
+   .btn-primary die Suche und das Schliessen/Kopieren in Dialogen. */
 body.is-viewer .btn-danger,
 body.is-viewer .icon-btn-danger,
 body.is-viewer .dist-row-btn.primary,
-body.is-viewer button[onclick*="install"],
-body.is-viewer button[onclick*="uninstall"],
-body.is-viewer button[onclick*="toggle"],
-body.is-viewer button[onclick*="update"],
-body.is-viewer button[onclick*="Rollout"],
-body.is-viewer button[onclick*="ack"],
-body.is-viewer button[onclick*="Ack"] {
+body.is-viewer button[onclick^="installOnAgent"],
+body.is-viewer button[onclick^="uninstallOnAgent"],
+body.is-viewer button[onclick^="agentSoftware"],
+body.is-viewer button[onclick^="agentWinget"],
+body.is-viewer button[onclick^="agentUpdateAll"],
+body.is-viewer button[onclick*="updateSingleClient"],
+body.is-viewer button[onclick^="fleetUpdatePackage"],
+body.is-viewer button[onclick^="bulk"],
+body.is-viewer button[onclick^="distBulkAction"],
+body.is-viewer button[onclick^="togglePackage"],
+body.is-viewer button[onclick^="togglePkgAssignPicker"],
+body.is-viewer button[onclick^="startRollout"],
+body.is-viewer button[onclick^="advanceRollout"],
+body.is-viewer button[onclick^="cancelRollout"],
+body.is-viewer button[onclick^="pauseAutoRollout"],
+body.is-viewer button[onclick^="_rollouts"],
+body.is-viewer button[onclick^="ack"],
+body.is-viewer button[onclick^="retryErrorRow"],
+body.is-viewer button[onclick^="alDelete"],
+body.is-viewer button[onclick^="detectUninstall"],
+body.is-viewer button[onclick^="complianceFix"],
+body.is-viewer button[onclick^="openProfileApply"],
+body.is-viewer button[onclick^="confirmProfileApply"],
+body.is-viewer button[onclick^="doProfileUnassign"],
+body.is-viewer button[onclick^="confirmRemovePkg"],
+body.is-viewer button[onclick^="triggerBuild"],
+body.is-viewer button[onclick^="startWorkflowOnAgent"],
+body.is-viewer button[onclick^="resumeWorkflowRun"],
+body.is-viewer button[onclick^="do"][onclick*="Upload"],
+body.is-viewer button[onclick^="uploadNewVersion"],
+body.is-viewer button[onclick^="save"],
+body.is-viewer button[onclick^="submit"],
+body.is-viewer button[onclick^="createCat"],
+body.is-viewer button[onclick^="msgNew"],
+body.is-viewer button[onclick^="runMsgConfirm"],
+body.is-viewer button[onclick^="stagePickerConfirm"],
+body.is-viewer button[onclick^="openAddStagedPkg"] {
   opacity: .55;
   pointer-events: none;
 }

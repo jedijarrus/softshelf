@@ -11,6 +11,22 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ### Fixed
 
+- **Rolle viewer: Admin-UI wieder bedienbar.** Die Viewer-Sperre im CSS
+  deaktivierte Knöpfe über Teilwörter im Klick-Handler und über die Klasse
+  `.btn-primary`. Dadurch waren für Viewer auch das Benutzer-Menü
+  (`toggleUserMenu` — kein Abmelden, kein Passwort ändern), der Tab Pakete
+  (`switchTab('packages')`), der CSV-Export, Hilfe und Theme, Ausklapp-
+  Elemente, die Suche und das Schließen/Kopieren in Dialogen gesperrt. Jetzt
+  sperrt eine Liste der schreibenden Aktions-Handler (Präfix-Treffer). Der
+  Server bleibt maßgeblich und lehnt schreibende Aufrufe von Viewern weiter ab.
+- **Eigenes Passwort ändern für jede Rolle.** `POST
+  /admin/api/users/me/change-password` lehnte der Server für viewer mit 403
+  ab. Jetzt darf jede Rolle per Browser-Session ihr eigenes Passwort ändern
+  (nicht per API-Token); der Endpoint prüft das alte Passwort wie bisher.
+- **Hilfe zeigt die laufende Version.** Der Kopf des Admin-Handbuchs stand
+  fest auf „Version 2.6.0 · Stand 28. Mai 2026“. Jetzt setzt der Server die
+  Version des Proxys ein (`{{SF_VERSION}}`).
+
 - **Deinstallation eines Programms, das schon weg ist, ist kein Fehler
   mehr.** winget: Findet winget kein installiertes Paket und steht das
   Programm in keiner Softwareliste (HKLM, HKCU, geladene Benutzer-Hives), ist

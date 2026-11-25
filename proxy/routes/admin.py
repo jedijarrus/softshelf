@@ -294,6 +294,11 @@ async def _require_admin(request: Request) -> dict:
     if method == "GET":
         return user
 
+    # Das eigene Passwort aendern darf jede Rolle, auch viewer (nur per
+    # Browser-Session; der Endpoint prueft das alte Passwort selbst).
+    if method == "POST" and path in _MESSAGES_ROLE_POST and api_scope is None:
+        return user
+
     # Viewer: keine state-changing Aktionen
     if role == "viewer":
         raise HTTPException(
@@ -388,6 +393,9 @@ async def admin_help(request: Request, user: dict = Depends(_require_admin)):
     page = page.replace("{{SF_SETUP_EXE_URL}}", html.escape(setup_url, quote=True))
     page = page.replace("{{SF_SLUG}}",          html.escape(slug,      quote=True))
     page = page.replace("{{SF_BRAND}}",         html.escape(brand,     quote=True))
+    # Version im Kopf der Hilfe: die laufende, nicht eine von Hand gepflegte
+    from main import VERSION as _backend_version  # type: ignore
+    page = page.replace("{{SF_VERSION}}",       html.escape(_backend_version, quote=True))
     return page
 
 
