@@ -9,6 +9,15 @@ Format: inspired by Keep-a-Changelog. Jede Version hat Gruppen
 
 ## [Unreleased]
 
+### Changed
+
+- **Neue Benutzer starten mit der Rolle Mitteilungen statt viewer.** Wer sich
+  zum ersten Mal per Entra-SSO anmeldet, bekommt die Rolle `messages` (nur
+  Mitteilungen und Zielgruppen, sieht sonst nichts); auch die Einladung hat
+  sie vorausgewählt. Bestehende Benutzer behalten ihre Rolle. Hinweis: Damit
+  kann jede Person, die in Entra der Softshelf-App zugewiesen ist, sofort
+  Mitteilungen an die Geräte schicken.
+
 ### Fixed
 
 - **Rolle viewer: Admin-UI wieder bedienbar.** Die Viewer-Sperre im CSS

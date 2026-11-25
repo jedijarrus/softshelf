@@ -321,7 +321,8 @@ Whitelist (`_messages_role_allowed`) geprüft, noch vor dem GET-Freibrief.
 
 **SSO-Rollen (v2.11):** Entra entscheidet nur, wer sich anmelden darf
 (Enterprise-App-Zuweisung, `GRAPH_REQUIRED_ROLE`). Die Rolle wird in Softshelf
-gepflegt; neue SSO-User starten als `viewer`, ein Login überschreibt die Rolle
+gepflegt; neue SSO-User starten als `messages` (nur Mitteilungen und
+Zielgruppen), ein Login überschreibt die Rolle
 nicht. Der letzte aktive Admin lässt sich weder herabstufen noch deaktivieren
 oder löschen.
 

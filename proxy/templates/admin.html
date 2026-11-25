@@ -7371,8 +7371,8 @@ body.help-active [data-help]:not(.tab)::after {
         <select class="input" id="inv-role">
           <option value="admin">Admin — alles erlaubt</option>
           <option value="operator">Operator — Dispatch + Fehler bestaetigen</option>
-          <option value="viewer" selected>Viewer — nur Lesezugriff</option>
-          <option value="messages">Mitteilungen — nur Mitteilungen und Zielgruppen</option>
+          <option value="viewer">Viewer — nur Lesezugriff</option>
+          <option value="messages" selected>Mitteilungen — nur Mitteilungen und Zielgruppen</option>
         </select>
       </div>
       <div class="pw-field">
@@ -15591,7 +15591,7 @@ function renderInvitations() {
 }
 
 function openInvitePanel() {
-  document.getElementById('inv-role').value = 'viewer';
+  document.getElementById('inv-role').value = 'messages';
   document.getElementById('inv-hint').value = '';
   document.getElementById('inv-days').value = '7';
   document.getElementById('inv-create-error').textContent = '';

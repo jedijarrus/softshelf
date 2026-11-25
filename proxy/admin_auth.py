@@ -257,13 +257,14 @@ async def ensure_bootstrap_admin():
 
 async def sso_login_or_provision(
     oid: str, email: str, name: str, email_verified: bool = False,
-    auto_create: bool | None = None, new_user_role: str = "viewer",
+    auto_create: bool | None = None, new_user_role: str = "messages",
 ) -> dict | None:
     """
     Findet oder erzeugt einen lokalen admin_user für eine SSO-Identität.
 
     Die Rolle wird seit v2.11 in Softshelf gepflegt (Benutzer-Tab): bestehende
-    User behalten ihre Rolle, neue starten mit new_user_role (viewer).
+    User behalten ihre Rolle, neue starten mit new_user_role (messages: nur
+    Mitteilungen und Zielgruppen).
 
     1. Match auf (sso_provider='entra', sso_subject=oid)
     2. Sonst Match auf email NUR wenn email_verified=true und der bestehende
@@ -310,8 +311,9 @@ async def sso_login_or_provision(
     # 3. Auto-Create. auto_create=None => Runtime-Setting lesen (Legacy).
     # Der MSAL/ENV-Flow ruft mit auto_create=True: die Zugriffskontrolle laeuft
     # ueber die Entra Enterprise-App ("Assignment required") — ein gueltiges
-    # Token bedeutet, der Nutzer ist zugewiesen. Neue User starten als viewer
-    # (nur lesen), ein Admin stellt die Rolle im Benutzer-Tab ein.
+    # Token bedeutet, der Nutzer ist zugewiesen. Neue User starten mit der Rolle
+    # messages (nur Mitteilungen und Zielgruppen, sieht sonst nichts), ein Admin
+    # stellt die Rolle im Benutzer-Tab ein.
     if auto_create:
         # Username aus E-Mail-Local-Part oder OID
         base_username = (email.split("@")[0] if email else oid)[:50]
